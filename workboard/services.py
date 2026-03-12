@@ -27,6 +27,12 @@ class ParsedTaskData:
     checklist_items: list[str]
     parser_confidence: str
     parser_warnings: list[str]
+    due_date_source: str
+    due_date_original: str | None
+    due_date_inferred: bool
+    due_date_defaulted: bool
+    due_date_weekend_adjusted: bool
+    due_date_warning: str
 
     def to_dict(self):
         return asdict(self)
@@ -187,6 +193,12 @@ class TaskParsingService:
             checklist_items=TaskParsingService._build_checklist_items(raw_message),
             parser_confidence="medium",
             parser_warnings=[],
+            due_date_source="parsed" if due_date else "unconfirmed",
+            due_date_original=due_date,
+            due_date_inferred=bool(due_date and raw_due_text and raw_due_text.lower() != str(due_date).lower()),
+            due_date_defaulted=False,
+            due_date_weekend_adjusted=False,
+            due_date_warning="",
         )
 
     @staticmethod
@@ -293,6 +305,12 @@ class TaskParsingService:
             checklist_items=TaskParsingService._dedupe_checklist_items(checklist_items),
             parser_confidence="high",
             parser_warnings=[],
+            due_date_source="parsed" if due_date else "unconfirmed",
+            due_date_original=due_date,
+            due_date_inferred=bool(due_date and parsed.get("raw_due_text") and str(parsed.get("raw_due_text")).strip().lower() != str(due_date).lower()),
+            due_date_defaulted=False,
+            due_date_weekend_adjusted=False,
+            due_date_warning="",
         )
 
     @staticmethod
@@ -377,10 +395,19 @@ class TaskParsingService:
     def _apply_due_date_rules(parsed: ParsedTaskData) -> ParsedTaskData:
         parsed_due_date = TaskParsingService._parse_due_date(parsed.due_date)
         if parsed_due_date:
+            parsed.due_date_source = "parsed"
+            parsed.due_date_original = str(parsed_due_date)
             adjusted_due_date = TaskParsingService._roll_weekend_to_monday(parsed_due_date)
             if adjusted_due_date != parsed_due_date:
+                parsed.due_date_weekend_adjusted = True
                 parsed.parser_warnings.append("Extracted due date landed on a weekend, so it was moved to Monday.")
             parsed.due_date = str(adjusted_due_date)
+            if parsed.due_date_inferred:
+                parsed.due_date_warning = (
+                    f'The due date was inferred from "{parsed.raw_due_text}" and resolved to {parsed.due_date}. Please confirm it before saving.'
+                )
+            elif parsed.due_date_weekend_adjusted:
+                parsed.due_date_warning = f"The confirmed due date was adjusted to the next Monday: {parsed.due_date}."
             return parsed
 
         days_by_priority = {
@@ -396,12 +423,20 @@ class TaskParsingService:
             Priority.LOW: "low",
         }
         fallback_days = days_by_priority.get(parsed.priority, 4)
-        fallback_due_date = timezone.localdate() + timedelta(days=fallback_days)
-        fallback_due_date = TaskParsingService._roll_weekend_to_monday(fallback_due_date)
+        base_due_date = timezone.localdate() + timedelta(days=fallback_days)
+        fallback_due_date = TaskParsingService._roll_weekend_to_monday(base_due_date)
         parsed.due_date = str(fallback_due_date)
+        parsed.due_date_source = "priority_default"
+        parsed.due_date_original = str(base_due_date)
+        parsed.due_date_defaulted = True
+        parsed.due_date_inferred = True
+        parsed.due_date_weekend_adjusted = fallback_due_date != base_due_date
         parsed.raw_due_text = parsed.raw_due_text or f"Priority-based default for {labels_by_priority.get(parsed.priority, parsed.priority)}"
         parsed.parser_warnings.append(
             f"No due date was provided, so the app set one automatically from priority: {labels_by_priority.get(parsed.priority, parsed.priority)} -> {parsed.due_date}."
+        )
+        parsed.due_date_warning = (
+            f"No due date was confirmed in the message. The app applied the {labels_by_priority.get(parsed.priority, parsed.priority)} priority fallback and set the date to {parsed.due_date}. Please review it before saving."
         )
         return parsed
 
@@ -412,3 +447,4 @@ class TaskParsingService:
         if value.weekday() == 6:
             return value + timedelta(days=1)
         return value
+

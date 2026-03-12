@@ -10,9 +10,84 @@
         {% if assignment_summary %}
             <div class="message">{{ assignment_summary }}</div>
         {% endif %}
+        {% if due_date_review.due_date_warning %}
+            <div class="warning-note">
+                <strong>Due date needs confirmation.</strong>
+                <p>{{ due_date_review.due_date_warning }}</p>
+            </div>
+        {% endif %}
+        <section class="card review-panel">
+            <h2>Due date review</h2>
+            <p class="meta">{{ due_date_review.due_date_resolution_summary }}</p>
+            <div class="review-grid">
+                <div class="review-field">
+                    <h3>Message date phrase</h3>
+                    <p><strong>{{ due_date_review.raw_due_text|default:"No date phrase found" }}</strong></p>
+                </div>
+                <div class="review-field">
+                    <h3>Parsed local date</h3>
+                    {% if due_date_review.parsed_due_date %}
+                        <p><strong>{{ due_date_review.parsed_due_date|date:"l, F j, Y" }}</strong></p>
+                        <p class="meta">{{ due_date_review.parsed_due_date|date:"Y-m-d" }}</p>
+                    {% else %}
+                        <p><strong>No parsed date</strong></p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="detail-list review-summary-list">
+                <dt>Resolution source</dt>
+                <dd>{{ due_date_review.due_date_source_label }}</dd>
+                <dt>Directly confirmed</dt>
+                <dd>{% if due_date_review.due_date_directly_confirmed %}Yes{% else %}No{% endif %}</dd>
+                <dt>Weekend adjusted</dt>
+                <dd>{% if due_date_review.due_date_weekend_adjusted %}Yes{% else %}No{% endif %}</dd>
+                {% if due_date_review.original_due_date and due_date_review.original_due_date != due_date_review.parsed_due_date %}
+                    <dt>Original resolved date</dt>
+                    <dd>{{ due_date_review.original_due_date|date:"l, F j, Y" }}</dd>
+                {% endif %}
+            </div>
+            {% if due_date_review.due_date_defaulted %}
+                <div class="review-field review-rules">
+                    <h3>Fallback rules in effect</h3>
+                    <ul>
+                        {% for rule in due_date_review.fallback_rules %}
+                            <li>{{ rule }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </section>
         <form method="post">
             {% csrf_token %}
-            {{ form.as_p }}
+            {% if form.non_field_errors %}
+                <div class="warning-note">
+                    {{ form.non_field_errors }}
+                </div>
+            {% endif %}
+            <div class="review-grid">
+                <div class="review-field">
+                    <label for="{{ form.raw_due_text.id_for_label }}">Original due-date phrase</label>
+                    {{ form.raw_due_text }}
+                    {% if form.raw_due_text.errors %}<div class="meta">{{ form.raw_due_text.errors }}</div>{% endif %}
+                </div>
+                <div class="review-field">
+                    <label for="{{ form.due_date.id_for_label }}">Final due date before saving</label>
+                    {{ form.due_date }}
+                    {% if due_date_review.final_due_date %}
+                        <p class="meta">Currently set to {{ due_date_review.final_due_date|date:"l, F j, Y" }}</p>
+                    {% endif %}
+                    {% if form.due_date.errors %}<div class="meta">{{ form.due_date.errors }}</div>{% endif %}
+                </div>
+            </div>
+            {% for field in form %}
+                {% if field.name != "raw_due_text" and field.name != "due_date" %}
+                    <p>
+                        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                    </p>
+                {% endif %}
+            {% endfor %}
             <p>
                 <label for="id_checklist_items_text">Checklist items</label>
                 <textarea class="form-control" name="checklist_items_text" id="id_checklist_items_text" rows="8">{{ checklist_text }}</textarea>

@@ -1,3 +1,4 @@
+from datetime import date
 from functools import wraps
 
 from django.contrib import messages
@@ -72,6 +73,66 @@ def app_login_required(view_func):
         return view_func(request, *args, **kwargs)
 
     return wrapped
+
+
+def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
+    parser_warnings = initial.get("parser_warnings", [])
+    raw_due_text = (initial.get("raw_due_text") or "").strip()
+    parsed_due_date = TaskParsingService._parse_due_date(initial.get("due_date"))
+    original_due_date = TaskParsingService._parse_due_date(initial.get("due_date_original")) or parsed_due_date
+    final_due_date = TaskParsingService._parse_due_date(due_date_value) or parsed_due_date
+    is_defaulted = bool(initial.get("due_date_defaulted")) or any("No due date was provided" in item for item in parser_warnings)
+    weekend_adjusted = bool(initial.get("due_date_weekend_adjusted")) or any("moved to Monday" in item for item in parser_warnings)
+    original_iso = original_due_date.isoformat() if isinstance(original_due_date, date) else ""
+    parsed_iso = parsed_due_date.isoformat() if isinstance(parsed_due_date, date) else ""
+    is_inferred = bool(initial.get("due_date_inferred")) or bool(
+        parsed_due_date and raw_due_text and raw_due_text.lower() not in {parsed_iso.lower(), original_iso.lower()} and not is_defaulted
+    )
+    directly_confirmed = bool(parsed_due_date) and not is_defaulted and not is_inferred
+    source = initial.get("due_date_source") or ("priority_default" if is_defaulted else "parsed" if parsed_due_date else "unconfirmed")
+    source_labels = {
+        "parsed": "Parsed from the message",
+        "priority_default": "Priority-based fallback",
+        "unconfirmed": "Needs supervisor review",
+    }
+
+    if is_defaulted and final_due_date:
+        resolution_summary = "No due date was found in the message, so TaskForge set one from the fallback rules."
+    elif raw_due_text and parsed_due_date:
+        resolution_summary = f'The parser read "{raw_due_text}" and resolved it to the local date below.'
+    elif parsed_due_date:
+        resolution_summary = "The parser provided a direct due date."
+    else:
+        resolution_summary = "No due date has been confirmed yet."
+
+    warning = initial.get("due_date_warning") or ""
+    if not warning and (is_defaulted or is_inferred):
+        if is_defaulted and final_due_date:
+            warning = f"This due date was defaulted by the app, not directly confirmed in the message. Please verify {final_due_date.isoformat()} before saving."
+        elif is_inferred and final_due_date:
+            warning = f"This due date was inferred from the message, not directly confirmed. Please verify {final_due_date.isoformat()} before saving."
+
+    return {
+        "raw_due_text": raw_due_text,
+        "parsed_due_date": parsed_due_date,
+        "original_due_date": original_due_date,
+        "final_due_date": final_due_date,
+        "due_date_source": source,
+        "due_date_source_label": source_labels.get(source, "Needs supervisor review"),
+        "due_date_resolution_summary": resolution_summary,
+        "due_date_warning": warning,
+        "due_date_inferred": is_inferred,
+        "due_date_defaulted": is_defaulted,
+        "due_date_directly_confirmed": directly_confirmed,
+        "due_date_weekend_adjusted": weekend_adjusted,
+        "fallback_rules": [
+            "Urgent: same day",
+            "High: 2 days",
+            "Medium: 4 days",
+            "Low: 7 days",
+            "Any weekend due date moves to Monday",
+        ],
+    }
 
 
 @app_login_required
@@ -165,6 +226,8 @@ def task_intake_review_view(request, pk):
     else:
         form = TaskForm(initial=initial)
 
+    due_date_review = _build_due_date_review_context(initial, form["due_date"].value())
+
     return render(
         request,
         "workboard/task_intake_review.html",
@@ -178,6 +241,7 @@ def task_intake_review_view(request, pk):
             "checklist_text": checklist_text,
             "parser_confidence": initial.get("parser_confidence", "medium"),
             "parser_warnings": initial.get("parser_warnings", []),
+            "due_date_review": due_date_review,
         },
     )
 
@@ -436,3 +500,4 @@ def worker_password_reset_view(request, pk):
         "workboard/worker_password_reset_form.html",
         {"form": form, "student": student},
     )
+
