@@ -76,40 +76,42 @@ def app_login_required(view_func):
 
 
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
-    parser_warnings = initial.get("parser_warnings", [])
     raw_due_text = (initial.get("raw_due_text") or "").strip()
     parsed_due_date = TaskParsingService._parse_due_date(initial.get("due_date"))
     original_due_date = TaskParsingService._parse_due_date(initial.get("due_date_original")) or parsed_due_date
     final_due_date = TaskParsingService._parse_due_date(due_date_value) or parsed_due_date
-    is_defaulted = bool(initial.get("due_date_defaulted")) or any("No due date was provided" in item for item in parser_warnings)
-    weekend_adjusted = bool(initial.get("due_date_weekend_adjusted")) or any("moved to Monday" in item for item in parser_warnings)
-    original_iso = original_due_date.isoformat() if isinstance(original_due_date, date) else ""
-    parsed_iso = parsed_due_date.isoformat() if isinstance(parsed_due_date, date) else ""
-    is_inferred = bool(initial.get("due_date_inferred")) or bool(
-        parsed_due_date and raw_due_text and raw_due_text.lower() not in {parsed_iso.lower(), original_iso.lower()} and not is_defaulted
-    )
-    directly_confirmed = bool(parsed_due_date) and not is_defaulted and not is_inferred
+    is_defaulted = bool(initial.get("due_date_defaulted"))
+    weekend_adjusted = bool(initial.get("due_date_weekend_adjusted"))
     source = initial.get("due_date_source") or ("priority_default" if is_defaulted else "parsed" if parsed_due_date else "unconfirmed")
+    due_date_confidence = initial.get("due_date_confidence") or ("low" if is_defaulted else "high" if parsed_due_date else "low")
+    is_inferred = source == "inferred_from_phrase" or bool(initial.get("due_date_inferred"))
+    directly_confirmed = source == "parsed" and due_date_confidence == "high" and not is_defaulted
     source_labels = {
-        "parsed": "Parsed from the message",
+        "parsed": "Direct date from the message",
+        "inferred_from_phrase": "Resolved from a relative date phrase",
         "priority_default": "Priority-based fallback",
         "unconfirmed": "Needs supervisor review",
     }
+    confidence_labels = {
+        "high": "High confidence",
+        "medium": "Medium confidence",
+        "low": "Low confidence",
+    }
 
-    if is_defaulted and final_due_date:
+    if source == "priority_default" and final_due_date:
         resolution_summary = "No due date was found in the message, so TaskForge set one from the fallback rules."
-    elif raw_due_text and parsed_due_date:
-        resolution_summary = f'The parser read "{raw_due_text}" and resolved it to the local date below.'
+    elif source == "inferred_from_phrase" and raw_due_text and parsed_due_date:
+        resolution_summary = f'The parser read "{raw_due_text}" as a relative date phrase and resolved it to the local date below.'
     elif parsed_due_date:
-        resolution_summary = "The parser provided a direct due date."
+        resolution_summary = "The parser provided a directly usable due date."
     else:
         resolution_summary = "No due date has been confirmed yet."
 
     warning = initial.get("due_date_warning") or ""
-    if not warning and (is_defaulted or is_inferred):
-        if is_defaulted and final_due_date:
+    if not warning and source in {"priority_default", "inferred_from_phrase"} and final_due_date:
+        if source == "priority_default":
             warning = f"This due date was defaulted by the app, not directly confirmed in the message. Please verify {final_due_date.isoformat()} before saving."
-        elif is_inferred and final_due_date:
+        else:
             warning = f"This due date was inferred from the message, not directly confirmed. Please verify {final_due_date.isoformat()} before saving."
 
     return {
@@ -119,6 +121,8 @@ def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
         "final_due_date": final_due_date,
         "due_date_source": source,
         "due_date_source_label": source_labels.get(source, "Needs supervisor review"),
+        "due_date_confidence": due_date_confidence,
+        "due_date_confidence_label": confidence_labels.get(due_date_confidence, "Needs review"),
         "due_date_resolution_summary": resolution_summary,
         "due_date_warning": warning,
         "due_date_inferred": is_inferred,

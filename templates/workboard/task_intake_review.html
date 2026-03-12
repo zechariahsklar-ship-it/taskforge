@@ -37,6 +37,8 @@
             <div class="detail-list review-summary-list">
                 <dt>Resolution source</dt>
                 <dd>{{ due_date_review.due_date_source_label }}</dd>
+                <dt>Due-date confidence</dt>
+                <dd>{{ due_date_review.due_date_confidence_label }}</dd>
                 <dt>Directly confirmed</dt>
                 <dd>{% if due_date_review.due_date_directly_confirmed %}Yes{% else %}No{% endif %}</dd>
                 <dt>Weekend adjusted</dt>

@@ -32,7 +32,9 @@ class ParsedTaskData:
     due_date_inferred: bool
     due_date_defaulted: bool
     due_date_weekend_adjusted: bool
+    due_date_confidence: str
     due_date_warning: str
+    priority_confidence: str
 
     def to_dict(self):
         return asdict(self)
@@ -169,6 +171,7 @@ class TaskParsingService:
         first_line = raw_message.strip().splitlines()[0] if raw_message.strip() else "New task request"
         lowered = raw_message.lower()
         priority = Priority.URGENT if "urgent" in lowered else Priority.HIGH if "asap" in lowered else Priority.MEDIUM
+        priority_confidence = TaskParsingService._priority_confidence(raw_message, priority)
         estimated_minutes = 60 if len(raw_message) > 240 else 30
         raw_due_text = "Needs review"
         due_date = None
@@ -177,6 +180,7 @@ class TaskParsingService:
             due_date = str(timezone.localdate() + timedelta(days=1))
         elif "friday" in lowered:
             raw_due_text = "Friday"
+        due_date_source, due_date_inferred, due_date_confidence = TaskParsingService._due_date_metadata(raw_due_text, due_date)
         return ParsedTaskData(
             raw_message=raw_message,
             title=first_line[:255] or "New task request",
@@ -193,12 +197,14 @@ class TaskParsingService:
             checklist_items=TaskParsingService._build_checklist_items(raw_message),
             parser_confidence="medium",
             parser_warnings=[],
-            due_date_source="parsed" if due_date else "unconfirmed",
+            due_date_source=due_date_source,
             due_date_original=due_date,
-            due_date_inferred=bool(due_date and raw_due_text and raw_due_text.lower() != str(due_date).lower()),
+            due_date_inferred=due_date_inferred,
             due_date_defaulted=False,
             due_date_weekend_adjusted=False,
+            due_date_confidence=due_date_confidence,
             due_date_warning="",
+            priority_confidence=priority_confidence,
         )
 
     @staticmethod
@@ -288,6 +294,9 @@ class TaskParsingService:
         checklist_items = [item.strip() for item in parsed.get("checklist_items", []) if isinstance(item, str) and item.strip()]
         if not checklist_items:
             checklist_items = TaskParsingService._build_checklist_items(raw_message)
+        raw_due_text = (parsed.get("raw_due_text") or "Needs review")[:255]
+        due_date_source, due_date_inferred, due_date_confidence = TaskParsingService._due_date_metadata(raw_due_text, due_date)
+        priority_confidence = TaskParsingService._priority_confidence(raw_message, priority)
 
         return ParsedTaskData(
             raw_message=raw_message,
@@ -295,7 +304,7 @@ class TaskParsingService:
             description=description,
             priority=priority,
             due_date=due_date,
-            raw_due_text=(parsed.get("raw_due_text") or "Needs review")[:255],
+            raw_due_text=raw_due_text,
             waiting_person=(parsed.get("waiting_person") or "")[:255],
             respond_to_text=(parsed.get("respond_to_text") or "")[:255],
             estimated_minutes=TaskParsingService._normalize_estimated_minutes(parsed.get("estimated_minutes")),
@@ -305,12 +314,14 @@ class TaskParsingService:
             checklist_items=TaskParsingService._dedupe_checklist_items(checklist_items),
             parser_confidence="high",
             parser_warnings=[],
-            due_date_source="parsed" if due_date else "unconfirmed",
+            due_date_source=due_date_source,
             due_date_original=due_date,
-            due_date_inferred=bool(due_date and parsed.get("raw_due_text") and str(parsed.get("raw_due_text")).strip().lower() != str(due_date).lower()),
+            due_date_inferred=due_date_inferred,
             due_date_defaulted=False,
             due_date_weekend_adjusted=False,
+            due_date_confidence=due_date_confidence,
             due_date_warning="",
+            priority_confidence=priority_confidence,
         )
 
     @staticmethod
@@ -331,6 +342,62 @@ class TaskParsingService:
             return date.fromisoformat(str(value))
         except ValueError:
             return None
+
+    @staticmethod
+    def _priority_confidence(raw_message: str, priority: str) -> str:
+        if not priority:
+            return "low"
+        lowered = raw_message.lower()
+        explicit_priority_cues = {
+            Priority.URGENT: ["urgent", "immediately", "right away"],
+            Priority.HIGH: ["asap", "high priority", "soon"],
+            Priority.MEDIUM: ["medium priority"],
+            Priority.LOW: ["low priority", "whenever", "no rush"],
+        }
+        if any(cue in lowered for cue in explicit_priority_cues.get(priority, [])):
+            return "high"
+        return "medium"
+
+    @staticmethod
+    def _classify_due_date_phrase(raw_due_text: str) -> str:
+        phrase = (raw_due_text or "").strip().lower()
+        if not phrase or phrase in {"needs review", "not set"}:
+            return "missing"
+        month_names = {
+            "january", "february", "march", "april", "may", "june",
+            "july", "august", "september", "october", "november", "december",
+            "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+        }
+        relative_markers = {
+            "today", "tomorrow", "tonight", "next", "this", "upcoming", "by end of day", "eod", "eow", "end of week",
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        }
+        if any(token in phrase for token in relative_markers):
+            return "relative"
+        if any(month in phrase for month in month_names):
+            return "absolute"
+        if len(phrase) == 10 and phrase[4] == "-" and phrase[7] == "-":
+            return "absolute"
+        if "/" in phrase and any(char.isdigit() for char in phrase):
+            return "absolute"
+        if any(char.isdigit() for char in phrase) and any(suffix in phrase for suffix in ["st", "nd", "rd", "th"]):
+            return "absolute"
+        return "unknown"
+
+    @staticmethod
+    def _due_date_metadata(raw_due_text: str, due_date: str | None) -> tuple[str, bool, str]:
+        parsed_due_date = TaskParsingService._parse_due_date(due_date)
+        phrase_type = TaskParsingService._classify_due_date_phrase(raw_due_text)
+        if not parsed_due_date:
+            return "unconfirmed", False, "low"
+        if phrase_type == "absolute":
+            return "parsed", False, "high"
+        if phrase_type == "relative":
+            return "inferred_from_phrase", True, "medium"
+        if phrase_type == "missing":
+            return "parsed", False, "medium"
+        return "parsed", True, "medium"
+
 
     @staticmethod
     def _dedupe_checklist_items(items: list[str]) -> list[str]:
@@ -362,32 +429,43 @@ class TaskParsingService:
             score += 1
         if parsed.description:
             score += 1
-        if parsed.priority:
+        if parsed.priority_confidence == "high":
             score += 1
-        if parsed.due_date:
+        elif parsed.priority:
+            score += 0.5
+        if parsed.due_date_confidence == "high":
             score += 1
+        elif parsed.due_date_confidence == "medium":
+            score += 0.5
         if parsed.estimated_minutes:
             score += 1
         if parsed.checklist_items:
             score += 1
+        if parsed.due_date_defaulted:
+            score -= 1
+        if parsed.priority_confidence == "low":
+            score -= 0.5
         if len(parsed.parser_warnings) >= 3:
             return "low"
-        if score >= 5 and len(parsed.parser_warnings) <= 1:
+        if score >= 4.5 and len(parsed.parser_warnings) <= 1:
             return "high"
+        if score <= 2:
+            return "low"
         return "medium"
 
     @staticmethod
     def _apply_priority_and_due_date_fallbacks(parsed: ParsedTaskData) -> ParsedTaskData:
-        lowered = parsed.raw_message.lower()
-        explicit_priority_cues = ["urgent", "asap", "high priority", "medium priority", "low priority"]
-        priority_confirmed = bool(parsed.priority and parsed.priority in {Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW}) and any(
-            cue in lowered for cue in explicit_priority_cues
-        )
-        due_confirmed = bool(TaskParsingService._parse_due_date(parsed.due_date))
+        priority_confirmed = parsed.priority_confidence == "high"
+        due_confirmed = parsed.due_date_confidence == "high"
         if not priority_confirmed and not due_confirmed:
             parsed.priority = Priority.LOW
+            parsed.priority_confidence = "low"
             parsed.parser_warnings.append(
                 "The parser could not confidently confirm either priority or due date. The task was defaulted to low priority and will be due in one week. Please review before saving."
+            )
+        elif parsed.priority and parsed.priority_confidence == "medium":
+            parsed.parser_warnings.append(
+                f"Priority was inferred as {parsed.priority}. Please confirm it before saving."
             )
         return parsed
 
@@ -395,14 +473,13 @@ class TaskParsingService:
     def _apply_due_date_rules(parsed: ParsedTaskData) -> ParsedTaskData:
         parsed_due_date = TaskParsingService._parse_due_date(parsed.due_date)
         if parsed_due_date:
-            parsed.due_date_source = "parsed"
             parsed.due_date_original = str(parsed_due_date)
             adjusted_due_date = TaskParsingService._roll_weekend_to_monday(parsed_due_date)
             if adjusted_due_date != parsed_due_date:
                 parsed.due_date_weekend_adjusted = True
                 parsed.parser_warnings.append("Extracted due date landed on a weekend, so it was moved to Monday.")
             parsed.due_date = str(adjusted_due_date)
-            if parsed.due_date_inferred:
+            if parsed.due_date_source == "inferred_from_phrase":
                 parsed.due_date_warning = (
                     f'The due date was inferred from "{parsed.raw_due_text}" and resolved to {parsed.due_date}. Please confirm it before saving.'
                 )
@@ -431,6 +508,7 @@ class TaskParsingService:
         parsed.due_date_defaulted = True
         parsed.due_date_inferred = True
         parsed.due_date_weekend_adjusted = fallback_due_date != base_due_date
+        parsed.due_date_confidence = "low"
         parsed.raw_due_text = parsed.raw_due_text or f"Priority-based default for {labels_by_priority.get(parsed.priority, parsed.priority)}"
         parsed.parser_warnings.append(
             f"No due date was provided, so the app set one automatically from priority: {labels_by_priority.get(parsed.priority, parsed.priority)} -> {parsed.due_date}."
