@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Recurring Template | TaskForge{% endblock %}
+
+{% block content %}
+<section class="card">
+    <h1>Create recurring task template</h1>
+    <p>Daily, weekly, and monthly recurrence are supported through a management command placeholder.</p>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Save template</button>
+    </form>
+</section>
+{% endblock %}

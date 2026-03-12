@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Intake | TaskForge{% endblock %}
+
+{% block content %}
+<section class="card">
+    <h1>Paste a work request</h1>
+    <p>Paste the original message, then review the AI-extracted fields before saving.</p>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Parse request</button>
+    </form>
+</section>
+{% endblock %}

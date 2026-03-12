@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Board | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <h1>Task board</h1>
+    <p>Shared status view for supervisor oversight and worker execution.</p>
+</section>
+<section class="board-grid">
+    {% for column in grouped_tasks %}
+        <div class="board-column">
+            <h2>{{ column.label }}</h2>
+            {% for task in column.tasks %}
+                <article class="task-card">
+                    <p class="eyebrow">{{ task.get_priority_display }}</p>
+                    <h3><a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a></h3>
+                    <p>{{ task.description|default:task.raw_message|truncatechars:100 }}</p>
+                    <p class="meta">Assigned: {% if task.assigned_to %}{{ task.assigned_to.display_label }}{% else %}Unassigned{% endif %}</p>
+                </article>
+            {% empty %}
+                <p class="empty-state">No tasks.</p>
+            {% endfor %}
+        </div>
+    {% endfor %}
+</section>
+{% endblock %}

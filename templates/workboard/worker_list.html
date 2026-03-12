@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Workers | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading split-heading">
+    <div>
+        <h1>Student workers</h1>
+        <p>Profiles and workload summary.</p>
+    </div>
+    <a class="button-link" href="{% url 'worker-create' %}">Add worker</a>
+</section>
+<section class="table-card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Active</th>
+                <th>Availability</th>
+                <th>Max Hours/Day</th>
+                <th>Skills</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for profile in profiles %}
+                <tr>
+                    <td>{{ profile.display_name }}</td>
+                    <td>{{ profile.email }}</td>
+                    <td>{{ profile.active_status|yesno:"Yes,No" }}</td>
+                    <td>{{ profile.normal_shift_availability }}</td>
+                    <td>{{ profile.max_hours_per_day }}</td>
+                    <td>{{ profile.skill_notes }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+<section class="table-card">
+    <h2>Workload summary</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Worker</th>
+                <th>Open Tasks</th>
+                <th>Estimated Minutes</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for worker in workload %}
+                <tr>
+                    <td>{{ worker.display_label }}</td>
+                    <td>{{ worker.active_tasks }}</td>
+                    <td>{{ worker.estimated_minutes|default:0 }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}TaskForge{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header class="site-header">
+        <div>
+            <a href="{% url 'dashboard' %}" class="brand">TaskForge</a>
+            <p class="subtitle">Internal task management for student workers</p>
+        </div>
+        {% if request.user.is_authenticated %}
+            <nav class="site-nav">
+                <a href="{% url 'board' %}">Board</a>
+                <a href="{% url 'my-tasks' %}">My Tasks</a>
+                {% if request.user.is_supervisor %}
+                    <a href="{% url 'task-intake' %}">Intake</a>
+                    <a href="{% url 'task-create' %}">New Task</a>
+                    <a href="{% url 'worker-list' %}">Workers</a>
+                    <a href="{% url 'recurring-create' %}">Recurring</a>
+                {% endif %}
+                <form action="{% url 'logout' %}" method="post">
+                    {% csrf_token %}
+                    <button type="submit" class="link-button">Logout</button>
+                </form>
+            </nav>
+        {% endif %}
+    </header>
+    <main class="page-shell">
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="message">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

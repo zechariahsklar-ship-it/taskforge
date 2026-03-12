@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}{{ task.title }} | TaskForge{% endblock %}
+
+{% block content %}
+<section class="detail-grid">
+    <article class="card">
+        <h1>{{ task.title }}</h1>
+        <p>{{ task.description|default:task.raw_message|linebreaksbr }}</p>
+        <dl class="detail-list">
+            <dt>Status</dt><dd>{{ task.get_status_display }}</dd>
+            <dt>Priority</dt><dd>{{ task.get_priority_display }}</dd>
+            <dt>Assigned To</dt><dd>{% if task.assigned_to %}{{ task.assigned_to.display_label }}{% else %}Unassigned{% endif %}</dd>
+            <dt>Requested By</dt><dd>{{ task.requested_by.username|default:"Unknown" }}</dd>
+            <dt>Due</dt><dd>{{ task.due_date|default:task.raw_due_text|default:"Not set" }}</dd>
+            <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>
+            <dt>Waiting On</dt><dd>{{ task.waiting_person|default:"-" }}</dd>
+            <dt>Respond To</dt><dd>{{ task.respond_to_text|default:"-" }}</dd>
+        </dl>
+        {% if request.user.is_supervisor %}
+            <p><a href="{% url 'task-edit' task.pk %}">Edit task</a></p>
+        {% endif %}
+    </article>
+    <aside class="stack">
+        <section class="card">
+            <h2>Update status</h2>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="status">
+                {{ status_form.as_p }}
+                <button type="submit">Save status</button>
+            </form>
+        </section>
+        <section class="card">
+            <h2>Notes</h2>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="note">
+                {{ note_form.as_p }}
+                <button type="submit">Add note</button>
+            </form>
+            <div class="stack">
+                {% for note in task.notes.all %}
+                    <article class="note">
+                        <p>{{ note.body|linebreaksbr }}</p>
+                        <p class="meta">{{ note.author.username|default:"Unknown" }} | {{ note.created_at }}</p>
+                    </article>
+                {% empty %}
+                    <p class="empty-state">No notes yet.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </aside>
+</section>
+{% endblock %}

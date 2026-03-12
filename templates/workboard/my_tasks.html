@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}My Tasks | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <h1>My tasks</h1>
+    <p>Tasks currently assigned to you.</p>
+</section>
+<section class="stack">
+    {% for task in tasks %}
+        <article class="task-card">
+            <h2><a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a></h2>
+            <p>{{ task.description|default:task.raw_message|truncatechars:160 }}</p>
+            <p class="meta">{{ task.get_status_display }} | {{ task.get_priority_display }}</p>
+        </article>
+    {% empty %}
+        <p class="empty-state">No assigned tasks.</p>
+    {% endfor %}
+</section>
+{% endblock %}

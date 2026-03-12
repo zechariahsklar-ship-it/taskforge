@@ -1,0 +1,181 @@
+from datetime import date, timedelta
+
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from django.utils import timezone
+
+
+class UserRole(models.TextChoices):
+    SUPERVISOR = "supervisor", "Supervisor"
+    STUDENT_WORKER = "student_worker", "Student Worker"
+
+
+class Priority(models.TextChoices):
+    URGENT = "urgent", "Urgent"
+    HIGH = "high", "High"
+    MEDIUM = "medium", "Medium"
+    LOW = "low", "Low"
+
+
+class TaskStatus(models.TextChoices):
+    NEW = "new", "New Requests"
+    ASSIGNED = "assigned", "Assigned"
+    IN_PROGRESS = "in_progress", "In Progress"
+    WAITING = "waiting", "Waiting / Blocked"
+    REVIEW = "review", "Review / Follow Up"
+    DONE = "done", "Done"
+
+
+class RecurrencePattern(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    MONTHLY = "monthly", "Monthly"
+
+
+class User(AbstractUser):
+    role = models.CharField(max_length=32, choices=UserRole.choices, default=UserRole.STUDENT_WORKER)
+
+    @property
+    def is_supervisor(self):
+        return self.role == UserRole.SUPERVISOR
+
+    @property
+    def display_label(self):
+        try:
+            return self.worker_profile.display_name
+        except StudentWorkerProfile.DoesNotExist:
+            full_name = self.get_full_name().strip()
+            return full_name or self.username
+
+
+class StudentWorkerProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="worker_profile")
+    display_name = models.CharField(max_length=150)
+    email = models.EmailField()
+    active_status = models.BooleanField(default=True)
+    normal_shift_availability = models.TextField(blank=True)
+    max_hours_per_day = models.DecimalField(max_digits=4, decimal_places=2, default=4)
+    skill_notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return self.display_name
+
+
+class RecurringTaskTemplate(models.Model):
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    priority = models.CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
+    estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
+    assign_to = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="recurring_templates",
+        limit_choices_to={"role": UserRole.STUDENT_WORKER},
+    )
+    requested_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="requested_recurring_templates",
+    )
+    recurrence_pattern = models.CharField(max_length=16, choices=RecurrencePattern.choices)
+    recurrence_interval = models.PositiveIntegerField(default=1)
+    day_of_week = models.PositiveSmallIntegerField(null=True, blank=True)
+    day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    start_date = models.DateField(default=timezone.localdate)
+    next_run_date = models.DateField(default=timezone.localdate)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+
+    def advance_next_run_date(self):
+        if self.recurrence_pattern == RecurrencePattern.DAILY:
+            self.next_run_date = self.next_run_date + timedelta(days=self.recurrence_interval)
+        elif self.recurrence_pattern == RecurrencePattern.WEEKLY:
+            self.next_run_date = self.next_run_date + timedelta(weeks=self.recurrence_interval)
+        else:
+            month = self.next_run_date.month - 1 + self.recurrence_interval
+            year = self.next_run_date.year + month // 12
+            month = month % 12 + 1
+            day = self.day_of_month or self.next_run_date.day
+            last_day = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+            self.next_run_date = date(year, month, min(day, last_day))
+
+
+class Task(models.Model):
+    title = models.CharField(max_length=255)
+    raw_message = models.TextField(blank=True)
+    description = models.TextField(blank=True)
+    priority = models.CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
+    status = models.CharField(max_length=16, choices=TaskStatus.choices, default=TaskStatus.NEW)
+    due_date = models.DateField(null=True, blank=True)
+    raw_due_text = models.CharField(max_length=255, blank=True)
+    waiting_person = models.CharField(max_length=255, blank=True)
+    respond_to_text = models.CharField(max_length=255, blank=True)
+    estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
+    assigned_to = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_tasks",
+        limit_choices_to={"role": UserRole.STUDENT_WORKER},
+    )
+    requested_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="requested_tasks",
+    )
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_tasks",
+    )
+    recurring_task = models.BooleanField(default=False)
+    recurring_template = models.ForeignKey(
+        RecurringTaskTemplate,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="generated_tasks",
+    )
+    recurrence_pattern = models.CharField(max_length=16, choices=RecurrencePattern.choices, blank=True)
+    recurrence_interval = models.PositiveIntegerField(null=True, blank=True)
+    recurrence_day_of_week = models.PositiveSmallIntegerField(null=True, blank=True)
+    recurrence_day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["due_date", "-created_at"]
+
+    def __str__(self):
+        return self.title
+
+    def mark_complete(self):
+        self.status = TaskStatus.DONE
+        self.completed_at = timezone.now()
+
+
+class TaskNote(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="notes")
+    author = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Note for {self.task_id}"
