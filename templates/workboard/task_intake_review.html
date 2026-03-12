@@ -13,10 +13,29 @@
         <form method="post">
             {% csrf_token %}
             {{ form.as_p }}
+            <p>
+                <label for="id_checklist_items_text">Checklist items</label>
+                <textarea class="form-control" name="checklist_items_text" id="id_checklist_items_text" rows="8">{{ checklist_text }}</textarea>
+            </p>
+            <p class="meta">One checklist item per line. These will be created when you save the task.</p>
             <button type="submit">Create task</button>
         </form>
     </article>
     <aside class="stack">
+        <section class="card">
+            <h2>Parser confidence</h2>
+            <p><strong>{{ parser_confidence|title }}</strong></p>
+        </section>
+        <section class="card">
+            <h2>Parser warnings</h2>
+            <ul>
+                {% for item in parser_warnings %}
+                    <li>{{ item }}</li>
+                {% empty %}
+                    <li>No parser warnings.</li>
+                {% endfor %}
+            </ul>
+        </section>
         <section class="card">
             <h2>Assignment rationale</h2>
             <ul>
@@ -36,7 +55,6 @@
                     <li>No checklist items suggested.</li>
                 {% endfor %}
             </ul>
-            <p class="meta">These checklist items will be created automatically when you save the task.</p>
         </section>
         <section class="card">
             <h2>Original intake</h2>

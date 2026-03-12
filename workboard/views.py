@@ -133,8 +133,10 @@ def task_intake_view(request):
 def task_intake_review_view(request, pk):
     draft = get_object_or_404(TaskIntakeDraft.objects.prefetch_related("attachments"), pk=pk, created_by=request.user)
     initial = draft.parsed_payload or {}
+    checklist_text = "\n".join(initial.get("checklist_items", []))
 
     if request.method == "POST":
+        checklist_text = request.POST.get("checklist_items_text", checklist_text)
         form = TaskForm(request.POST, initial=initial)
         if form.is_valid():
             task = form.save(commit=False)
@@ -155,7 +157,8 @@ def task_intake_review_view(request, pk):
                     file=attachment.file.name,
                     original_name=attachment.original_name,
                 )
-            for index, title in enumerate(initial.get("checklist_items", []), start=1):
+            checklist_items = [line.strip() for line in checklist_text.splitlines() if line.strip()]
+            for index, title in enumerate(checklist_items, start=1):
                 TaskChecklistItem.objects.create(task=task, title=title, sort_order=index)
             messages.success(request, "Task created from intake request.")
             return redirect("task-detail", pk=task.pk)
@@ -172,6 +175,9 @@ def task_intake_review_view(request, pk):
             "assignment_summary": initial.get("assignment_summary", ""),
             "assignment_rationale": initial.get("assignment_rationale", []),
             "checklist_preview": initial.get("checklist_items", []),
+            "checklist_text": checklist_text,
+            "parser_confidence": initial.get("parser_confidence", "medium"),
+            "parser_warnings": initial.get("parser_warnings", []),
         },
     )
 
