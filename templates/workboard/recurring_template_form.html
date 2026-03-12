@@ -5,7 +5,7 @@
 {% block content %}
 <section class="card">
     <h1>Create recurring task template</h1>
-    <p>Daily, weekly, and monthly recurrence are supported through a management command placeholder.</p>
+    <p>Daily, weekly, and monthly recurrence are supported through the app's built-in generation command.</p>
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}

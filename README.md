@@ -1,6 +1,6 @@
 # TaskForge
 
-TaskForge is a simple internal Django app for supervising student workers. Supervisors can paste a freeform request, review AI-extracted fields, create and assign tasks, manage recurring work, and track progress on a shared board. Student workers can review assigned tasks, update status, and add notes.
+TaskForge is a standalone internal Django web app for supervising student workers. It is intended as a temporary, self-contained solution for intake, assignment, and tracking of student worker tasks. Supervisors can paste a freeform request, review AI-extracted fields, create and assign tasks, manage recurring work, and track progress on a shared board. Student workers can review assigned tasks, update status, and add notes.
 
 ## MVP scope
 
@@ -10,7 +10,7 @@ TaskForge is a simple internal Django app for supervising student workers. Super
 - Student worker profiles and workload summary
 - Task intake flow with a placeholder AI parsing service
 - Shared task board and worker task view
-- Recurring task templates with a generation command placeholder
+- Recurring task templates with a simple built-in generation command
 - Django admin and sample seed data
 
 ## Local setup
@@ -75,5 +75,3 @@ If you need to run local checks without PostgreSQL temporarily, set `USE_SQLITE=
 
 - `python manage.py seed_sample_data`
 - `python manage.py generate_recurring_tasks`
-
-The recurring task command is intended to be wired into Windows Task Scheduler, cron, or another scheduler later.
