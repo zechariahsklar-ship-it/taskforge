@@ -1,6 +1,17 @@
 from django import forms
+from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 
-from .models import RecurringTaskTemplate, StudentWorkerProfile, Task, TaskNote, User, UserRole
+from .models import (
+    RecurringTaskTemplate,
+    StudentAvailability,
+    StudentAvailabilityOverride,
+    StudentWorkerProfile,
+    Task,
+    TaskChecklistItem,
+    TaskNote,
+    User,
+    UserRole,
+)
 
 
 class StyledFormMixin:
@@ -26,6 +37,20 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
             "normal_shift_availability": forms.Textarea(attrs={"rows": 3}),
             "skill_notes": forms.Textarea(attrs={"rows": 3}),
         }
+
+
+class StudentAvailabilityForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = StudentAvailability
+        fields = ["weekday", "hours_available"]
+
+
+class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
+    override_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+
+    class Meta:
+        model = StudentAvailabilityOverride
+        fields = ["override_date", "hours_available", "note"]
 
 
 class TaskIntakeForm(StyledFormMixin, forms.Form):
@@ -78,6 +103,20 @@ class TaskNoteForm(StyledFormMixin, forms.ModelForm):
         model = TaskNote
         fields = ["body"]
         widgets = {"body": forms.Textarea(attrs={"rows": 3, "placeholder": "Add a task note"})}
+
+
+class TaskChecklistItemForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = TaskChecklistItem
+        fields = ["title", "is_completed", "sort_order"]
+
+
+class AppPasswordChangeForm(StyledFormMixin, PasswordChangeForm):
+    pass
+
+
+class SupervisorStudentPasswordResetForm(StyledFormMixin, SetPasswordForm):
+    pass
 
 
 class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):

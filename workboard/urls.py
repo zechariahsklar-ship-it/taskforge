@@ -6,6 +6,7 @@ from . import views
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("board/", views.board_view, name="board"),
+    path("account/password/", views.password_change_view, name="password-change"),
     path("tasks/mine/", views.my_tasks_view, name="my-tasks"),
     path("tasks/intake/", views.task_intake_view, name="task-intake"),
     path("tasks/intake/review/", views.task_intake_review_view, name="task-intake-review"),
@@ -15,4 +16,5 @@ urlpatterns = [
     path("recurring/new/", views.recurring_template_create_view, name="recurring-create"),
     path("workers/", views.worker_list_view, name="worker-list"),
     path("workers/new/", views.worker_profile_create_view, name="worker-create"),
+    path("workers/<int:pk>/reset-password/", views.worker_password_reset_view, name="worker-password-reset"),
 ]

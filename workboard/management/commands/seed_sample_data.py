@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from workboard.models import Priority, StudentWorkerProfile, Task, TaskStatus, User, UserRole
+from workboard.models import Priority, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, Weekday, User, UserRole
 
 
 class Command(BaseCommand):
@@ -51,6 +51,22 @@ class Command(BaseCommand):
                     "skill_notes": item["skills"],
                 },
             )
+            profile = user.worker_profile
+            weekday_hours = {
+                Weekday.MONDAY: 4,
+                Weekday.TUESDAY: 4,
+                Weekday.WEDNESDAY: 4,
+                Weekday.THURSDAY: 4,
+                Weekday.FRIDAY: 3,
+                Weekday.SATURDAY: 0,
+                Weekday.SUNDAY: 0,
+            }
+            for weekday, hours in weekday_hours.items():
+                StudentAvailability.objects.update_or_create(
+                    profile=profile,
+                    weekday=weekday,
+                    defaults={"hours_available": hours},
+                )
 
         alex = User.objects.get(username="alex")
         jordan = User.objects.get(username="jordan")
@@ -78,7 +94,7 @@ class Command(BaseCommand):
             },
         ]
         for task_data in task_defaults:
-            Task.objects.get_or_create(
+            task, _ = Task.objects.get_or_create(
                 title=task_data["title"],
                 defaults={
                     **task_data,
@@ -88,5 +104,7 @@ class Command(BaseCommand):
                     "raw_message": task_data["description"],
                 },
             )
+            TaskChecklistItem.objects.get_or_create(task=task, title="Review request details", defaults={"sort_order": 1})
+            TaskChecklistItem.objects.get_or_create(task=task, title="Complete task work", defaults={"sort_order": 2})
 
         self.stdout.write(self.style.SUCCESS("Sample data seeded."))

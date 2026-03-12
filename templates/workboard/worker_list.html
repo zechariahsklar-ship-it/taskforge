@@ -20,6 +20,7 @@
                 <th>Availability</th>
                 <th>Max Hours/Day</th>
                 <th>Skills</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -31,6 +32,7 @@
                     <td>{{ profile.normal_shift_availability }}</td>
                     <td>{{ profile.max_hours_per_day }}</td>
                     <td>{{ profile.skill_notes }}</td>
+                    <td><a href="{% url 'worker-password-reset' profile.user.pk %}">Reset password</a></td>
                 </tr>
             {% endfor %}
         </tbody>

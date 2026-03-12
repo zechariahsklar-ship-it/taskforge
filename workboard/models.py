@@ -32,8 +32,19 @@ class RecurrencePattern(models.TextChoices):
     MONTHLY = "monthly", "Monthly"
 
 
+class Weekday(models.IntegerChoices):
+    MONDAY = 0, "Monday"
+    TUESDAY = 1, "Tuesday"
+    WEDNESDAY = 2, "Wednesday"
+    THURSDAY = 3, "Thursday"
+    FRIDAY = 4, "Friday"
+    SATURDAY = 5, "Saturday"
+    SUNDAY = 6, "Sunday"
+
+
 class User(AbstractUser):
     role = models.CharField(max_length=32, choices=UserRole.choices, default=UserRole.STUDENT_WORKER)
+    must_change_password = models.BooleanField(default=False)
 
     @property
     def is_supervisor(self):
@@ -59,6 +70,35 @@ class StudentWorkerProfile(models.Model):
 
     def __str__(self):
         return self.display_name
+
+
+class StudentAvailability(models.Model):
+    profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="weekly_availability")
+    weekday = models.PositiveSmallIntegerField(choices=Weekday.choices)
+    hours_available = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+
+    class Meta:
+        ordering = ["weekday"]
+        unique_together = ("profile", "weekday")
+
+    def __str__(self):
+        return f"{self.profile.display_name} - {self.get_weekday_display()}"
+
+
+class StudentAvailabilityOverride(models.Model):
+    profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="availability_overrides")
+    override_date = models.DateField()
+    hours_available = models.DecimalField(max_digits=4, decimal_places=2)
+    note = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_availability_overrides")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["override_date", "profile__display_name"]
+        unique_together = ("profile", "override_date")
+
+    def __str__(self):
+        return f"{self.profile.display_name} override for {self.override_date}"
 
 
 class RecurringTaskTemplate(models.Model):
@@ -179,3 +219,21 @@ class TaskNote(models.Model):
 
     def __str__(self):
         return f"Note for {self.task_id}"
+
+
+class TaskChecklistItem(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="checklist_items")
+    title = models.CharField(max_length=255)
+    is_completed = models.BooleanField(default=False)
+    sort_order = models.PositiveIntegerField(default=0)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self):
+        return self.title
+
+    def mark_complete(self):
+        self.is_completed = True
+        self.completed_at = timezone.now()

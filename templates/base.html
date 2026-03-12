@@ -22,6 +22,7 @@
                     <a href="{% url 'worker-list' %}">Workers</a>
                     <a href="{% url 'recurring-create' %}">Recurring</a>
                 {% endif %}
+                <a href="{% url 'password-change' %}">Change Password</a>
                 <form action="{% url 'logout' %}" method="post">
                     {% csrf_token %}
                     <button type="submit" class="link-button">Logout</button>

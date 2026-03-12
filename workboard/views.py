@@ -1,12 +1,22 @@
 from functools import wraps
 
 from django.contrib import messages
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q, Sum
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import RecurringTaskTemplateForm, StudentWorkerProfileForm, TaskForm, TaskIntakeForm, TaskNoteForm, TaskUpdateForm
+from .forms import (
+    AppPasswordChangeForm,
+    RecurringTaskTemplateForm,
+    StudentWorkerProfileForm,
+    SupervisorStudentPasswordResetForm,
+    TaskForm,
+    TaskIntakeForm,
+    TaskNoteForm,
+    TaskUpdateForm,
+)
 from .models import StudentWorkerProfile, Task, TaskStatus, User, UserRole
 from .services import TaskParsingService
 
@@ -33,14 +43,29 @@ def supervisor_required(view_func):
     return wrapped
 
 
-@login_required
+def app_login_required(view_func):
+    @wraps(view_func)
+    @login_required
+    def wrapped(request, *args, **kwargs):
+        if request.user.must_change_password and request.resolver_match and request.resolver_match.url_name not in {
+            "password-change",
+            "logout",
+        }:
+            messages.info(request, "You must create a new password before continuing.")
+            return redirect("password-change")
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
+
+
+@app_login_required
 def dashboard(request):
     if request.user.role == UserRole.SUPERVISOR:
         return redirect("board")
     return redirect("my-tasks")
 
 
-@login_required
+@app_login_required
 def board_view(request):
     tasks = Task.objects.select_related("assigned_to", "requested_by").all()
     if request.user.role == UserRole.STUDENT_WORKER:
@@ -52,7 +77,7 @@ def board_view(request):
     return render(request, "workboard/board.html", {"grouped_tasks": grouped_tasks})
 
 
-@login_required
+@app_login_required
 def my_tasks_view(request):
     tasks = Task.objects.filter(assigned_to=request.user).select_related("requested_by")
     return render(request, "workboard/my_tasks.html", {"tasks": tasks})
@@ -111,7 +136,7 @@ def task_create_view(request):
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Create task"})
 
 
-@login_required
+@app_login_required
 def task_detail_view(request, pk):
     task = get_object_or_404(Task.objects.select_related("assigned_to", "requested_by", "created_by"), pk=pk)
     if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id:
@@ -144,6 +169,26 @@ def task_detail_view(request, pk):
                 return redirect("task-detail", pk=task.pk)
 
     return render(request, "workboard/task_detail.html", {"task": task, "note_form": note_form, "status_form": status_form})
+
+
+@login_required
+def password_change_view(request):
+    if request.method == "POST":
+        form = AppPasswordChangeForm(request.user, request.POST)
+        if form.is_valid():
+            user = form.save()
+            user.must_change_password = False
+            user.save(update_fields=["must_change_password"])
+            update_session_auth_hash(request, user)
+            messages.success(request, "Password changed.")
+            return redirect("dashboard")
+    else:
+        form = AppPasswordChangeForm(request.user)
+    return render(
+        request,
+        "workboard/password_change_form.html",
+        {"form": form, "page_title": "Change password", "force_change": request.user.must_change_password},
+    )
 
 
 @supervisor_required
@@ -211,6 +256,7 @@ def worker_profile_create_view(request):
             last_name=last_name,
             email=email,
             role=UserRole.STUDENT_WORKER,
+            must_change_password=True,
         )
         profile = StudentWorkerProfile(user=user, email=email, display_name=username)
         form = StudentWorkerProfileForm(request.POST, instance=profile)
@@ -220,3 +266,23 @@ def worker_profile_create_view(request):
             return redirect("worker-list")
         user.delete()
     return render(request, "workboard/worker_form.html", {"form": form})
+
+
+@supervisor_required
+def worker_password_reset_view(request, pk):
+    student = get_object_or_404(User, pk=pk, role=UserRole.STUDENT_WORKER)
+    if request.method == "POST":
+        form = SupervisorStudentPasswordResetForm(student, request.POST)
+        if form.is_valid():
+            form.save()
+            student.must_change_password = True
+            student.save(update_fields=["must_change_password"])
+            messages.success(request, f"Password reset for {student.display_label}. They must create a new password at next login.")
+            return redirect("worker-list")
+    else:
+        form = SupervisorStudentPasswordResetForm(student)
+    return render(
+        request,
+        "workboard/worker_password_reset_form.html",
+        {"form": form, "student": student},
+    )
