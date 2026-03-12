@@ -141,8 +141,8 @@ class TaskParsingService:
                 f"{len(attachment_names)} attachment(s) were preserved for the workflow. The current live parser uses the message text and attachment names; binary image analysis can be added next."
             )
             parsed.parser_warnings.append("Attachments were stored, but the parser currently uses message text and attachment names only.")
-        if not parsed.due_date:
-            parsed.parser_warnings.append("No exact due date was extracted. Review the due date field before saving.")
+        parsed = TaskParsingService._apply_priority_and_due_date_fallbacks(parsed)
+        parsed = TaskParsingService._apply_due_date_rules(parsed)
         if not parsed.respond_to_text and any(word in raw_message.lower() for word in ["reply", "respond", "email"]):
             parsed.parser_warnings.append("A response action may be needed, but no explicit respond-to text was extracted.")
         parsed.parser_confidence = TaskParsingService._calculate_parser_confidence(parsed)
@@ -270,7 +270,7 @@ class TaskParsingService:
 
         title = (parsed.get("title") or "New task request")[:255]
         description = (parsed.get("description") or raw_message).strip()[:2000]
-        priority = parsed.get("priority") if parsed.get("priority") in {Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW} else Priority.MEDIUM
+        priority = parsed.get("priority") if parsed.get("priority") in {Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW} else ""
         due_date = parsed.get("due_date")
         due_date = due_date if TaskParsingService._parse_due_date(due_date) else None
         checklist_items = [item.strip() for item in parsed.get("checklist_items", []) if isinstance(item, str) and item.strip()]
@@ -357,3 +357,58 @@ class TaskParsingService:
         if score >= 5 and len(parsed.parser_warnings) <= 1:
             return "high"
         return "medium"
+
+    @staticmethod
+    def _apply_priority_and_due_date_fallbacks(parsed: ParsedTaskData) -> ParsedTaskData:
+        lowered = parsed.raw_message.lower()
+        explicit_priority_cues = ["urgent", "asap", "high priority", "medium priority", "low priority"]
+        priority_confirmed = bool(parsed.priority and parsed.priority in {Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW}) and any(
+            cue in lowered for cue in explicit_priority_cues
+        )
+        due_confirmed = bool(TaskParsingService._parse_due_date(parsed.due_date))
+        if not priority_confirmed and not due_confirmed:
+            parsed.priority = Priority.LOW
+            parsed.parser_warnings.append(
+                "The parser could not confidently confirm either priority or due date. The task was defaulted to low priority and will be due in one week. Please review before saving."
+            )
+        return parsed
+
+    @staticmethod
+    def _apply_due_date_rules(parsed: ParsedTaskData) -> ParsedTaskData:
+        parsed_due_date = TaskParsingService._parse_due_date(parsed.due_date)
+        if parsed_due_date:
+            adjusted_due_date = TaskParsingService._roll_weekend_to_monday(parsed_due_date)
+            if adjusted_due_date != parsed_due_date:
+                parsed.parser_warnings.append("Extracted due date landed on a weekend, so it was moved to Monday.")
+            parsed.due_date = str(adjusted_due_date)
+            return parsed
+
+        days_by_priority = {
+            Priority.URGENT: 0,
+            Priority.HIGH: 2,
+            Priority.MEDIUM: 4,
+            Priority.LOW: 7,
+        }
+        labels_by_priority = {
+            Priority.URGENT: "urgent",
+            Priority.HIGH: "high",
+            Priority.MEDIUM: "medium",
+            Priority.LOW: "low",
+        }
+        fallback_days = days_by_priority.get(parsed.priority, 4)
+        fallback_due_date = timezone.localdate() + timedelta(days=fallback_days)
+        fallback_due_date = TaskParsingService._roll_weekend_to_monday(fallback_due_date)
+        parsed.due_date = str(fallback_due_date)
+        parsed.raw_due_text = parsed.raw_due_text or f"Priority-based default for {labels_by_priority.get(parsed.priority, parsed.priority)}"
+        parsed.parser_warnings.append(
+            f"No due date was provided, so the app set one automatically from priority: {labels_by_priority.get(parsed.priority, parsed.priority)} -> {parsed.due_date}."
+        )
+        return parsed
+
+    @staticmethod
+    def _roll_weekend_to_monday(value: date) -> date:
+        if value.weekday() == 5:
+            return value + timedelta(days=2)
+        if value.weekday() == 6:
+            return value + timedelta(days=1)
+        return value
