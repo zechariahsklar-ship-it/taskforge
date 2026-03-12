@@ -65,6 +65,20 @@ GRANT ALL PRIVILEGES ON DATABASE taskforge TO taskforge;
 
 If you need to run local checks without PostgreSQL temporarily, set `USE_SQLITE=True` in `.env`. PostgreSQL remains the main configured database for the app.
 
+## OpenAI key setup
+
+Store the real OpenAI key only in your local `.env` file or in deployment environment variables. Do not commit it to GitHub.
+
+Example:
+
+```env
+OPENAI_API_KEY=your_real_key_here
+OPENAI_TASK_PARSER_MODEL=gpt-5-mini
+USE_MOCK_TASK_PARSER=True
+```
+
+Keep `USE_MOCK_TASK_PARSER=True` until you are ready to switch the task parser from the current mock implementation to the real OpenAI API integration.
+
 ## Demo accounts after seeding
 
 - Supervisor: `supervisor1` / `password123`

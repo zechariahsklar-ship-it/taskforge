@@ -1,5 +1,6 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+import os
 
 from django.db.models import Max, Q, Sum
 from django.utils import timezone
@@ -100,7 +101,16 @@ class TaskAssignmentService:
 
 class TaskParsingService:
     @staticmethod
+    def parser_settings() -> dict:
+        return {
+            "use_mock_parser": os.getenv("USE_MOCK_TASK_PARSER", "True").lower() == "true",
+            "openai_api_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+            "model": os.getenv("OPENAI_TASK_PARSER_MODEL", "gpt-5-mini"),
+        }
+
+    @staticmethod
     def parse_request(raw_message: str, attachments=None, fallback_supervisor=None) -> ParsedTaskData:
+        parser_settings = TaskParsingService.parser_settings()
         first_line = raw_message.strip().splitlines()[0] if raw_message.strip() else "New task request"
         lowered = raw_message.lower()
         priority = Priority.URGENT if "urgent" in lowered else Priority.HIGH if "asap" in lowered else Priority.MEDIUM
@@ -121,6 +131,10 @@ class TaskParsingService:
         if attachment_count:
             assignment_summary = f"{assignment_summary} {attachment_count} attachment(s) included for the future parser."
             assignment_rationale.append(f"{attachment_count} attachment(s) were preserved for future API parsing.")
+        if not parser_settings["use_mock_parser"] and not parser_settings["openai_api_key_configured"]:
+            assignment_rationale.append("Real parser mode is enabled, but OPENAI_API_KEY is not configured. Falling back to mock parsing behavior.")
+        else:
+            assignment_rationale.append(f"Parser mode: {'mock' if parser_settings['use_mock_parser'] else 'openai'} using model setting `{parser_settings['model']}`.")
 
         checklist_items = TaskParsingService._build_checklist_items(raw_message)
 
