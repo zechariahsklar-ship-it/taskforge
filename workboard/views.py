@@ -75,6 +75,15 @@ def app_login_required(view_func):
     return wrapped
 
 
+def _normalize_checklist_rows(values: list[str]) -> list[str]:
+    return [value.strip() for value in values if value.strip()]
+
+
+def _build_checklist_editor_rows(values: list[str]) -> list[str]:
+    rows = _normalize_checklist_rows(values)
+    return (rows or [""]) + [""]
+
+
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
     raw_due_text = (initial.get("raw_due_text") or "").strip()
     parsed_due_date = TaskParsingService._parse_due_date(initial.get("due_date"))
@@ -198,10 +207,10 @@ def task_intake_view(request):
 def task_intake_review_view(request, pk):
     draft = get_object_or_404(TaskIntakeDraft.objects.prefetch_related("attachments"), pk=pk, created_by=request.user)
     initial = draft.parsed_payload or {}
-    checklist_text = "\n".join(initial.get("checklist_items", []))
+    checklist_values = list(initial.get("checklist_items", []))
 
     if request.method == "POST":
-        checklist_text = request.POST.get("checklist_items_text", checklist_text)
+        checklist_values = request.POST.getlist("checklist_items")
         form = TaskForm(request.POST, initial=initial)
         if form.is_valid():
             task = form.save(commit=False)
@@ -222,7 +231,7 @@ def task_intake_review_view(request, pk):
                     file=attachment.file.name,
                     original_name=attachment.original_name,
                 )
-            checklist_items = [line.strip() for line in checklist_text.splitlines() if line.strip()]
+            checklist_items = _normalize_checklist_rows(checklist_values)
             for index, title in enumerate(checklist_items, start=1):
                 TaskChecklistItem.objects.create(task=task, title=title, sort_order=index)
             messages.success(request, "Task created from intake request.")
@@ -242,7 +251,7 @@ def task_intake_review_view(request, pk):
             "assignment_summary": initial.get("assignment_summary", ""),
             "assignment_rationale": initial.get("assignment_rationale", []),
             "checklist_preview": initial.get("checklist_items", []),
-            "checklist_text": checklist_text,
+            "checklist_editor_rows": _build_checklist_editor_rows(checklist_values),
             "parser_confidence": initial.get("parser_confidence", "medium"),
             "parser_warnings": initial.get("parser_warnings", []),
             "due_date_review": due_date_review,

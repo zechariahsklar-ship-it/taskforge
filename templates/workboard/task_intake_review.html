@@ -90,11 +90,22 @@
                     </p>
                 {% endif %}
             {% endfor %}
-            <p>
-                <label for="id_checklist_items_text">Checklist items</label>
-                <textarea class="form-control" name="checklist_items_text" id="id_checklist_items_text" rows="8">{{ checklist_text }}</textarea>
-            </p>
-            <p class="meta">One checklist item per line. These will be created when you save the task.</p>
+            <section class="review-field checklist-editor">
+                <div class="split-heading checklist-header">
+                    <div>
+                        <label>Checklist items</label>
+                        <p class="meta">Each non-empty row will become a checklist item when you save the task.</p>
+                    </div>
+                    <button type="button" class="button-link checklist-add" data-checklist-add>Add row</button>
+                </div>
+                <div class="checklist-rows" data-checklist-rows>
+                    {% for item in checklist_editor_rows %}
+                        <div class="checklist-row">
+                            <input type="text" name="checklist_items" value="{{ item }}" class="form-control" placeholder="Checklist item {{ forloop.counter }}">
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
             <button type="submit">Create task</button>
         </form>
     </article>
@@ -149,4 +160,27 @@
         </section>
     </aside>
 </section>
+
+<script>
+    (function () {
+        const container = document.querySelector('[data-checklist-rows]');
+        const addButton = document.querySelector('[data-checklist-add]');
+        if (!container || !addButton) {
+            return;
+        }
+        addButton.addEventListener('click', function () {
+            const row = document.createElement('div');
+            row.className = 'checklist-row';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.name = 'checklist_items';
+            input.className = 'form-control';
+            input.placeholder = 'Checklist item';
+            row.appendChild(input);
+            container.appendChild(row);
+            input.focus();
+        });
+    }());
+</script>
+
 {% endblock %}

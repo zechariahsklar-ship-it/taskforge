@@ -239,3 +239,29 @@ td {
         grid-template-columns: 1fr;
     }
 }
+
+
+.checklist-editor {
+    margin: 1rem 0;
+}
+
+.checklist-header {
+    margin-bottom: 1rem;
+}
+
+.checklist-header > div {
+    flex: 1;
+}
+
+.checklist-add {
+    align-self: center;
+}
+
+.checklist-rows {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.checklist-row {
+    display: block;
+}
