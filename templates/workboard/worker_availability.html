@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Hours | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Manage hours for {{ profile.display_name }}</h1>
+        <p>Set weekly availability and temporary hour changes that the intake assignment logic uses.</p>
+    </div>
+    <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
+</section>
+<section class="detail-grid">
+    <article class="card">
+        <h2>Weekly availability</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="weekly">
+            {{ weekly_form.as_p }}
+            <button type="submit">Save weekly hours</button>
+        </form>
+    </article>
+    <aside class="stack">
+        <section class="card">
+            <h2>Add temporary override</h2>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="override">
+                {{ override_form.as_p }}
+                <button type="submit">Save override</button>
+            </form>
+        </section>
+        <section class="card">
+            <h2>Existing overrides</h2>
+            <div class="stack">
+                {% for override in overrides %}
+                    <article class="note">
+                        <p><strong>{{ override.override_date }}</strong> | {{ override.hours_delta_display }} hours</p>
+                        <p>{{ override.note|default:"No note" }}</p>
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="delete_override">
+                            <input type="hidden" name="override_id" value="{{ override.pk }}">
+                            <button type="submit">Remove override</button>
+                        </form>
+                    </article>
+                {% empty %}
+                    <p class="empty-state">No temporary overrides.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </aside>
+</section>
+{% endblock %}

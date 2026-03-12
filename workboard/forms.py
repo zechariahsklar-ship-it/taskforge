@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django import forms
 from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 
@@ -7,11 +9,29 @@ from .models import (
     StudentAvailabilityOverride,
     StudentWorkerProfile,
     Task,
+    TaskAttachment,
     TaskChecklistItem,
+    TaskIntakeDraft,
     TaskNote,
     User,
     UserRole,
 )
+
+
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleFileField(forms.FileField):
+    widget = MultipleFileInput
+
+    def clean(self, data, initial=None):
+        single_file_clean = super().clean
+        if not data:
+            return []
+        if isinstance(data, (list, tuple)):
+            return [single_file_clean(item, initial) for item in data]
+        return [single_file_clean(data, initial)]
 
 
 class StyledFormMixin:
@@ -53,8 +73,19 @@ class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
         fields = ["override_date", "hours_available", "note"]
 
 
+class WeeklyAvailabilityForm(StyledFormMixin, forms.Form):
+    monday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    tuesday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    wednesday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    thursday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    friday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    saturday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    sunday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+
+
 class TaskIntakeForm(StyledFormMixin, forms.Form):
-    raw_message = forms.CharField(widget=forms.Textarea(attrs={"rows": 10}), label="Paste request")
+    raw_message = forms.CharField(widget=forms.Textarea(attrs={"rows": 12}), label="Paste email or request")
+    attachments = MultipleFileField(required=False, label="Optional screenshots or images")
 
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
@@ -88,7 +119,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["assigned_to"].queryset = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
+        self.fields["assigned_to"].queryset = User.objects.order_by("role", "username")
         self.fields["requested_by"].queryset = User.objects.order_by("username")
 
 
@@ -117,6 +148,18 @@ class AppPasswordChangeForm(StyledFormMixin, PasswordChangeForm):
 
 class SupervisorStudentPasswordResetForm(StyledFormMixin, SetPasswordForm):
     pass
+
+
+class TaskIntakeDraftForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = TaskIntakeDraft
+        fields = ["raw_message"]
+
+
+class TaskAttachmentForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = TaskAttachment
+        fields = ["file"]
 
 
 class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):

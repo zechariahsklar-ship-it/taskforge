@@ -10,15 +10,31 @@ from django.shortcuts import get_object_or_404, redirect, render
 from .forms import (
     AppPasswordChangeForm,
     RecurringTaskTemplateForm,
+    StudentAvailabilityOverrideForm,
     StudentWorkerProfileForm,
     SupervisorStudentPasswordResetForm,
     TaskForm,
+    TaskChecklistItemForm,
     TaskIntakeForm,
     TaskNoteForm,
     TaskUpdateForm,
+    WeeklyAvailabilityForm,
 )
-from .models import StudentWorkerProfile, Task, TaskStatus, User, UserRole
-from .services import TaskParsingService
+from .models import (
+    StudentAvailability,
+    StudentAvailabilityOverride,
+    StudentWorkerProfile,
+    Task,
+    TaskAttachment,
+    TaskChecklistItem,
+    TaskIntakeDraft,
+    TaskIntakeDraftAttachment,
+    TaskStatus,
+    User,
+    UserRole,
+    Weekday,
+)
+from .services import TaskAssignmentService, TaskParsingService
 
 
 BOARD_COLUMNS = [
@@ -86,37 +102,78 @@ def my_tasks_view(request):
 @supervisor_required
 def task_intake_view(request):
     if request.method == "POST":
-        form = TaskIntakeForm(request.POST)
+        form = TaskIntakeForm(request.POST, request.FILES)
         if form.is_valid():
-            request.session["task_intake_data"] = TaskParsingService.parse_request(form.cleaned_data["raw_message"]).__dict__
-            return redirect("task-intake-review")
+            draft = TaskIntakeDraft.objects.create(
+                created_by=request.user,
+                raw_message=form.cleaned_data["raw_message"],
+            )
+            uploaded_files = form.cleaned_data["attachments"]
+            for uploaded_file in uploaded_files:
+                TaskIntakeDraftAttachment.objects.create(
+                    draft=draft,
+                    file=uploaded_file,
+                    original_name=uploaded_file.name,
+                )
+
+            parsed = TaskParsingService.parse_request(
+                form.cleaned_data["raw_message"],
+                attachments=list(draft.attachments.all()),
+                fallback_supervisor=request.user,
+            )
+            draft.parsed_payload = parsed.to_dict()
+            draft.save(update_fields=["parsed_payload", "updated_at"])
+            return redirect("task-intake-review", pk=draft.pk)
     else:
         form = TaskIntakeForm()
     return render(request, "workboard/task_intake.html", {"form": form})
 
 
 @supervisor_required
-def task_intake_review_view(request):
-    initial = request.session.get("task_intake_data")
-    if not initial:
-        messages.error(request, "Start with the intake form first.")
-        return redirect("task-intake")
+def task_intake_review_view(request, pk):
+    draft = get_object_or_404(TaskIntakeDraft.objects.prefetch_related("attachments"), pk=pk, created_by=request.user)
+    initial = draft.parsed_payload or {}
 
     if request.method == "POST":
         form = TaskForm(request.POST, initial=initial)
         if form.is_valid():
             task = form.save(commit=False)
             task.created_by = request.user
+            if not task.assigned_to:
+                suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
+                    due_date=task.due_date,
+                    estimated_minutes=task.estimated_minutes,
+                    fallback_supervisor=request.user,
+                )
+                task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
-            request.session.pop("task_intake_data", None)
+            for attachment in draft.attachments.all():
+                TaskAttachment.objects.create(
+                    task=task,
+                    file=attachment.file.name,
+                    original_name=attachment.original_name,
+                )
+            for index, title in enumerate(initial.get("checklist_items", []), start=1):
+                TaskChecklistItem.objects.create(task=task, title=title, sort_order=index)
             messages.success(request, "Task created from intake request.")
             return redirect("task-detail", pk=task.pk)
     else:
         form = TaskForm(initial=initial)
 
-    return render(request, "workboard/task_form.html", {"form": form, "page_title": "Review extracted task"})
+    return render(
+        request,
+        "workboard/task_intake_review.html",
+        {
+            "form": form,
+            "page_title": "Review extracted task",
+            "draft": draft,
+            "assignment_summary": initial.get("assignment_summary", ""),
+            "assignment_rationale": initial.get("assignment_rationale", []),
+            "checklist_preview": initial.get("checklist_items", []),
+        },
+    )
 
 
 @supervisor_required
@@ -126,6 +183,13 @@ def task_create_view(request):
         if form.is_valid():
             task = form.save(commit=False)
             task.created_by = request.user
+            if not task.assigned_to:
+                suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
+                    due_date=task.due_date,
+                    estimated_minutes=task.estimated_minutes,
+                    fallback_supervisor=request.user,
+                )
+                task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
@@ -144,6 +208,7 @@ def task_detail_view(request, pk):
 
     note_form = TaskNoteForm()
     status_form = TaskUpdateForm(instance=task)
+    checklist_form = TaskChecklistItemForm()
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -167,8 +232,20 @@ def task_detail_view(request, pk):
                 note.save()
                 messages.success(request, "Note added.")
                 return redirect("task-detail", pk=task.pk)
+        elif action == "checklist" and request.user.role == UserRole.SUPERVISOR:
+            checklist_form = TaskChecklistItemForm(request.POST)
+            if checklist_form.is_valid():
+                item = checklist_form.save(commit=False)
+                item.task = task
+                item.save()
+                messages.success(request, "Checklist item added.")
+                return redirect("task-detail", pk=task.pk)
 
-    return render(request, "workboard/task_detail.html", {"task": task, "note_form": note_form, "status_form": status_form})
+    return render(
+        request,
+        "workboard/task_detail.html",
+        {"task": task, "note_form": note_form, "status_form": status_form, "checklist_form": checklist_form},
+    )
 
 
 @login_required
@@ -238,6 +315,71 @@ def worker_list_view(request):
 
 
 @supervisor_required
+def worker_availability_view(request, pk):
+    profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
+    weekly_map = {item.weekday: item for item in profile.weekly_availability.all()}
+    initial = {
+        "monday_hours": weekly_map.get(Weekday.MONDAY).hours_available if weekly_map.get(Weekday.MONDAY) else 0,
+        "tuesday_hours": weekly_map.get(Weekday.TUESDAY).hours_available if weekly_map.get(Weekday.TUESDAY) else 0,
+        "wednesday_hours": weekly_map.get(Weekday.WEDNESDAY).hours_available if weekly_map.get(Weekday.WEDNESDAY) else 0,
+        "thursday_hours": weekly_map.get(Weekday.THURSDAY).hours_available if weekly_map.get(Weekday.THURSDAY) else 0,
+        "friday_hours": weekly_map.get(Weekday.FRIDAY).hours_available if weekly_map.get(Weekday.FRIDAY) else 0,
+        "saturday_hours": weekly_map.get(Weekday.SATURDAY).hours_available if weekly_map.get(Weekday.SATURDAY) else 0,
+        "sunday_hours": weekly_map.get(Weekday.SUNDAY).hours_available if weekly_map.get(Weekday.SUNDAY) else 0,
+    }
+    weekly_form = WeeklyAvailabilityForm(initial=initial)
+    override_form = StudentAvailabilityOverrideForm()
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "weekly":
+            weekly_form = WeeklyAvailabilityForm(request.POST)
+            if weekly_form.is_valid():
+                field_map = {
+                    Weekday.MONDAY: "monday_hours",
+                    Weekday.TUESDAY: "tuesday_hours",
+                    Weekday.WEDNESDAY: "wednesday_hours",
+                    Weekday.THURSDAY: "thursday_hours",
+                    Weekday.FRIDAY: "friday_hours",
+                    Weekday.SATURDAY: "saturday_hours",
+                    Weekday.SUNDAY: "sunday_hours",
+                }
+                for weekday, field_name in field_map.items():
+                    StudentAvailability.objects.update_or_create(
+                        profile=profile,
+                        weekday=weekday,
+                        defaults={"hours_available": weekly_form.cleaned_data[field_name]},
+                    )
+                messages.success(request, "Weekly hours updated.")
+                return redirect("worker-availability", pk=profile.pk)
+        elif action == "override":
+            override_form = StudentAvailabilityOverrideForm(request.POST)
+            if override_form.is_valid():
+                override = override_form.save(commit=False)
+                override.profile = profile
+                override.created_by = request.user
+                override.save()
+                messages.success(request, "Temporary hour override saved.")
+                return redirect("worker-availability", pk=profile.pk)
+        elif action == "delete_override":
+            override = get_object_or_404(StudentAvailabilityOverride, pk=request.POST.get("override_id"), profile=profile)
+            override.delete()
+            messages.success(request, "Temporary override removed.")
+            return redirect("worker-availability", pk=profile.pk)
+
+    return render(
+        request,
+        "workboard/worker_availability.html",
+        {
+            "profile": profile,
+            "weekly_form": weekly_form,
+            "override_form": override_form,
+            "overrides": profile.availability_overrides.all(),
+        },
+    )
+
+
+@supervisor_required
 def worker_profile_create_view(request):
     form = StudentWorkerProfileForm(request.POST or None)
     if request.method == "POST":
@@ -261,7 +403,9 @@ def worker_profile_create_view(request):
         profile = StudentWorkerProfile(user=user, email=email, display_name=username)
         form = StudentWorkerProfileForm(request.POST, instance=profile)
         if form.is_valid():
-            form.save()
+            profile = form.save()
+            for weekday in Weekday.values:
+                StudentAvailability.objects.get_or_create(profile=profile, weekday=weekday, defaults={"hours_available": 0})
             messages.success(request, "Student worker created.")
             return redirect("worker-list")
         user.delete()

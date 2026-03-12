@@ -100,6 +100,12 @@ class StudentAvailabilityOverride(models.Model):
     def __str__(self):
         return f"{self.profile.display_name} override for {self.override_date}"
 
+    @property
+    def hours_delta_display(self):
+        if self.hours_available > 0:
+            return f"+{self.hours_available}"
+        return str(self.hours_available)
+
 
 class RecurringTaskTemplate(models.Model):
     title = models.CharField(max_length=255)
@@ -165,7 +171,6 @@ class Task(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="assigned_tasks",
-        limit_choices_to={"role": UserRole.STUDENT_WORKER},
     )
     requested_by = models.ForeignKey(
         User,
@@ -237,3 +242,43 @@ class TaskChecklistItem(models.Model):
     def mark_complete(self):
         self.is_completed = True
         self.completed_at = timezone.now()
+
+
+class TaskAttachment(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to="task_attachments/%Y/%m/%d")
+    original_name = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["uploaded_at", "id"]
+
+    def __str__(self):
+        return self.original_name
+
+
+class TaskIntakeDraft(models.Model):
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="intake_drafts")
+    raw_message = models.TextField()
+    parsed_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Draft {self.pk}"
+
+
+class TaskIntakeDraftAttachment(models.Model):
+    draft = models.ForeignKey(TaskIntakeDraft, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to="intake_attachments/%Y/%m/%d")
+    original_name = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["uploaded_at", "id"]
+
+    def __str__(self):
+        return self.original_name

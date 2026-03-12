@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} | TaskForge{% endblock %}
+
+{% block content %}
+<section class="detail-grid">
+    <article class="card">
+        <h1>{{ page_title }}</h1>
+        <p>Review the extracted task fields and adjust them before saving.</p>
+        {% if assignment_summary %}
+            <div class="message">{{ assignment_summary }}</div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit">Create task</button>
+        </form>
+    </article>
+    <aside class="stack">
+        <section class="card">
+            <h2>Assignment rationale</h2>
+            <ul>
+                {% for item in assignment_rationale %}
+                    <li>{{ item }}</li>
+                {% empty %}
+                    <li>No assignment rationale available.</li>
+                {% endfor %}
+            </ul>
+        </section>
+        <section class="card">
+            <h2>Checklist preview</h2>
+            <ul>
+                {% for item in checklist_preview %}
+                    <li>{{ item }}</li>
+                {% empty %}
+                    <li>No checklist items suggested.</li>
+                {% endfor %}
+            </ul>
+            <p class="meta">These checklist items will be created automatically when you save the task.</p>
+        </section>
+        <section class="card">
+            <h2>Original intake</h2>
+            <p>{{ draft.raw_message|linebreaksbr }}</p>
+        </section>
+        <section class="card">
+            <h2>Attachments</h2>
+            <ul>
+                {% for attachment in draft.attachments.all %}
+                    <li>{{ attachment.original_name }}</li>
+                {% empty %}
+                    <li>No attachments uploaded.</li>
+                {% endfor %}
+            </ul>
+        </section>
+    </aside>
+</section>
+{% endblock %}

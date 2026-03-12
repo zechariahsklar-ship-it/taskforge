@@ -4,12 +4,12 @@
 
 {% block content %}
 <section class="card">
-    <h1>Paste a work request</h1>
-    <p>Paste the original message, then review the AI-extracted fields before saving.</p>
-    <form method="post">
+    <h1>Supervisor intake</h1>
+    <p>Paste an email or request, optionally attach screenshots or images, and review the extracted task fields before saving.</p>
+    <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
         {{ form.as_p }}
-        <button type="submit">Parse request</button>
+        <button type="submit">Parse and review</button>
     </form>
 </section>
 {% endblock %}

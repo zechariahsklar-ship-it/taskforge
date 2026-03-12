@@ -32,7 +32,10 @@
                     <td>{{ profile.normal_shift_availability }}</td>
                     <td>{{ profile.max_hours_per_day }}</td>
                     <td>{{ profile.skill_notes }}</td>
-                    <td><a href="{% url 'worker-password-reset' profile.user.pk %}">Reset password</a></td>
+                    <td>
+                        <a href="{% url 'worker-availability' profile.pk %}">Manage hours</a><br>
+                        <a href="{% url 'worker-password-reset' profile.user.pk %}">Reset password</a>
+                    </td>
                 </tr>
             {% endfor %}
         </tbody>
