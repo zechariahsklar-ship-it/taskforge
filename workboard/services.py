@@ -126,6 +126,7 @@ class TaskParsingService:
     def parse_request(raw_message: str, attachments=None, fallback_supervisor=None) -> ParsedTaskData:
         settings = TaskParsingService.parser_settings()
         attachment_names = [getattr(item, "original_name", getattr(item, "name", "attachment")) for item in (attachments or [])]
+        confidence_override = None
 
         if not settings["use_mock_parser"] and settings["openai_api_key"]:
             try:
@@ -133,8 +134,8 @@ class TaskParsingService:
             except Exception as exc:
                 parsed = TaskParsingService._parse_with_mock(raw_message)
                 parsed.assignment_rationale.append(f"OpenAI parser failed and mock fallback was used: {exc}")
-                parsed.parser_confidence = "low"
                 parsed.parser_warnings.append("OpenAI parsing failed, so the app used the mock parser instead.")
+                confidence_override = "low"
             else:
                 parsed.assignment_rationale.append(f"Parser mode: openai using model setting `{settings['model']}`.")
         else:
@@ -154,6 +155,8 @@ class TaskParsingService:
         if not parsed.respond_to_text and any(word in raw_message.lower() for word in ["reply", "respond", "email"]):
             parsed.parser_warnings.append("A response action may be needed, but no explicit respond-to text was extracted.")
         parsed.parser_confidence = TaskParsingService._calculate_parser_confidence(parsed)
+        if confidence_override:
+            parsed.parser_confidence = confidence_override
 
         due_date_value = TaskParsingService._parse_due_date(parsed.due_date)
         suggested_user, assignment_summary, assignment_rationale = TaskAssignmentService.suggest_assignee(
