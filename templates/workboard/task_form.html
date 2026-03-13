@@ -7,8 +7,89 @@
     <h1>{{ page_title }}</h1>
     <form method="post">
         {% csrf_token %}
-        {{ form.as_p }}
+        {% if form.non_field_errors %}
+            <div class="warning-note">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        {% for hidden in form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+
+        {% for field in form %}
+            {% if field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+                <p>
+                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<span class="meta">{{ field.help_text }}</span>{% endif %}
+                    {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                </p>
+            {% endif %}
+        {% endfor %}
+
+        <section class="review-field recurring-task-panel">
+            <div class="split-heading">
+                <div>
+                    <label for="{{ form.recurring_task.id_for_label }}">{{ form.recurring_task.label }}</label>
+                    {% if form.recurring_task.help_text %}<p class="meta">{{ form.recurring_task.help_text }}</p>{% endif %}
+                </div>
+                {{ form.recurring_task }}
+            </div>
+            {% if form.recurring_task.errors %}<div class="meta">{{ form.recurring_task.errors }}</div>{% endif %}
+
+            <div class="stack" data-recurring-options>
+                <p>
+                    <label for="{{ form.recurrence_pattern.id_for_label }}">{{ form.recurrence_pattern.label }}</label>
+                    {{ form.recurrence_pattern }}
+                    {% if form.recurrence_pattern.help_text %}<span class="meta">{{ form.recurrence_pattern.help_text }}</span>{% endif %}
+                    {% if form.recurrence_pattern.errors %}<div class="meta">{{ form.recurrence_pattern.errors }}</div>{% endif %}
+                </p>
+                <p>
+                    <label for="{{ form.recurrence_interval.id_for_label }}">{{ form.recurrence_interval.label }}</label>
+                    {{ form.recurrence_interval }}
+                    {% if form.recurrence_interval.help_text %}<span class="meta">{{ form.recurrence_interval.help_text }}</span>{% endif %}
+                    {% if form.recurrence_interval.errors %}<div class="meta">{{ form.recurrence_interval.errors }}</div>{% endif %}
+                </p>
+                <p data-recurring-weekly>
+                    <label for="{{ form.recurrence_day_of_week.id_for_label }}">{{ form.recurrence_day_of_week.label }}</label>
+                    {{ form.recurrence_day_of_week }}
+                    {% if form.recurrence_day_of_week.help_text %}<span class="meta">{{ form.recurrence_day_of_week.help_text }}</span>{% endif %}
+                    {% if form.recurrence_day_of_week.errors %}<div class="meta">{{ form.recurrence_day_of_week.errors }}</div>{% endif %}
+                </p>
+                <p data-recurring-monthly>
+                    <label for="{{ form.recurrence_day_of_month.id_for_label }}">{{ form.recurrence_day_of_month.label }}</label>
+                    {{ form.recurrence_day_of_month }}
+                    {% if form.recurrence_day_of_month.help_text %}<span class="meta">{{ form.recurrence_day_of_month.help_text }}</span>{% endif %}
+                    {% if form.recurrence_day_of_month.errors %}<div class="meta">{{ form.recurrence_day_of_month.errors }}</div>{% endif %}
+                </p>
+            </div>
+        </section>
         <button type="submit">Save task</button>
     </form>
 </section>
+<script>
+    (function () {
+        const recurringCheckbox = document.getElementById('{{ form.recurring_task.id_for_label }}');
+        const recurrencePattern = document.getElementById('{{ form.recurrence_pattern.id_for_label }}');
+        const recurringOptions = document.querySelector('[data-recurring-options]');
+        const weeklyField = document.querySelector('[data-recurring-weekly]');
+        const monthlyField = document.querySelector('[data-recurring-monthly]');
+        if (!recurringCheckbox || !recurrencePattern || !recurringOptions || !weeklyField || !monthlyField) {
+            return;
+        }
+
+        function updateRecurringVisibility() {
+            const enabled = recurringCheckbox.checked;
+            const pattern = recurrencePattern.value;
+            recurringOptions.hidden = !enabled;
+            weeklyField.hidden = !enabled || pattern !== 'weekly';
+            monthlyField.hidden = !enabled || pattern !== 'monthly';
+        }
+
+        recurringCheckbox.addEventListener('change', updateRecurringVisibility);
+        recurrencePattern.addEventListener('change', updateRecurringVisibility);
+        updateRecurringVisibility();
+    }());
+</script>
 {% endblock %}

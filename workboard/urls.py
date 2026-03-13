@@ -15,9 +15,19 @@ urlpatterns = [
     path("tasks/<int:pk>/", views.task_detail_view, name="task-detail"),
     path("tasks/<int:pk>/edit/", views.task_edit_view, name="task-edit"),
     path("tasks/<int:pk>/delete/", views.task_delete_view, name="task-delete"),
-    path("recurring/new/", views.recurring_template_create_view, name="recurring-create"),
+    path("recurring/", views.recurring_template_list_view, name="recurring-list"),
+    path("recurring/new/", views.recurring_template_list_view, name="recurring-create"),
+    path("recurring/<int:pk>/", views.recurring_template_detail_view, name="recurring-detail"),
+    path("recurring/<int:pk>/edit/", views.recurring_template_edit_view, name="recurring-edit"),
+    path("recurring/<int:pk>/move/", views.recurring_template_move_view, name="recurring-move"),
     path("workers/", views.worker_list_view, name="worker-list"),
     path("workers/new/", views.worker_profile_create_view, name="worker-create"),
+    path("workers/supervisors/new/", views.supervisor_create_view, name="supervisor-create"),
     path("workers/<int:pk>/availability/", views.worker_availability_view, name="worker-availability"),
+    path("workers/<int:pk>/delete/", views.worker_profile_delete_view, name="worker-delete"),
     path("workers/<int:pk>/reset-password/", views.worker_password_reset_view, name="worker-password-reset"),
+    path("workers/supervisors/<int:pk>/edit/", views.supervisor_edit_view, name="supervisor-edit"),
+    path("workers/supervisors/<int:pk>/delete/", views.supervisor_delete_view, name="supervisor-delete"),
 ]
+
+

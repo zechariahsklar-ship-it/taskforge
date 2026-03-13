@@ -82,7 +82,7 @@
                 </div>
             </div>
             {% for field in form %}
-                {% if field.name != "raw_due_text" and field.name != "due_date" %}
+                {% if field.name != "raw_due_text" and field.name != "due_date" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
                     <p>
                         <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                         {{ field }}

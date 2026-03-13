@@ -1,33 +1,39 @@
 {% extends "base.html" %}
 
-{% block title %}Manage Hours | TaskForge{% endblock %}
+{% block title %}Edit Worker | TaskForge{% endblock %}
 
 {% block content %}
 <section class="page-heading">
     <div>
-        <h1>Manage hours for {{ profile.display_name }}</h1>
-        <p>Set weekly availability and temporary hour changes that the intake assignment logic uses.</p>
+        <h1>Edit worker: {{ profile.display_name }}</h1>
+        <p>Update student details and weekly hours in one place.</p>
     </div>
     <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
 </section>
 <section class="detail-grid">
     <article class="card">
-        <h2>Weekly availability</h2>
+        <h2>Worker details</h2>
         <form method="post">
             {% csrf_token %}
-            <input type="hidden" name="action" value="weekly">
+            <input type="hidden" name="action" value="worker">
+            <p><label for="id_username">Username</label><input class="form-control" type="text" name="username" id="id_username" value="{{ profile.user.username }}" required></p>
+            <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name" value="{{ profile.user.first_name }}"></p>
+            <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name" value="{{ profile.user.last_name }}"></p>
+            {{ worker_form.as_p }}
+            <h2>Weekly hours</h2>
+            <p>Set how many hours this student usually works on each day.</p>
             {{ weekly_form.as_p }}
-            <button type="submit">Save weekly hours</button>
+            <button type="submit">Save worker</button>
         </form>
     </article>
     <aside class="stack">
         <section class="card">
-            <h2>Add temporary override</h2>
+            <h2>Add temporary hour adjustment</h2>
             <form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="override">
                 {{ override_form.as_p }}
-                <button type="submit">Save override</button>
+                <button type="submit">Save adjustment</button>
             </form>
         </section>
         <section class="card">
@@ -52,3 +58,4 @@
     </aside>
 </section>
 {% endblock %}
+

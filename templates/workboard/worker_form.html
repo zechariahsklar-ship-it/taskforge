@@ -1,19 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Add Worker | TaskForge{% endblock %}
+{% block title %}{{ page_title|default:"Add Student" }} | TaskForge{% endblock %}
 
 {% block content %}
 <section class="card">
-    <h1>Add student worker</h1>
+    <h1>{{ page_title|default:"Add student" }}</h1>
     <form method="post">
         {% csrf_token %}
         <p><label for="id_username">Username</label><input class="form-control" type="text" name="username" id="id_username" required></p>
         <p><label for="id_password">Password</label><input class="form-control" type="text" name="password" id="id_password" value="changeme123"></p>
         <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name"></p>
         <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name"></p>
-        <p><label for="id_email">Email</label><input class="form-control" type="email" name="email" id="id_email"></p>
         {{ form.as_p }}
-        <button type="submit">Create worker</button>
+        <h2>Weekly hours</h2>
+        <p>Set how many hours this student usually works on each day.</p>
+        {{ weekly_form.as_p }}
+        <button type="submit">{{ submit_label|default:"Create student" }}</button>
     </form>
 </section>
 {% endblock %}
+
+

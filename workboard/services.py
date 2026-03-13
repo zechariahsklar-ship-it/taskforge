@@ -42,9 +42,11 @@ class ParsedTaskData:
 
 class TaskAssignmentService:
     @staticmethod
-    def suggest_assignee(*, due_date, estimated_minutes, fallback_supervisor=None):
-        supervisors = User.objects.filter(role=UserRole.SUPERVISOR).order_by("username")
+    def suggest_assignee(*, due_date, estimated_minutes, fallback_supervisor=None, exclude_user_ids=None):
+        supervisors = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True).order_by("username")
         students = StudentWorkerProfile.objects.filter(active_status=True, user__role=UserRole.STUDENT_WORKER).select_related("user")
+        if exclude_user_ids:
+            students = students.exclude(user_id__in=exclude_user_ids)
 
         viable = []
         for profile in students:
@@ -74,12 +76,27 @@ class TaskAssignmentService:
             ]
             return profile.user, summary, rationale
 
-        supervisor = fallback_supervisor if fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR else supervisors.first()
+        supervisor_options = []
+        for supervisor in supervisors:
+            open_tasks = supervisor.assigned_tasks.exclude(status=TaskStatus.DONE).count()
+            last_assigned_at = supervisor.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
+            supervisor_options.append((supervisor, open_tasks, last_assigned_at))
+        supervisor_options.sort(
+            key=lambda item: (
+                item[2] is not None,
+                item[2] or timezone.make_aware(datetime(2000, 1, 1)),
+                item[1],
+                item[0].username,
+            )
+        )
+        supervisor = next((item[0] for item in supervisor_options if not fallback_supervisor or item[0].pk != fallback_supervisor.pk), None)
+        if supervisor is None and fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
+            supervisor = fallback_supervisor
         if supervisor:
-            return supervisor, "No student has enough available capacity before the due date, so this task should be assigned to a supervisor.", [
+            return supervisor, "No student has enough available capacity before the due date, so this task should be assigned to the next available supervisor in rotation.", [
                 f"Recommended assignee: {supervisor.display_label}",
                 "No student currently has enough available hours before the due date window.",
-                "Fallback rule assigned the task to a supervisor.",
+                "Fallback rule assigned the task using supervisor rotation.",
             ]
         return None, "No eligible assignee found.", ["No eligible assignee found."]
 
@@ -99,10 +116,11 @@ class TaskAssignmentService:
         total_minutes = 0
         cursor = start_date
         while cursor <= end_date:
-            hours = overrides.get(cursor, weekly.get(cursor.weekday(), 0.0))
+            baseline_hours = weekly.get(cursor.weekday(), 0.0)
+            adjustment_hours = overrides.get(cursor, 0.0)
+            hours = max(baseline_hours + adjustment_hours, 0.0)
             total_minutes += int(hours * 60)
             cursor += timedelta(days=1)
-
         reserved_minutes = (
             profile.user.assigned_tasks.exclude(status=TaskStatus.DONE)
             .filter(Q(due_date__isnull=True) | Q(due_date__lte=end_date))
@@ -639,4 +657,5 @@ class TaskParsingService:
         if value.weekday() == 6:
             return value + timedelta(days=1)
         return value
+
 

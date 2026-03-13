@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
+from django.db.models import Q
 
 from .models import (
     RecurringTaskTemplate,
@@ -47,18 +48,18 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = StudentWorkerProfile
         fields = [
-            "display_name",
             "email",
             "active_status",
-            "normal_shift_availability",
-            "max_hours_per_day",
             "skill_notes",
         ]
         widgets = {
-            "normal_shift_availability": forms.Textarea(attrs={"rows": 3}),
             "skill_notes": forms.Textarea(attrs={"rows": 3}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["skill_notes"].label = "Notes"
+        self.fields["skill_notes"].help_text = "Optional notes about strengths, training, or preferences."
 
 class StudentAvailabilityForm(StyledFormMixin, forms.ModelForm):
     class Meta:
@@ -73,7 +74,30 @@ class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
         model = StudentAvailabilityOverride
         fields = ["override_date", "hours_available", "note"]
 
+    def __init__(self, *args, profile=None, **kwargs):
+        self.profile = profile
+        super().__init__(*args, **kwargs)
+        self.fields["hours_available"].label = "Hour adjustment"
+        self.fields["hours_available"].help_text = "Use a positive number to add hours or a negative number to subtract hours for that date."
 
+    def clean(self):
+        cleaned_data = super().clean()
+        if not self.profile:
+            return cleaned_data
+        override_date = cleaned_data.get("override_date")
+        hour_adjustment = cleaned_data.get("hours_available")
+        if override_date is None or hour_adjustment is None:
+            return cleaned_data
+        baseline = (
+            StudentAvailability.objects.filter(profile=self.profile, weekday=override_date.weekday())
+            .values_list("hours_available", flat=True)
+            .first()
+            or Decimal("0")
+        )
+        adjusted_total = baseline + hour_adjustment
+        if adjusted_total < 0:
+            self.add_error("hours_available", "This adjustment would reduce the day below 0 hours.")
+        return cleaned_data
 class WeeklyAvailabilityForm(StyledFormMixin, forms.Form):
     monday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
     tuesday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
@@ -122,13 +146,23 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         student_users = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
-        self.fields["assigned_to"].queryset = User.objects.order_by("role", "username")
+        self.fields["assigned_to"].queryset = User.objects.filter(Q(role=UserRole.STUDENT_WORKER) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("role", "username")
         self.fields["additional_assignees"].queryset = student_users
         self.fields["additional_assignees"].required = False
         self.fields["additional_assignees"].widget = forms.SelectMultiple(attrs={"class": "form-control", "size": 6})
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
         self.fields["requested_by"].queryset = User.objects.order_by("username")
+        self.fields["recurring_task"].label = "Repeats on a schedule"
+        self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
+        self.fields["recurrence_pattern"].label = "Repeat cadence"
+        self.fields["recurrence_pattern"].help_text = "Choose how often the task should repeat."
+        self.fields["recurrence_interval"].label = "Repeat every"
+        self.fields["recurrence_interval"].help_text = "Use 1 for every cycle, 2 for every other cycle, and so on."
+        self.fields["recurrence_day_of_week"].label = "Weekday to repeat on"
+        self.fields["recurrence_day_of_week"].help_text = "Only needed for weekly repeating tasks."
+        self.fields["recurrence_day_of_month"].label = "Day of month to repeat on"
+        self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
     def clean(self):
         cleaned_data = super().clean()
@@ -136,8 +170,66 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         additional_assignees = cleaned_data.get("additional_assignees")
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
+
+        recurring_task = cleaned_data.get("recurring_task")
+        recurrence_pattern = cleaned_data.get("recurrence_pattern")
+        recurrence_interval = cleaned_data.get("recurrence_interval")
+        recurrence_day_of_week = cleaned_data.get("recurrence_day_of_week")
+        recurrence_day_of_month = cleaned_data.get("recurrence_day_of_month")
+
+        if not recurring_task:
+            cleaned_data["recurrence_pattern"] = ""
+            cleaned_data["recurrence_interval"] = None
+            cleaned_data["recurrence_day_of_week"] = None
+            cleaned_data["recurrence_day_of_month"] = None
+            return cleaned_data
+
+        if not recurrence_pattern:
+            self.add_error("recurrence_pattern", "Choose how often this task should repeat.")
+        if not recurrence_interval:
+            cleaned_data["recurrence_interval"] = 1
+
+        if recurrence_pattern == "weekly":
+            if recurrence_day_of_week is None:
+                self.add_error("recurrence_day_of_week", "Choose the weekday for this weekly task.")
+            cleaned_data["recurrence_day_of_month"] = None
+        elif recurrence_pattern == "monthly":
+            if not recurrence_day_of_month:
+                self.add_error("recurrence_day_of_month", "Choose the day of the month for this monthly task.")
+            cleaned_data["recurrence_day_of_week"] = None
+        else:
+            cleaned_data["recurrence_day_of_week"] = None
+            cleaned_data["recurrence_day_of_month"] = None
         return cleaned_data
 
+
+
+class TaskManualForm(TaskForm):
+    class Meta(TaskForm.Meta):
+        fields = [
+            "title",
+            "description",
+            "priority",
+            "status",
+            "due_date",
+            "respond_to_text",
+            "estimated_minutes",
+            "assigned_to",
+            "additional_assignees",
+            "requested_by",
+            "recurring_task",
+            "recurrence_pattern",
+            "recurrence_interval",
+            "recurrence_day_of_week",
+            "recurrence_day_of_month",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["description"].label = "Task details"
+        self.fields["description"].help_text = "Describe the work that needs to be done."
+        self.fields["due_date"].label = "Due date"
+        self.fields["due_date"].help_text = "Leave blank if this can be scheduled from priority."
 
 class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
     class Meta:
@@ -147,6 +239,17 @@ class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
+
+
+class SupervisorForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ["username", "first_name", "last_name", "email", "assignable_to_tasks"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["assignable_to_tasks"].label = "Allow tasks to be assigned to this supervisor"
+        self.fields["assignable_to_tasks"].help_text = "Turn this off if this supervisor should stay out of the assignment rotation."
 
 
 class TaskNoteForm(StyledFormMixin, forms.ModelForm):
@@ -209,5 +312,52 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["description"].label = "Task details"
+        self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
+        self.fields["estimated_minutes"].label = "Time estimate"
+        self.fields["assign_to"].label = "Default assignee"
+        self.fields["assign_to"].help_text = "Choose the student who should get the first run. Later runs can rotate based on workload."
         self.fields["assign_to"].queryset = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
         self.fields["requested_by"].queryset = User.objects.order_by("username")
+        self.fields["recurrence_pattern"].label = "Repeat cadence"
+        self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."
+        self.fields["recurrence_interval"].label = "Repeat every"
+        self.fields["recurrence_interval"].help_text = "Use 1 for every cycle, 2 for every other cycle, and so on."
+        self.fields["day_of_week"].label = "Weekday to repeat on"
+        self.fields["day_of_week"].help_text = "Only needed for weekly recurring tasks."
+        self.fields["day_of_month"].label = "Day of month to repeat on"
+        self.fields["day_of_month"].help_text = "Only needed for monthly recurring tasks."
+        self.fields["start_date"].label = "Start date"
+        self.fields["start_date"].help_text = "The first date this recurring task should begin from."
+        self.fields["next_run_date"].label = "Next run date"
+        self.fields["next_run_date"].help_text = "The next date the app will create this task."
+        self.fields["active"].label = "Recurring task is active"
+        self.fields["active"].help_text = "Turn this off to pause future task creation."
+
+    def clean(self):
+        cleaned_data = super().clean()
+        recurrence_pattern = cleaned_data.get("recurrence_pattern")
+        day_of_week = cleaned_data.get("day_of_week")
+        day_of_month = cleaned_data.get("day_of_month")
+        recurrence_interval = cleaned_data.get("recurrence_interval")
+
+        if not recurrence_interval:
+            cleaned_data["recurrence_interval"] = 1
+
+        if recurrence_pattern == "weekly":
+            if day_of_week is None:
+                self.add_error("day_of_week", "Choose the weekday for this weekly recurring task.")
+            cleaned_data["day_of_month"] = None
+        elif recurrence_pattern == "monthly":
+            if not day_of_month:
+                self.add_error("day_of_month", "Choose the day of the month for this monthly recurring task.")
+            cleaned_data["day_of_week"] = None
+        else:
+            cleaned_data["day_of_week"] = None
+            cleaned_data["day_of_month"] = None
+
+        return cleaned_data
+
+
+
+

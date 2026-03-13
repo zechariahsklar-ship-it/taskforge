@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}{{ template.title }} | Recurring Tasks | TaskForge{% endblock %}
+
+{% block content %}
+<section class="task-detail-shell">
+    <article class="card task-detail-card">
+        <div class="task-detail-header">
+            <div>
+                <h1>{{ template.title }}</h1>
+                <div class="board-task-meta-row">
+                    <span class="priority-pill priority-{{ template.priority }}">{{ template.get_priority_display }}</span>
+                    <span class="meta">{{ template.get_recurrence_pattern_display }} every {{ template.recurrence_interval }}</span>
+                    <span class="meta">Next run: {{ template.next_run_date|date:"M j, Y" }}</span>
+                    <span class="meta">{% if template.active %}Active{% else %}Paused{% endif %}</span>
+                </div>
+            </div>
+            <a href="{% url 'recurring-edit' template.pk %}" class="button-link">Edit task</a>
+        </div>
+
+        <section class="task-detail-section">
+            <h2>Recurring details</h2>
+            <p>{{ template.description|default:"No recurring task description yet."|linebreaksbr }}</p>
+            <dl class="detail-list">
+                <dt>Assigned To</dt><dd>{{ template.assign_to.username|default:"Unassigned" }}</dd>
+                <dt>Requested By</dt><dd>{{ template.requested_by.username|default:"Unknown" }}</dd>
+                <dt>Estimate</dt><dd>{{ template.estimated_minutes|default:"-" }} minutes</dd>
+                <dt>Start Date</dt><dd>{{ template.start_date|date:"M j, Y" }}</dd>
+                <dt>Generated Tasks</dt><dd>{{ template.generated_tasks.count }}</dd>
+                {% if template.day_of_week is not None %}
+                    <dt>Day Of Week</dt><dd>{{ template.get_day_of_week_display }}</dd>
+                {% endif %}
+                {% if template.day_of_month %}
+                    <dt>Day Of Month</dt><dd>{{ template.day_of_month }}</dd>
+                {% endif %}
+            </dl>
+        </section>
+
+        <section class="task-detail-section">
+            <h2>Recent generated tasks</h2>
+            <div class="stack">
+                {% for task in recent_tasks %}
+                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link recurring-generated-card">
+                        <article>
+                            <h3 class="board-task-title">{{ task.title }}</h3>
+                            <div class="board-task-meta-row">
+                                <span class="meta">Status: {{ task.get_status_display }}</span>
+                                <span class="meta">Due: {{ task.due_date|date:"M j, Y" }}</span>
+                            </div>
+                        </article>
+                    </a>
+                {% empty %}
+                    <p class="empty-state">No generated tasks yet.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </article>
+</section>
+{% endblock %}
+

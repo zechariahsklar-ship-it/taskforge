@@ -45,6 +45,7 @@ class Weekday(models.IntegerChoices):
 class User(AbstractUser):
     role = models.CharField(max_length=32, choices=UserRole.choices, default=UserRole.STUDENT_WORKER)
     must_change_password = models.BooleanField(default=False)
+    assignable_to_tasks = models.BooleanField(default=True)
 
     @property
     def is_supervisor(self):
@@ -67,6 +68,7 @@ class StudentWorkerProfile(models.Model):
     normal_shift_availability = models.TextField(blank=True)
     max_hours_per_day = models.DecimalField(max_digits=4, decimal_places=2, default=4)
     skill_notes = models.TextField(blank=True)
+
 
     def __str__(self):
         return self.display_name
@@ -134,8 +136,18 @@ class RecurringTaskTemplate(models.Model):
     start_date = models.DateField(default=timezone.localdate)
     next_run_date = models.DateField(default=timezone.localdate)
     active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "next_run_date", "title", "pk"]
+
+    def save(self, *args, **kwargs):
+        if self.display_order is None:
+            max_order = RecurringTaskTemplate.objects.exclude(pk=self.pk).aggregate(max_order=models.Max("display_order")).get("max_order") or 0
+            self.display_order = max_order + 1
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title
@@ -311,3 +323,4 @@ class TaskIntakeDraftAttachment(models.Model):
 
     def __str__(self):
         return self.original_name
+

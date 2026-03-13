@@ -1,15 +1,85 @@
 {% extends "base.html" %}
 
-{% block title %}Recurring Template | TaskForge{% endblock %}
+{% block title %}{{ page_title|default:"Recurring Template" }} | TaskForge{% endblock %}
 
 {% block content %}
 <section class="card">
-    <h1>Create recurring task template</h1>
-    <p>Daily, weekly, and monthly recurrence are supported through the app's built-in generation command.</p>
+    <h1>{{ page_title|default:"Recurring task" }}</h1>
+    <p>Update the recurring task details and schedule.</p>
     <form method="post">
         {% csrf_token %}
-        {{ form.as_p }}
-        <button type="submit">Save template</button>
+        {% if form.non_field_errors %}
+            <div class="warning-note">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
+        {% for hidden in form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+
+        {% for field in form %}
+            {% if field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
+                <p>
+                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<span class="meta">{{ field.help_text }}</span>{% endif %}
+                    {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                </p>
+            {% endif %}
+        {% endfor %}
+
+        <section class="review-field recurring-task-panel">
+            <div>
+                <label for="{{ form.recurrence_pattern.id_for_label }}">{{ form.recurrence_pattern.label }}</label>
+                {{ form.recurrence_pattern }}
+                {% if form.recurrence_pattern.help_text %}<p class="meta">{{ form.recurrence_pattern.help_text }}</p>{% endif %}
+                {% if form.recurrence_pattern.errors %}<div class="meta">{{ form.recurrence_pattern.errors }}</div>{% endif %}
+            </div>
+
+            <div class="stack" data-recurring-options>
+                <p>
+                    <label for="{{ form.recurrence_interval.id_for_label }}">{{ form.recurrence_interval.label }}</label>
+                    {{ form.recurrence_interval }}
+                    {% if form.recurrence_interval.help_text %}<span class="meta">{{ form.recurrence_interval.help_text }}</span>{% endif %}
+                    {% if form.recurrence_interval.errors %}<div class="meta">{{ form.recurrence_interval.errors }}</div>{% endif %}
+                </p>
+                <p data-recurring-weekly>
+                    <label for="{{ form.day_of_week.id_for_label }}">{{ form.day_of_week.label }}</label>
+                    {{ form.day_of_week }}
+                    {% if form.day_of_week.help_text %}<span class="meta">{{ form.day_of_week.help_text }}</span>{% endif %}
+                    {% if form.day_of_week.errors %}<div class="meta">{{ form.day_of_week.errors }}</div>{% endif %}
+                </p>
+                <p data-recurring-monthly>
+                    <label for="{{ form.day_of_month.id_for_label }}">{{ form.day_of_month.label }}</label>
+                    {{ form.day_of_month }}
+                    {% if form.day_of_month.help_text %}<span class="meta">{{ form.day_of_month.help_text }}</span>{% endif %}
+                    {% if form.day_of_month.errors %}<div class="meta">{{ form.day_of_month.errors }}</div>{% endif %}
+                </p>
+            </div>
+        </section>
+        <button type="submit">{{ submit_label|default:"Save template" }}</button>
     </form>
 </section>
+<script>
+    (function () {
+        const recurrencePattern = document.getElementById('{{ form.recurrence_pattern.id_for_label }}');
+        const recurringOptions = document.querySelector('[data-recurring-options]');
+        const weeklyField = document.querySelector('[data-recurring-weekly]');
+        const monthlyField = document.querySelector('[data-recurring-monthly]');
+        if (!recurrencePattern || !recurringOptions || !weeklyField || !monthlyField) {
+            return;
+        }
+
+        function updateRecurringVisibility() {
+            const pattern = recurrencePattern.value;
+            recurringOptions.hidden = false;
+            weeklyField.hidden = pattern !== 'weekly';
+            monthlyField.hidden = pattern !== 'monthly';
+        }
+
+        recurrencePattern.addEventListener('change', updateRecurringVisibility);
+        updateRecurringVisibility();
+    }());
+</script>
 {% endblock %}

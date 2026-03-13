@@ -703,3 +703,33 @@ tr:hover td {
     background: #7a1717;
     color: #ffffff !important;
 }
+
+.recurring-groups {
+    display: block;
+    width: 100%;
+}
+
+.recurring-bucket {
+    width: 100%;
+    max-width: none;
+}
+
+.recurring-card-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.recurring-task-card {
+    min-height: 0;
+    margin-bottom: 0;
+}
+
+.recurring-task-card article {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.recurring-generated-card {
+    margin-bottom: 0;
+}
+

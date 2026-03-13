@@ -7,14 +7,17 @@ from django.contrib.auth.decorators import login_required
 from django.db.models import Count, F, Max, Prefetch, Q, Sum
 from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 
 from .forms import (
     AppPasswordChangeForm,
     RecurringTaskTemplateForm,
     StudentAvailabilityOverrideForm,
     StudentWorkerProfileForm,
+    SupervisorForm,
     SupervisorStudentPasswordResetForm,
     TaskForm,
+    TaskManualForm,
     TaskChecklistItemForm,
     TaskIntakeForm,
     TaskNoteForm,
@@ -23,6 +26,7 @@ from .forms import (
     WeeklyAvailabilityForm,
 )
 from .models import (
+    RecurringTaskTemplate,
     StudentAvailability,
     StudentAvailabilityOverride,
     StudentWorkerProfile,
@@ -149,6 +153,20 @@ def _resequence_status_tasks(tasks: list[Task], status: str) -> None:
 
 def _close_status_gap(status: str, *, exclude_pk: int) -> None:
     _resequence_status_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk), status)
+
+
+def _ordered_recurring_templates(*, exclude_pk: int | None = None) -> list[RecurringTaskTemplate]:
+    queryset = RecurringTaskTemplate.objects.all()
+    if exclude_pk:
+        queryset = queryset.exclude(pk=exclude_pk)
+    return list(queryset.order_by(F("display_order").asc(nulls_last=True), "next_run_date", "title", "pk"))
+
+
+def _resequence_recurring_templates(templates: list[RecurringTaskTemplate]) -> None:
+    for index, template in enumerate(templates, start=1):
+        if template.display_order != index:
+            template.display_order = index
+            template.save(update_fields=["display_order", "updated_at"])
 
 
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
@@ -324,7 +342,7 @@ def task_intake_view(request):
 
             parsed = TaskParsingService.parse_request(
                 form.cleaned_data["raw_message"],
-                attachments=list(draft.attachments.all()),
+                attachments=uploaded_files,
                 fallback_supervisor=request.user,
             )
             draft.parsed_payload = parsed.to_dict()
@@ -340,10 +358,19 @@ def task_intake_review_view(request, pk):
     draft = get_object_or_404(TaskIntakeDraft.objects.prefetch_related("attachments"), pk=pk, created_by=request.user)
     initial = draft.parsed_payload or {}
     checklist_values = list(initial.get("checklist_items", []))
+    excluded_intake_fields = [
+        "recurring_task",
+        "recurrence_pattern",
+        "recurrence_interval",
+        "recurrence_day_of_week",
+        "recurrence_day_of_month",
+    ]
 
     if request.method == "POST":
         checklist_values = request.POST.getlist("checklist_items")
         form = TaskForm(request.POST, initial=initial)
+        for field_name in excluded_intake_fields:
+            form.fields.pop(field_name, None)
         if form.is_valid():
             original_estimated_minutes = initial.get("estimated_minutes")
             task = form.save(commit=False)
@@ -381,6 +408,8 @@ def task_intake_review_view(request, pk):
             return redirect("task-detail", pk=task.pk)
     else:
         form = TaskForm(initial=initial)
+        for field_name in excluded_intake_fields:
+            form.fields.pop(field_name, None)
 
     due_date_review = _build_due_date_review_context(initial, form["due_date"].value())
 
@@ -405,7 +434,7 @@ def task_intake_review_view(request, pk):
 @supervisor_required
 def task_create_view(request):
     if request.method == "POST":
-        form = TaskForm(request.POST)
+        form = TaskManualForm(request.POST)
         if form.is_valid():
             task = form.save(commit=False)
             task.created_by = request.user
@@ -425,7 +454,7 @@ def task_create_view(request):
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
-        form = TaskForm()
+        form = TaskManualForm()
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Create task"})
 
 
@@ -606,7 +635,7 @@ def task_edit_view(request, pk):
     if request.method == "POST":
         previous_status = task.status
         original_estimated_minutes = task.estimated_minutes
-        form = TaskForm(request.POST, instance=task)
+        form = TaskManualForm(request.POST, instance=task)
         if form.is_valid():
             updated_task = form.save(commit=False)
             updated_task = _ensure_task_due_date(updated_task)
@@ -629,7 +658,7 @@ def task_edit_view(request, pk):
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:
-        form = TaskForm(instance=task)
+        form = TaskManualForm(instance=task)
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Edit task"})
 
 
@@ -648,30 +677,93 @@ def task_delete_view(request, pk):
 
 
 @supervisor_required
-def recurring_template_create_view(request):
-    if request.method == "POST":
-        form = RecurringTaskTemplateForm(request.POST)
-        if form.is_valid():
-            form.save()
-            messages.success(request, "Recurring template created.")
-            return redirect("board")
-    else:
-        form = RecurringTaskTemplateForm()
-    return render(request, "workboard/recurring_template_form.html", {"form": form})
+def recurring_template_list_view(request):
+    templates = (
+        RecurringTaskTemplate.objects.select_related("assign_to", "requested_by")
+        .annotate(generated_task_count=Count("generated_tasks"))
+        .order_by(F("display_order").asc(nulls_last=True), "next_run_date", "title", "pk")
+    )
+    return render(request, "workboard/recurring_template_list.html", {"templates": templates})
 
 
 @supervisor_required
+def recurring_template_detail_view(request, pk):
+    template = get_object_or_404(
+        RecurringTaskTemplate.objects.select_related("assign_to", "requested_by").prefetch_related("generated_tasks"),
+        pk=pk,
+    )
+    recent_tasks = list(template.generated_tasks.order_by("-created_at")[:10])
+    return render(
+        request,
+        "workboard/recurring_template_detail.html",
+        {"template": template, "recent_tasks": recent_tasks},
+    )
+
+
+@supervisor_required
+def recurring_template_move_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    template = get_object_or_404(RecurringTaskTemplate, pk=pk)
+    before_template_id = request.POST.get("before_template_id", "").strip()
+    ordered_templates = _ordered_recurring_templates(exclude_pk=template.pk)
+    if before_template_id:
+        try:
+            before_template_id_int = int(before_template_id)
+        except ValueError:
+            return HttpResponseBadRequest("Invalid target position.")
+        before_template = next((item for item in ordered_templates if item.pk == before_template_id_int), None)
+        if before_template is None:
+            return HttpResponseBadRequest("Target recurring task not found.")
+        insert_index = ordered_templates.index(before_template)
+    else:
+        insert_index = len(ordered_templates)
+
+    ordered_templates.insert(insert_index, template)
+    _resequence_recurring_templates(ordered_templates)
+    return JsonResponse({"ok": True})
+
+
+
+@supervisor_required
+def recurring_template_edit_view(request, pk):
+    template = get_object_or_404(RecurringTaskTemplate, pk=pk)
+    if request.method == "POST":
+        form = RecurringTaskTemplateForm(request.POST, instance=template)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Recurring task updated.")
+            return redirect("recurring-detail", pk=template.pk)
+    else:
+        form = RecurringTaskTemplateForm(instance=template)
+    return render(
+        request,
+        "workboard/recurring_template_form.html",
+        {"form": form, "page_title": "Edit recurring task", "submit_label": "Save changes"},
+    )
+
+@supervisor_required
 def worker_list_view(request):
-    profiles = StudentWorkerProfile.objects.select_related("user").order_by("display_name")
-    workload = (
-        User.objects.filter(role=UserRole.STUDENT_WORKER)
+    student_profiles = list(StudentWorkerProfile.objects.select_related("user").order_by("display_name"))
+    student_workload = {
+        worker.pk: worker
+        for worker in User.objects.filter(role=UserRole.STUDENT_WORKER)
+        .annotate(
+            active_tasks=Count("assigned_tasks", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
+            estimated_minutes=Sum("assigned_tasks__estimated_minutes", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
+        )
+    }
+    students = [{"profile": profile, "workload": student_workload.get(profile.user_id)} for profile in student_profiles]
+    supervisors = (
+        User.objects.filter(role=UserRole.SUPERVISOR)
         .annotate(
             active_tasks=Count("assigned_tasks", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
             estimated_minutes=Sum("assigned_tasks__estimated_minutes", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
         )
         .order_by("username")
     )
-    return render(request, "workboard/worker_list.html", {"profiles": profiles, "workload": workload})
+    return render(request, "workboard/worker_list.html", {"students": students, "supervisors": supervisors})
 
 
 @supervisor_required
@@ -687,14 +779,26 @@ def worker_availability_view(request, pk):
         "saturday_hours": weekly_map.get(Weekday.SATURDAY).hours_available if weekly_map.get(Weekday.SATURDAY) else 0,
         "sunday_hours": weekly_map.get(Weekday.SUNDAY).hours_available if weekly_map.get(Weekday.SUNDAY) else 0,
     }
+    worker_form = StudentWorkerProfileForm(instance=profile)
     weekly_form = WeeklyAvailabilityForm(initial=initial)
-    override_form = StudentAvailabilityOverrideForm()
+    override_form = StudentAvailabilityOverrideForm(profile=profile)
 
     if request.method == "POST":
         action = request.POST.get("action")
-        if action == "weekly":
+        if action == "worker":
+            worker_form = StudentWorkerProfileForm(request.POST, instance=profile)
             weekly_form = WeeklyAvailabilityForm(request.POST)
-            if weekly_form.is_valid():
+            if worker_form.is_valid() and weekly_form.is_valid():
+                profile = worker_form.save(commit=False)
+                user = profile.user
+                user.username = request.POST.get("username", "").strip() or user.username
+                user.first_name = request.POST.get("first_name", "").strip()
+                user.last_name = request.POST.get("last_name", "").strip()
+                user.email = worker_form.cleaned_data["email"]
+                user.save()
+                profile.email = worker_form.cleaned_data["email"]
+                profile.display_name = user.get_full_name().strip() or user.username
+                profile.save()
                 field_map = {
                     Weekday.MONDAY: "monday_hours",
                     Weekday.TUESDAY: "tuesday_hours",
@@ -710,10 +814,12 @@ def worker_availability_view(request, pk):
                         weekday=weekday,
                         defaults={"hours_available": weekly_form.cleaned_data[field_name]},
                     )
-                messages.success(request, "Weekly hours updated.")
+                messages.success(request, "Worker updated.")
                 return redirect("worker-availability", pk=profile.pk)
         elif action == "override":
-            override_form = StudentAvailabilityOverrideForm(request.POST)
+            worker_form = StudentWorkerProfileForm(instance=profile)
+            weekly_form = WeeklyAvailabilityForm(initial=initial)
+            override_form = StudentAvailabilityOverrideForm(request.POST, profile=profile)
             if override_form.is_valid():
                 override = override_form.save(commit=False)
                 override.profile = profile
@@ -732,6 +838,7 @@ def worker_availability_view(request, pk):
         "workboard/worker_availability.html",
         {
             "profile": profile,
+            "worker_form": worker_form,
             "weekly_form": weekly_form,
             "override_form": override_form,
             "overrides": profile.availability_overrides.all(),
@@ -740,8 +847,9 @@ def worker_availability_view(request, pk):
 
 
 @supervisor_required
-def worker_profile_create_view(request):
-    form = StudentWorkerProfileForm(request.POST or None)
+def supervisor_create_view(request):
+    form = SupervisorForm(request.POST or None)
+    context = {"form": form, "page_title": "Add supervisor", "submit_label": "Create supervisor"}
     if request.method == "POST":
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "").strip() or "changeme123"
@@ -750,44 +858,153 @@ def worker_profile_create_view(request):
         email = request.POST.get("email", "").strip()
         if not username:
             messages.error(request, "Username is required.")
-            return render(request, "workboard/worker_form.html", {"form": form})
+            return render(request, "workboard/supervisor_form.html", context)
         user = User.objects.create_user(
             username=username,
             password=password,
             first_name=first_name,
             last_name=last_name,
             email=email,
-            role=UserRole.STUDENT_WORKER,
+            role=UserRole.SUPERVISOR,
             must_change_password=True,
+            assignable_to_tasks=True,
         )
-        profile = StudentWorkerProfile(user=user, email=email, display_name=username)
-        form = StudentWorkerProfileForm(request.POST, instance=profile)
+        form = SupervisorForm(request.POST, instance=user)
+        context["form"] = form
         if form.is_valid():
-            profile = form.save()
-            for weekday in Weekday.values:
-                StudentAvailability.objects.get_or_create(profile=profile, weekday=weekday, defaults={"hours_available": 0})
-            messages.success(request, "Student worker created.")
+            form.save()
+            messages.success(request, "Supervisor created.")
             return redirect("worker-list")
         user.delete()
-    return render(request, "workboard/worker_form.html", {"form": form})
+    return render(request, "workboard/supervisor_form.html", context)
+
+
+@supervisor_required
+def worker_profile_create_view(request):
+    form = StudentWorkerProfileForm(request.POST or None)
+    weekly_form = WeeklyAvailabilityForm(request.POST or None, initial={
+        "monday_hours": 0,
+        "tuesday_hours": 0,
+        "wednesday_hours": 0,
+        "thursday_hours": 0,
+        "friday_hours": 0,
+        "saturday_hours": 0,
+        "sunday_hours": 0,
+    })
+    context = {"form": form, "weekly_form": weekly_form, "page_title": "Add student", "submit_label": "Create student"}
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        password = request.POST.get("password", "").strip() or "changeme123"
+        first_name = request.POST.get("first_name", "").strip()
+        last_name = request.POST.get("last_name", "").strip()
+        email = request.POST.get("email", "").strip()
+        if not username:
+            messages.error(request, "Username is required.")
+            return render(request, "workboard/worker_form.html", context)
+        if form.is_valid() and weekly_form.is_valid():
+            user = User.objects.create_user(
+                username=username,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                role=UserRole.STUDENT_WORKER,
+                must_change_password=True,
+            )
+            profile = form.save(commit=False)
+            profile.user = user
+            profile.email = profile.email or email
+            profile.display_name = user.get_full_name().strip() or user.username
+            profile.save()
+            field_map = {
+                Weekday.MONDAY: "monday_hours",
+                Weekday.TUESDAY: "tuesday_hours",
+                Weekday.WEDNESDAY: "wednesday_hours",
+                Weekday.THURSDAY: "thursday_hours",
+                Weekday.FRIDAY: "friday_hours",
+                Weekday.SATURDAY: "saturday_hours",
+                Weekday.SUNDAY: "sunday_hours",
+            }
+            for weekday, field_name in field_map.items():
+                StudentAvailability.objects.update_or_create(
+                    profile=profile,
+                    weekday=weekday,
+                    defaults={"hours_available": weekly_form.cleaned_data[field_name]},
+                )
+            messages.success(request, "Student worker created.")
+            return redirect("worker-list")
+    return render(request, "workboard/worker_form.html", context)
+
+
+@supervisor_required
+def worker_profile_delete_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    student = get_object_or_404(User.objects.select_related("worker_profile"), pk=pk, role=UserRole.STUDENT_WORKER)
+    Task.objects.filter(assigned_to=student).update(assigned_to=request.user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=student).update(assign_to=request.user, updated_at=timezone.now())
+    student_name = student.display_label
+    student.delete()
+    messages.success(request, f"Removed {student_name}. Any assigned tasks were reassigned to you.")
+    return redirect("worker-list")
+
+
+@supervisor_required
+def supervisor_delete_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    supervisor = get_object_or_404(User, pk=pk, role=UserRole.SUPERVISOR)
+    if supervisor.pk == request.user.pk:
+        messages.error(request, "You cannot remove your own supervisor account while logged in.")
+        return redirect("worker-list")
+
+    Task.objects.filter(assigned_to=supervisor).update(assigned_to=request.user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=supervisor).update(assign_to=request.user, updated_at=timezone.now())
+    supervisor_name = supervisor.display_label
+    supervisor.delete()
+    messages.success(request, f"Removed {supervisor_name}. Any assigned tasks were reassigned to you.")
+    return redirect("worker-list")
+
+
+@supervisor_required
+def supervisor_edit_view(request, pk):
+    supervisor = get_object_or_404(User, pk=pk, role=UserRole.SUPERVISOR)
+    form = SupervisorForm(request.POST or None, instance=supervisor)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Supervisor updated.")
+        return redirect("worker-list")
+    return render(
+        request,
+        "workboard/supervisor_form.html",
+        {"form": form, "page_title": f"Edit supervisor: {supervisor.display_label}", "supervisor": supervisor},
+    )
 
 
 @supervisor_required
 def worker_password_reset_view(request, pk):
-    student = get_object_or_404(User, pk=pk, role=UserRole.STUDENT_WORKER)
+    person = get_object_or_404(User, pk=pk, role__in=[UserRole.STUDENT_WORKER, UserRole.SUPERVISOR])
     if request.method == "POST":
-        form = SupervisorStudentPasswordResetForm(student, request.POST)
+        form = SupervisorStudentPasswordResetForm(person, request.POST)
         if form.is_valid():
             form.save()
-            student.must_change_password = True
-            student.save(update_fields=["must_change_password"])
-            messages.success(request, f"Password reset for {student.display_label}. They must create a new password at next login.")
+            person.must_change_password = True
+            person.save(update_fields=["must_change_password"])
+            messages.success(request, f"Password reset for {person.display_label}. They must create a new password at next login.")
             return redirect("worker-list")
     else:
-        form = SupervisorStudentPasswordResetForm(student)
+        form = SupervisorStudentPasswordResetForm(person)
     return render(
         request,
         "workboard/worker_password_reset_form.html",
-        {"form": form, "student": student},
+        {"form": form, "person": person},
     )
+
+
+
+
+
+
 

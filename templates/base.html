@@ -23,7 +23,7 @@
                     <a href="{% url 'task-intake' %}">Intake</a>
                     <a href="{% url 'task-create' %}">New Task</a>
                     <a href="{% url 'worker-list' %}">Workers</a>
-                    <a href="{% url 'recurring-create' %}">Recurring</a>
+                    <a href="{% url 'recurring-list' %}">Recurring</a>
                 {% endif %}
                 <a href="{% url 'password-change' %}">Change Password</a>
                 <form action="{% url 'logout' %}" method="post">
@@ -45,3 +45,4 @@
     </main>
 </body>
 </html>
+

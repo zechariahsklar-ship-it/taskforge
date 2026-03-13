@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Recurring Tasks | TaskForge{% endblock %}
+
+{% block content %}
+<div id="recurring-dnd-config" data-move-url-template="{% url 'recurring-move' 0 %}"></div>
+<section class="page-heading">
+    <h1>Recurring tasks</h1>
+</section>
+<section class="my-tasks-groups recurring-groups" data-recurring-list>
+    <section class="task-bucket recurring-bucket">
+        <div class="task-bucket-list recurring-card-list">
+            {% for template in templates %}
+                <a href="{% url 'recurring-detail' template.pk %}" class="task-card task-card-link board-task-card recurring-task-card" draggable="true" data-template-id="{{ template.pk }}">
+                    <article>
+                        <h3 class="board-task-title">{{ template.title }}</h3>
+                        <div class="board-task-meta-row">
+                            <span class="priority-pill priority-{{ template.priority }}">{{ template.get_priority_display }}</span>
+                            <span class="meta">{{ template.get_recurrence_pattern_display }} every {{ template.recurrence_interval }}</span>
+                            <span class="meta">Next run: {{ template.next_run_date|date:"M j, Y" }}</span>
+                        </div>
+                        <p class="board-task-description">{{ template.description|default:"No recurring task description yet."|truncatechars:140 }}</p>
+                        <p class="meta board-task-estimate">Time: {% if template.estimated_minutes %}{{ template.estimated_minutes }} min{% else %}TBD{% endif %}</p>
+                    </article>
+                </a>
+            {% empty %}
+                <p class="empty-state">No recurring tasks yet.</p>
+            {% endfor %}
+        </div>
+    </section>
+</section>
+
+<script>
+    (function () {
+        const config = document.getElementById('recurring-dnd-config');
+        const list = document.querySelector('[data-recurring-list]');
+        if (!config || !list) {
+            return;
+        }
+
+        const bucket = list.querySelector('.recurring-bucket');
+        const cardList = list.querySelector('.recurring-card-list');
+        const csrfToken = getCookie('csrftoken');
+        const moveUrlTemplate = config.dataset.moveUrlTemplate;
+        let draggedCard = null;
+        let suppressClick = false;
+
+        function getCookie(name) {
+            const cookies = document.cookie ? document.cookie.split('; ') : [];
+            for (const cookie of cookies) {
+                const [key, ...value] = cookie.split('=');
+                if (key === name) {
+                    return decodeURIComponent(value.join('='));
+                }
+            }
+            return '';
+        }
+
+        function clearDropIndicators() {
+            bucket.classList.remove('is-drop-target', 'has-drop-at-end');
+            cardList.querySelectorAll('.recurring-task-card').forEach(function (card) {
+                card.classList.remove('is-drop-before');
+            });
+        }
+
+        function getCardAfterPointer(clientY) {
+            const cards = Array.from(cardList.querySelectorAll('.recurring-task-card:not(.is-dragging)'));
+            for (const card of cards) {
+                const rect = card.getBoundingClientRect();
+                if (clientY < rect.top + rect.height / 2) {
+                    return card;
+                }
+            }
+            return null;
+        }
+
+        function positionDraggedCard(clientY) {
+            if (!draggedCard) {
+                return;
+            }
+            clearDropIndicators();
+            bucket.classList.add('is-drop-target');
+            const empty = cardList.querySelector('.empty-state');
+            if (empty) {
+                empty.remove();
+            }
+            const beforeCard = getCardAfterPointer(clientY);
+            if (beforeCard) {
+                beforeCard.classList.add('is-drop-before');
+                cardList.insertBefore(draggedCard, beforeCard);
+            } else {
+                bucket.classList.add('has-drop-at-end');
+                cardList.appendChild(draggedCard);
+            }
+        }
+
+        function getNextCard(card) {
+            let next = card.nextElementSibling;
+            while (next && !next.classList.contains('recurring-task-card')) {
+                next = next.nextElementSibling;
+            }
+            return next;
+        }
+
+        async function moveTemplate(card) {
+            const templateId = card.dataset.templateId;
+            const beforeCard = getNextCard(card);
+            const url = moveUrlTemplate.replace('/0/move/', `/${templateId}/move/`);
+            const formData = new URLSearchParams();
+            if (beforeCard) {
+                formData.set('before_template_id', beforeCard.dataset.templateId);
+            }
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: formData.toString(),
+            });
+            if (!response.ok) {
+                throw new Error('Move failed');
+            }
+        }
+
+        list.addEventListener('dragstart', function (event) {
+            const card = event.target.closest('.recurring-task-card');
+            if (!card) {
+                return;
+            }
+            draggedCard = card;
+            suppressClick = false;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', card.dataset.templateId);
+            card.classList.add('is-dragging');
+        });
+
+        list.addEventListener('dragend', function () {
+            if (draggedCard) {
+                draggedCard.classList.remove('is-dragging');
+                draggedCard = null;
+                window.setTimeout(function () {
+                    suppressClick = false;
+                }, 0);
+            }
+            clearDropIndicators();
+        });
+
+        list.addEventListener('dragover', function (event) {
+            if (!draggedCard) {
+                return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            positionDraggedCard(event.clientY);
+        });
+
+        list.addEventListener('drop', async function (event) {
+            if (!draggedCard) {
+                return;
+            }
+            event.preventDefault();
+            suppressClick = true;
+            try {
+                await moveTemplate(draggedCard);
+                clearDropIndicators();
+            } catch (error) {
+                window.location.reload();
+            }
+        });
+
+        list.addEventListener('click', function (event) {
+            const card = event.target.closest('.recurring-task-card');
+            if (card && suppressClick) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        }, true);
+    }());
+</script>
+{% endblock %}
+
