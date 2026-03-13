@@ -75,7 +75,7 @@ class Command(BaseCommand):
                 "title": "Update office signage",
                 "description": "Revise outdated signage and replace printed copies.",
                 "priority": Priority.HIGH,
-                "status": TaskStatus.ASSIGNED,
+                "status": TaskStatus.NEW,
                 "assigned_to": alex,
             },
             {
@@ -104,7 +104,7 @@ class Command(BaseCommand):
                     "raw_message": task_data["description"],
                 },
             )
-            TaskChecklistItem.objects.get_or_create(task=task, title="Review request details", defaults={"sort_order": 1})
-            TaskChecklistItem.objects.get_or_create(task=task, title="Complete task work", defaults={"sort_order": 2})
+            TaskChecklistItem.objects.get_or_create(task=task, title="Review request details", defaults={"position": 1})
+            TaskChecklistItem.objects.get_or_create(task=task, title="Complete task work", defaults={"position": 2})
 
         self.stdout.write(self.style.SUCCESS("Sample data seeded."))

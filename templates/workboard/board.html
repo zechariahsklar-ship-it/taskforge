@@ -4,31 +4,247 @@
 {% block page_shell_class %}page-shell-board{% endblock %}
 
 {% block content %}
+<div id="board-dnd-config" data-move-url-template="{% url 'board-task-move' 0 %}"></div>
 <section class="page-heading">
     <h1>Task board</h1>
 </section>
 <section class="board-shell">
-<section class="board-grid">
-    {% for column in grouped_tasks %}
-        <div class="board-column">
-            <h2>{{ column.label }}</h2>
-            {% for task in column.tasks %}
-                <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card">
-                    <article>
-                        <h3 class="board-task-title">{{ task.title }}</h3>
-                        <div class="board-task-meta-row">
-                            <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
-                            <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
-                        </div>
-                        <p class="board-task-description">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
-                        <p class="meta board-task-assignee">Assigned: {{ task.assignee_labels }}</p>
-                    </article>
-                </a>
-            {% empty %}
-                <p class="empty-state">No tasks.</p>
-            {% endfor %}
-        </div>
-    {% endfor %}
+    <section class="board-grid" data-board-grid>
+        {% for column in grouped_tasks %}
+            <div class="board-column" data-column-status="{{ column.value }}" draggable="true">
+                <h2 class="board-column-title">{{ column.label }}</h2>
+                {% for task in column.tasks %}
+                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card" draggable="true" data-task-id="{{ task.pk }}">
+                        <article>
+                            <h3 class="board-task-title">{{ task.title }}</h3>
+                            <div class="board-task-meta-row">
+                                <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                                <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
+                            </div>
+                            <p class="board-task-description">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
+                            <p class="meta board-task-estimate">Time: {% if task.estimated_minutes %}{{ task.estimated_minutes }} min{% else %}TBD{% endif %}</p>
+                        </article>
+                    </a>
+                {% empty %}
+                    <p class="empty-state">No tasks.</p>
+                {% endfor %}
+            </div>
+        {% endfor %}
+    </section>
 </section>
-</section>
+
+<script>
+    (function () {
+        const config = document.getElementById('board-dnd-config');
+        const board = document.querySelector('[data-board-grid]');
+        if (!config || !board) {
+            return;
+        }
+
+        const columnStorageKey = 'taskforge-board-column-order';
+        const moveUrlTemplate = config.dataset.moveUrlTemplate;
+        const csrfToken = getCookie('csrftoken');
+        let draggedCard = null;
+        let draggedColumn = null;
+        let suppressClick = false;
+
+        function getCookie(name) {
+            const cookies = document.cookie ? document.cookie.split('; ') : [];
+            for (const cookie of cookies) {
+                const [key, ...value] = cookie.split('=');
+                if (key === name) {
+                    return decodeURIComponent(value.join('='));
+                }
+            }
+            return '';
+        }
+
+        function persistColumnOrder() {
+            const order = Array.from(board.querySelectorAll('.board-column')).map((column) => column.dataset.columnStatus);
+            window.localStorage.setItem(columnStorageKey, JSON.stringify(order));
+        }
+
+        function restoreColumnOrder() {
+            const raw = window.localStorage.getItem(columnStorageKey);
+            if (!raw) {
+                return;
+            }
+            try {
+                const order = JSON.parse(raw);
+                for (const status of order) {
+                    const column = board.querySelector(`.board-column[data-column-status="${status}"]`);
+                    if (column) {
+                        board.appendChild(column);
+                    }
+                }
+            } catch (error) {
+                window.localStorage.removeItem(columnStorageKey);
+            }
+        }
+
+        function clearDropIndicators() {
+            board.querySelectorAll('.board-column').forEach(function (column) {
+                column.classList.remove('is-drop-target', 'has-drop-at-end');
+            });
+            board.querySelectorAll('.board-task-card').forEach(function (card) {
+                card.classList.remove('is-drop-before');
+            });
+        }
+
+        function getCardAfterPointer(column, clientY) {
+            const cards = Array.from(column.querySelectorAll('.board-task-card:not(.is-dragging)'));
+            for (const card of cards) {
+                const rect = card.getBoundingClientRect();
+                if (clientY < rect.top + rect.height / 2) {
+                    return card;
+                }
+            }
+            return null;
+        }
+
+        function positionDraggedCard(column, clientY) {
+            if (!draggedCard) {
+                return;
+            }
+            clearDropIndicators();
+            column.classList.add('is-drop-target');
+            const empty = column.querySelector('.empty-state');
+            if (empty) {
+                empty.remove();
+            }
+            const beforeCard = getCardAfterPointer(column, clientY);
+            if (beforeCard) {
+                beforeCard.classList.add('is-drop-before');
+                column.insertBefore(draggedCard, beforeCard);
+            } else {
+                column.classList.add('has-drop-at-end');
+                column.appendChild(draggedCard);
+            }
+        }
+
+        function getNextTaskCard(card) {
+            let next = card.nextElementSibling;
+            while (next && !next.classList.contains('board-task-card')) {
+                next = next.nextElementSibling;
+            }
+            return next;
+        }
+
+        async function moveTask(card, column) {
+            const taskId = card.dataset.taskId;
+            const status = column.dataset.columnStatus;
+            const beforeCard = getNextTaskCard(card);
+            const url = moveUrlTemplate.replace('/0/move/', `/${taskId}/move/`);
+            const formData = new URLSearchParams();
+            formData.set('status', status);
+            if (beforeCard) {
+                formData.set('before_task_id', beforeCard.dataset.taskId);
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: formData.toString(),
+            });
+            if (!response.ok) {
+                throw new Error('Move failed');
+            }
+        }
+
+        restoreColumnOrder();
+
+        board.addEventListener('dragstart', function (event) {
+            const card = event.target.closest('.board-task-card');
+            if (card) {
+                draggedCard = card;
+                suppressClick = false;
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', card.dataset.taskId);
+                card.classList.add('is-dragging');
+                return;
+            }
+            const column = event.target.closest('.board-column');
+            if (column) {
+                draggedColumn = column;
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/column', column.dataset.columnStatus);
+                column.classList.add('is-dragging-column');
+            }
+        });
+
+        board.addEventListener('dragend', function () {
+            if (draggedCard) {
+                draggedCard.classList.remove('is-dragging');
+                draggedCard = null;
+                window.setTimeout(function () {
+                    suppressClick = false;
+                }, 0);
+            }
+            if (draggedColumn) {
+                draggedColumn.classList.remove('is-dragging-column');
+                draggedColumn = null;
+            }
+            clearDropIndicators();
+        });
+
+        board.addEventListener('dragover', function (event) {
+            const column = event.target.closest('.board-column');
+            if (!column) {
+                return;
+            }
+            event.preventDefault();
+            if (draggedCard) {
+                event.dataTransfer.dropEffect = 'move';
+                positionDraggedCard(column, event.clientY);
+                return;
+            }
+            if (draggedColumn && column !== draggedColumn) {
+                event.dataTransfer.dropEffect = 'move';
+                const columns = Array.from(board.querySelectorAll('.board-column'));
+                const targetIndex = columns.indexOf(column);
+                const draggedIndex = columns.indexOf(draggedColumn);
+                if (targetIndex > draggedIndex) {
+                    board.insertBefore(draggedColumn, column.nextSibling);
+                } else {
+                    board.insertBefore(draggedColumn, column);
+                }
+            }
+        });
+
+        board.addEventListener('drop', async function (event) {
+            const column = event.target.closest('.board-column');
+            if (!column) {
+                return;
+            }
+            event.preventDefault();
+
+            if (draggedCard) {
+                suppressClick = true;
+                try {
+                    await moveTask(draggedCard, column);
+                    clearDropIndicators();
+                } catch (error) {
+                    window.location.reload();
+                }
+                return;
+            }
+
+            if (draggedColumn) {
+                persistColumnOrder();
+                clearDropIndicators();
+            }
+        });
+
+        board.addEventListener('click', function (event) {
+            const card = event.target.closest('.board-task-card');
+            if (card && suppressClick) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        }, true);
+    }());
+</script>
 {% endblock %}

@@ -6,6 +6,7 @@ from . import views
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("board/", views.board_view, name="board"),
+    path("board/tasks/<int:pk>/move/", views.board_task_move_view, name="board-task-move"),
     path("account/password/", views.password_change_view, name="password-change"),
     path("tasks/mine/", views.my_tasks_view, name="my-tasks"),
     path("tasks/intake/", views.task_intake_view, name="task-intake"),

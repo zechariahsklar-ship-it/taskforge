@@ -1,10 +1,11 @@
 from datetime import date
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Priority, StudentAvailability, StudentWorkerProfile, Task, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -153,7 +154,7 @@ class TaskIntakeReviewViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         task = Task.objects.get(title="Finish update")
         self.assertEqual(
-            list(task.checklist_items.order_by("sort_order").values_list("title", flat=True)),
+            list(task.checklist_items.values_list("title", flat=True)),
             ["Review request", "Send response"],
         )
 
@@ -194,7 +195,7 @@ class TaskAssignmentServiceTests(TestCase):
             title="Existing task",
             description="Busy work",
             priority=Priority.MEDIUM,
-            status=TaskStatus.ASSIGNED,
+            status=TaskStatus.NEW,
             assigned_to=self.alex,
             estimated_minutes=60,
             due_date=date(2026, 3, 17),
@@ -360,3 +361,361 @@ class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
         task = Task.objects.get(title="Supervisor created shared task")
         self.assertEqual(task.assigned_to, self.primary_student)
         self.assertEqual(list(task.additional_assignees.values_list("id", flat=True)), [self.extra_student.id])
+
+
+class MyTasksViewOrderingTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="mytasks-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="mytasks-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.first_task = Task.objects.create(
+            title="First visible task",
+            description="First",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            board_order=1,
+            estimated_minutes=20,
+        )
+        self.second_task = Task.objects.create(
+            title="Second visible task",
+            description="Second",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            board_order=2,
+            estimated_minutes=45,
+        )
+        self.review_task = Task.objects.create(
+            title="Review visible task",
+            description="Review",
+            priority=Priority.HIGH,
+            status=TaskStatus.REVIEW,
+            assigned_to=self.student,
+            board_order=1,
+            estimated_minutes=30,
+        )
+
+    def test_my_tasks_groups_tasks_by_status_and_preserves_board_order(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        grouped_tasks = response.context["grouped_tasks"]
+        new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
+        review_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.REVIEW)
+
+        self.assertEqual([task.title for task in new_column["tasks"]], ["First visible task", "Second visible task"])
+        self.assertEqual([task.title for task in review_column["tasks"]], ["Review visible task"])
+        self.assertContains(response, "Time: 20 min")
+        self.assertContains(response, "Time: 45 min")
+
+    def test_supervisor_my_tasks_includes_waiting_tasks(self):
+        waiting_task = Task.objects.create(
+            title="Waiting task for supervisors",
+            description="Blocked by external input",
+            priority=Priority.HIGH,
+            status=TaskStatus.WAITING,
+            assigned_to=self.student,
+            board_order=1,
+        )
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        grouped_tasks = response.context["grouped_tasks"]
+        waiting_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.WAITING)
+        self.assertIn(waiting_task, waiting_column["tasks"])
+
+
+class BoardTaskMoveTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="move-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="move-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.other_student = User.objects.create_user(username="move-other", password="password123", role=UserRole.STUDENT_WORKER)
+        self.task = Task.objects.create(
+            title="Movable task",
+            description="Move me",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            board_order=1,
+        )
+        self.second_task = Task.objects.create(
+            title="Second task",
+            description="Place me later",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            board_order=2,
+        )
+        self.third_task = Task.objects.create(
+            title="Third task",
+            description="Reorder me",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            board_order=3,
+        )
+        self.review_task = Task.objects.create(
+            title="Review task",
+            description="Already in review",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.REVIEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            board_order=1,
+        )
+
+    def test_supervisor_can_move_task_between_columns(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("board-task-move", args=[self.task.pk]),
+            {"status": TaskStatus.REVIEW, "before_task_id": str(self.review_task.pk)},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.review_task.refresh_from_db()
+        self.second_task.refresh_from_db()
+        self.third_task.refresh_from_db()
+        self.assertEqual(self.task.status, TaskStatus.REVIEW)
+        self.assertEqual(self.task.board_order, 1)
+        self.assertEqual(self.review_task.board_order, 2)
+        self.assertEqual(self.second_task.board_order, 1)
+        self.assertEqual(self.third_task.board_order, 2)
+
+    def test_assigned_student_can_move_own_task(self):
+        self.client.force_login(self.student)
+        response = self.client.post(reverse("board-task-move", args=[self.task.pk]), {"status": TaskStatus.IN_PROGRESS})
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, TaskStatus.IN_PROGRESS)
+        self.assertEqual(self.task.board_order, 1)
+
+    def test_supervisor_can_reorder_within_same_column(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("board-task-move", args=[self.third_task.pk]),
+            {"status": TaskStatus.NEW, "before_task_id": str(self.second_task.pk)},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.second_task.refresh_from_db()
+        self.third_task.refresh_from_db()
+        self.assertEqual(self.task.board_order, 1)
+        self.assertEqual(self.third_task.board_order, 2)
+        self.assertEqual(self.second_task.board_order, 3)
+
+    def test_unassigned_student_cannot_move_task(self):
+        self.client.force_login(self.other_student)
+        response = self.client.post(reverse("board-task-move", args=[self.task.pk]), {"status": TaskStatus.DONE})
+        self.assertEqual(response.status_code, 403)
+
+
+class TaskDetailChecklistTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="detail-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="detail-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.task = Task.objects.create(
+            title="Checklist task",
+            description="Task with checklist",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 20),
+            raw_due_text="next Friday",
+            assigned_to=self.student,
+            created_by=self.supervisor,
+        )
+        self.first = TaskChecklistItem.objects.create(task=self.task, title="First item", position=1)
+        self.second = TaskChecklistItem.objects.create(task=self.task, title="Second item", position=2)
+        self.third = TaskChecklistItem.objects.create(task=self.task, title="Third item", position=3)
+
+    def test_supervisor_can_reorder_checklist_items(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_reorder",
+                "item_ids": [str(self.third.pk), str(self.first.pk), str(self.second.pk)],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.third.position, 1)
+        self.assertEqual(self.first.position, 2)
+        self.assertEqual(self.second.position, 3)
+
+    def test_supervisor_can_save_checklist_titles_and_order_from_task_screen(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_save",
+                "checklist_item_ids": [str(self.second.pk), str(self.first.pk), str(self.third.pk)],
+                "checklist_item_titles": ["Updated second", "Updated first", "Updated third"],
+                "checklist_item_completed": [str(self.first.pk), str(self.third.pk)],
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.second.position, 1)
+        self.assertEqual(self.first.position, 2)
+        self.assertEqual(self.third.title, "Updated third")
+        self.assertTrue(self.first.is_completed)
+        self.assertTrue(self.third.is_completed)
+
+    def test_blank_checklist_title_deletes_item_instead_of_restoring_old_text(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_save",
+                "checklist_item_ids": [str(self.first.pk), str(self.second.pk), str(self.third.pk)],
+                "checklist_item_titles": ["First item", "", "Third item"],
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TaskChecklistItem.objects.filter(pk=self.second.pk).exists())
+        self.first.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.first.position, 1)
+        self.assertEqual(self.third.position, 2)
+
+    def test_supervisor_can_delete_checklist_item_from_task_screen(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_save",
+                "checklist_item_ids": [str(self.first.pk), str(self.second.pk), str(self.third.pk)],
+                "checklist_item_titles": ["First item", "Second item", "Third item"],
+                "delete_item_id": str(self.first.pk),
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TaskChecklistItem.objects.filter(pk=self.first.pk).exists())
+
+    def test_assigned_user_can_toggle_checklist_completion(self):
+        self.client.force_login(self.student)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "checklist_toggle", "item_id": str(self.first.pk), "is_completed": "true"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.first.refresh_from_db()
+        self.assertTrue(self.first.is_completed)
+
+    def test_checklist_add_form_uses_placeholder_instead_of_title_label(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertContains(response, 'placeholder="Add checklist item"')
+        self.assertNotContains(response, '<label for="id_title">Title:</label>', html=False)
+
+    def test_task_detail_shows_actual_due_date_not_raw_due_text(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertContains(response, "Due: Mar 20, 2026")
+        self.assertNotContains(response, "Due: next Friday")
+
+    def test_any_assigned_user_can_add_attachment_from_task_detail(self):
+        self.client.force_login(self.student)
+        upload = SimpleUploadedFile("note.txt", b"hello", content_type="text/plain")
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "attachment", "file": upload},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.task.attachments.count(), 1)
+        self.assertEqual(self.task.attachments.first().original_name, "note.txt")
+
+    def test_notes_render_oldest_first(self):
+        self.client.force_login(self.student)
+        self.client.post(reverse("task-detail", args=[self.task.pk]), {"action": "note", "body": "First note"}, follow=True)
+        self.client.post(reverse("task-detail", args=[self.task.pk]), {"action": "note", "body": "Second note"}, follow=True)
+        response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        content = response.content.decode()
+        self.assertLess(content.index("First note"), content.index("Second note"))
+
+
+class TaskEstimateFeedbackTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="estimate-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="estimate-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.task = Task.objects.create(
+            title="Estimate task",
+            raw_message="Please organize the donor spreadsheet and send an updated copy.",
+            description="Estimate test",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            estimated_minutes=30,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_board_card_shows_estimate_text(self):
+        response = self.client.get(reverse("board"))
+        self.assertContains(response, "Time: 30 min")
+
+    def test_task_edit_records_estimate_feedback_when_minutes_change(self):
+        response = self.client.post(
+            reverse("task-edit", args=[self.task.pk]),
+            {
+                "title": self.task.title,
+                "raw_message": self.task.raw_message,
+                "description": self.task.description,
+                "priority": self.task.priority,
+                "status": self.task.status,
+                "due_date": "",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "75",
+                "assigned_to": str(self.student.pk),
+                "additional_assignees": [],
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        feedback = TaskEstimateFeedback.objects.get(task=self.task)
+        self.assertEqual(feedback.original_estimated_minutes, 30)
+        self.assertEqual(feedback.corrected_estimated_minutes, 75)
+        self.assertEqual(feedback.source, "task_edit")
+
+
+class AssignedBucketRemovalTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="assigned-bucket-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="assigned-bucket-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.task = Task.objects.create(
+            title="Legacy assigned task",
+            description="Legacy assigned task",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.ASSIGNED,
+            assigned_to=self.student,
+            board_order=1,
+        )
+
+    def test_board_groups_legacy_assigned_status_under_new_requests(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("board"))
+        grouped_tasks = response.context["grouped_tasks"]
+        self.assertFalse(any(column["value"] == TaskStatus.ASSIGNED for column in grouped_tasks))
+        new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
+        self.assertIn(self.task, new_column["tasks"])

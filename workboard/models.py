@@ -204,12 +204,13 @@ class Task(models.Model):
     recurrence_interval = models.PositiveIntegerField(null=True, blank=True)
     recurrence_day_of_week = models.PositiveSmallIntegerField(null=True, blank=True)
     recurrence_day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    board_order = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["due_date", "-created_at"]
+        ordering = ["board_order", "due_date", "-created_at"]
 
     def __str__(self):
         return self.title
@@ -246,18 +247,30 @@ class TaskChecklistItem(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="checklist_items")
     title = models.CharField(max_length=255)
     is_completed = models.BooleanField(default=False)
-    sort_order = models.PositiveIntegerField(default=0)
-    completed_at = models.DateTimeField(null=True, blank=True)
+    position = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["sort_order", "id"]
+        ordering = ["position", "id"]
 
     def __str__(self):
         return self.title
 
-    def mark_complete(self):
-        self.is_completed = True
-        self.completed_at = timezone.now()
+
+class TaskEstimateFeedback(models.Model):
+    task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL, related_name="estimate_feedback")
+    raw_message = models.TextField(blank=True)
+    task_title = models.CharField(max_length=255, blank=True)
+    original_estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
+    corrected_estimated_minutes = models.PositiveIntegerField()
+    corrected_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="estimate_feedback_entries")
+    source = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Estimate feedback for {self.task_title or self.task_id}"
 
 
 class TaskAttachment(models.Model):

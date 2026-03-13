@@ -3,72 +3,122 @@
 {% block title %}{{ task.title }} | TaskForge{% endblock %}
 
 {% block content %}
-<section class="detail-grid">
-    <article class="card">
-        <h1>{{ task.title }}</h1>
-        <p>{{ task.description|default:task.raw_message|linebreaksbr }}</p>
-        <section>
-            <h2>Checklist</h2>
-            <ul>
-                {% for item in task.checklist_items.all %}
-                    <li>{% if item.is_completed %}Completed{% else %}Open{% endif %}: {{ item.title }}</li>
-                {% empty %}
-                    <li>No checklist items yet.</li>
-                {% endfor %}
-            </ul>
+<section class="task-detail-shell">
+    <article class="card task-detail-card">
+        <div id="checklist-config" data-task-detail-url="{% url 'task-detail' task.pk %}"></div>
+        <div class="task-detail-header">
+            <div>
+                <h1>{{ task.title }}</h1>
+                <div class="board-task-meta-row">
+                    <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                    <span class="meta">Status: {{ task.get_status_display }}</span>
+                    <span class="meta">Due: {{ task.detail_due_date|date:"M j, Y" }}</span>
+                </div>
+            </div>
             {% if request.user.is_supervisor %}
-                <form method="post">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="checklist">
-                    {{ checklist_form.as_p }}
-                    <button type="submit">Add checklist item</button>
-                </form>
+                <a href="{% url 'task-edit' task.pk %}" class="button-link">Edit task</a>
             {% endif %}
-        </section>
-        <section>
-            <h2>Attachments</h2>
-            <ul>
-                {% for attachment in task.attachments.all %}
-                    <li><a href="{{ attachment.file.url }}">{{ attachment.original_name }}</a></li>
-                {% empty %}
-                    <li>No attachments.</li>
-                {% endfor %}
-            </ul>
-        </section>
-        <dl class="detail-list">
-            <dt>Status</dt><dd>{{ task.get_status_display }}</dd>
-            <dt>Priority</dt><dd>{{ task.get_priority_display }}</dd>
-            <dt>Assigned To</dt><dd>{{ task.assignee_labels }}</dd>
-            <dt>Requested By</dt><dd>{{ task.requested_by.username|default:"Unknown" }}</dd>
-            <dt>Due</dt><dd>{{ task.due_date|default:task.raw_due_text|default:"Not set" }}</dd>
-            <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>
-            <dt>Waiting On</dt><dd>{{ task.waiting_person|default:"-" }}</dd>
-            <dt>Respond To</dt><dd>{{ task.respond_to_text|default:"-" }}</dd>
-        </dl>
-        {% if request.user.is_supervisor %}
-            <p><a href="{% url 'task-edit' task.pk %}">Edit task</a></p>
-        {% endif %}
-    </article>
-    <aside class="stack">
-        <section class="card">
+        </div>
+
+        <section class="task-detail-section task-detail-section-tight">
             <h2>Update status</h2>
-            <form method="post">
+            <form method="post" class="inline-form inline-form-status">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="status">
-                {{ status_form.as_p }}
+                {{ status_form.status }}
                 <button type="submit">Save status</button>
             </form>
         </section>
-        <section class="card">
+
+        <section class="task-detail-section">
+            <div class="task-section-header">
+                <h2>Checklist</h2>
+                <span class="meta">Drag to reorder</span>
+            </div>
+            <form method="post" class="stack">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="checklist_save">
+                <div class="checklist-list" data-checklist-list>
+                    {% for item in task.checklist_items.all %}
+                        <div class="checklist-item {% if item.is_completed %}is-completed{% endif %}" data-checklist-id="{{ item.pk }}">
+                            <input
+                                type="checkbox"
+                                class="checklist-complete"
+                                {% if item.is_completed %}checked{% endif %}
+                                {% if request.user.is_supervisor %}name="checklist_item_completed" value="{{ item.pk }}"{% else %}data-checklist-toggle value="{{ item.pk }}"{% endif %}
+                                aria-label="Mark checklist item complete"
+                            >
+                            <button type="button" class="checklist-grip" draggable="true" aria-label="Reorder checklist item">|||</button>
+                            <input type="hidden" name="checklist_item_ids" value="{{ item.pk }}">
+                            {% if request.user.is_supervisor %}
+                                <input type="text" name="checklist_item_titles" value="{{ item.title }}" class="form-control checklist-title-input">
+                                <button type="submit" name="delete_item_id" value="{{ item.pk }}" class="button-link checklist-delete">Delete</button>
+                            {% else %}
+                                <input type="hidden" name="checklist_item_titles" value="{{ item.title }}">
+                                <span class="checklist-title-text">{{ item.title }}</span>
+                            {% endif %}
+                        </div>
+                    {% empty %}
+                        <p class="empty-state" data-checklist-empty>No checklist items yet.</p>
+                    {% endfor %}
+                </div>
+                {% if request.user.is_supervisor and task.checklist_items.all %}
+                    <div>
+                        <button type="submit">Save checklist changes</button>
+                    </div>
+                {% endif %}
+            </form>
+            {% if request.user.is_supervisor %}
+                <form method="post" class="inline-form checklist-add-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="checklist">
+                    {{ checklist_form.title }}
+                    <button type="submit">Add item</button>
+                </form>
+            {% endif %}
+        </section>
+
+        <section class="task-detail-section">
+            <h2>Task details</h2>
+            <p>{{ task.description|default:task.raw_message|linebreaksbr }}</p>
+            <dl class="detail-list">
+                <dt>Assigned To</dt><dd>{{ task.assignee_labels }}</dd>
+                <dt>Requested By</dt><dd>{{ task.requested_by.username|default:"Unknown" }}</dd>
+                <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>
+                <dt>Waiting On</dt><dd>{{ task.waiting_person|default:"-" }}</dd>
+                <dt>Respond To</dt><dd>{{ task.respond_to_text|default:"-" }}</dd>
+            </dl>
+        </section>
+
+        <section class="task-detail-section">
+            <h2>Attachments</h2>
+            <form method="post" enctype="multipart/form-data" class="inline-form attachment-add-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="attachment">
+                {{ attachment_form.file }}
+                <button type="submit">Add attachment</button>
+            </form>
+            <ul class="attachment-list">
+                {% for attachment in task.attachments.all %}
+                    <li><a href="{{ attachment.file.url }}">{{ attachment.original_name }}</a></li>
+                {% empty %}
+                    <li class="empty-state">No attachments.</li>
+                {% endfor %}
+            </ul>
+        </section>
+
+        <section class="task-detail-section">
             <h2>Notes</h2>
-            <form method="post">
+            <form method="post" class="stack">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="note">
-                {{ note_form.as_p }}
-                <button type="submit">Add note</button>
+                {{ note_form.body }}
+                <div>
+                    <button type="submit">Add note</button>
+                </div>
             </form>
-            <div class="stack">
-                {% for note in task.notes.all %}
+            <div class="stack task-notes-list">
+                {% for note in task.note_items %}
                     <article class="note">
                         <p>{{ note.body|linebreaksbr }}</p>
                         <p class="meta">{{ note.author.username|default:"Unknown" }} | {{ note.created_at }}</p>
@@ -78,6 +128,146 @@
                 {% endfor %}
             </div>
         </section>
-    </aside>
+    </article>
 </section>
+
+<script>
+    (function () {
+        const config = document.getElementById('checklist-config');
+        const list = document.querySelector('[data-checklist-list]');
+        if (!config || !list) {
+            return;
+        }
+
+        const csrfToken = getCookie('csrftoken');
+        const taskDetailUrl = config.dataset.taskDetailUrl;
+        let draggedItem = null;
+
+        function getCookie(name) {
+            const cookies = document.cookie ? document.cookie.split('; ') : [];
+            for (const cookie of cookies) {
+                const parts = cookie.split('=');
+                const key = parts.shift();
+                if (key === name) {
+                    return decodeURIComponent(parts.join('='));
+                }
+            }
+            return '';
+        }
+
+        function clearIndicators() {
+            list.querySelectorAll('.checklist-item').forEach(function (item) {
+                item.classList.remove('is-dragging', 'is-drop-before');
+            });
+            list.classList.remove('has-drop-at-end');
+        }
+
+        function getItemAfterPointer(clientY) {
+            const items = Array.from(list.querySelectorAll('.checklist-item:not(.is-dragging)'));
+            for (const item of items) {
+                const rect = item.getBoundingClientRect();
+                if (clientY < rect.top + rect.height / 2) {
+                    return item;
+                }
+            }
+            return null;
+        }
+
+        async function postChecklistAction(formData) {
+            const response = await fetch(taskDetailUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: formData.toString(),
+            });
+            if (!response.ok) {
+                throw new Error('Checklist action failed');
+            }
+            return response;
+        }
+
+        async function persistChecklistOrder() {
+            const formData = new URLSearchParams();
+            formData.set('action', 'checklist_reorder');
+            Array.from(list.querySelectorAll('.checklist-item')).forEach(function (item) {
+                formData.append('item_ids', item.dataset.checklistId);
+            });
+            await postChecklistAction(formData);
+        }
+
+        list.addEventListener('change', async function (event) {
+            const checkbox = event.target.closest('[data-checklist-toggle]');
+            if (!checkbox) {
+                const rowCheckbox = event.target.closest('.checklist-complete');
+                if (rowCheckbox) {
+                    rowCheckbox.closest('.checklist-item').classList.toggle('is-completed', rowCheckbox.checked);
+                }
+                return;
+            }
+            const checklistItem = checkbox.closest('.checklist-item');
+            checklistItem.classList.toggle('is-completed', checkbox.checked);
+            const formData = new URLSearchParams();
+            formData.set('action', 'checklist_toggle');
+            formData.set('item_id', checkbox.value);
+            formData.set('is_completed', checkbox.checked ? 'true' : 'false');
+            try {
+                await postChecklistAction(formData);
+            } catch (error) {
+                window.location.reload();
+            }
+        });
+
+        list.addEventListener('dragstart', function (event) {
+            const grip = event.target.closest('.checklist-grip');
+            if (!grip) {
+                return;
+            }
+            const item = grip.closest('.checklist-item');
+            if (!item) {
+                return;
+            }
+            draggedItem = item;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', item.dataset.checklistId);
+            item.classList.add('is-dragging');
+        });
+
+        list.addEventListener('dragend', function () {
+            clearIndicators();
+            draggedItem = null;
+        });
+
+        list.addEventListener('dragover', function (event) {
+            if (!draggedItem) {
+                return;
+            }
+            event.preventDefault();
+            const beforeItem = getItemAfterPointer(event.clientY);
+            clearIndicators();
+            draggedItem.classList.add('is-dragging');
+            if (beforeItem) {
+                beforeItem.classList.add('is-drop-before');
+                list.insertBefore(draggedItem, beforeItem);
+            } else {
+                list.classList.add('has-drop-at-end');
+                list.appendChild(draggedItem);
+            }
+        });
+
+        list.addEventListener('drop', async function (event) {
+            if (!draggedItem) {
+                return;
+            }
+            event.preventDefault();
+            try {
+                await persistChecklistOrder();
+                clearIndicators();
+            } catch (error) {
+                window.location.reload();
+            }
+        });
+    }());
+</script>
 {% endblock %}

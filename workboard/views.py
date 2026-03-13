@@ -4,8 +4,8 @@ from functools import wraps
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Prefetch, Q, Sum
-from django.http import HttpResponseForbidden
+from django.db.models import Count, F, Max, Prefetch, Q, Sum
+from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import (
@@ -18,6 +18,7 @@ from .forms import (
     TaskChecklistItemForm,
     TaskIntakeForm,
     TaskNoteForm,
+    TaskAttachmentForm,
     TaskUpdateForm,
     WeeklyAvailabilityForm,
 )
@@ -35,17 +36,20 @@ from .models import (
     UserRole,
     Weekday,
 )
-from .services import TaskAssignmentService, TaskParsingService
+from .services import TaskAssignmentService, TaskEstimateFeedbackService, TaskParsingService
 
 
 BOARD_COLUMNS = [
     TaskStatus.NEW,
-    TaskStatus.ASSIGNED,
     TaskStatus.IN_PROGRESS,
     TaskStatus.WAITING,
     TaskStatus.REVIEW,
     TaskStatus.DONE,
 ]
+
+
+def _board_bucket_status(status: str) -> str:
+    return TaskStatus.NEW if status == TaskStatus.ASSIGNED else status
 
 
 def supervisor_required(view_func):
@@ -79,6 +83,20 @@ def _normalize_checklist_rows(values: list[str]) -> list[str]:
     return [value.strip() for value in values if value.strip()]
 
 
+def _next_checklist_position(task: Task, exclude_pk: int | None = None) -> int:
+    queryset = task.checklist_items.all()
+    if exclude_pk:
+        queryset = queryset.exclude(pk=exclude_pk)
+    return (queryset.aggregate(max_position=Max("position")).get("max_position") or 0) + 1
+
+
+def _resequence_checklist_items(task: Task, ordered_items: list[TaskChecklistItem]) -> None:
+    for index, item in enumerate(ordered_items, start=1):
+        if item.position != index:
+            item.position = index
+            item.save(update_fields=["position"])
+
+
 def _build_checklist_editor_rows(values: list[str]) -> list[str]:
     rows = _normalize_checklist_rows(values)
     return (rows or [""]) + [""]
@@ -92,6 +110,45 @@ def _ensure_task_due_date(task: Task) -> Task:
     if not task.raw_due_text:
         task.raw_due_text = f"Priority-based default for {task.priority}"
     return task
+
+
+def _next_board_order(status: str, exclude_pk: int | None = None) -> int:
+    queryset = Task.objects.filter(status=status)
+    if exclude_pk:
+        queryset = queryset.exclude(pk=exclude_pk)
+    return (queryset.aggregate(max_order=Max("board_order")).get("max_order") or 0) + 1
+
+
+def _ordered_status_tasks(status: str, *, exclude_pk: int | None = None) -> list[Task]:
+    queryset = Task.objects.filter(status=status)
+    if exclude_pk:
+        queryset = queryset.exclude(pk=exclude_pk)
+    return list(queryset.order_by(F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
+
+
+def _append_task_to_status(task: Task, previous_status: str | None = None) -> Task:
+    if task.board_order is not None and previous_status == task.status:
+        return task
+    task.board_order = _next_board_order(task.status, exclude_pk=task.pk)
+    return task
+
+
+def _resequence_status_tasks(tasks: list[Task], status: str) -> None:
+    for index, item in enumerate(tasks, start=1):
+        update_fields = []
+        if item.status != status:
+            item.status = status
+            update_fields.append("status")
+        if item.board_order != index:
+            item.board_order = index
+            update_fields.append("board_order")
+        if update_fields:
+            update_fields.append("updated_at")
+            item.save(update_fields=update_fields)
+
+
+def _close_status_gap(status: str, *, exclude_pk: int) -> None:
+    _resequence_status_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk), status)
 
 
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
@@ -167,27 +224,85 @@ def dashboard(request):
 
 @app_login_required
 def board_view(request):
-    tasks = list(Task.objects.select_related("assigned_to", "requested_by").prefetch_related("additional_assignees").all())
+    tasks = Task.objects.select_related("assigned_to", "requested_by").prefetch_related("additional_assignees")
     if request.user.role == UserRole.STUDENT_WORKER:
-        tasks = [task for task in tasks if task.assigned_to_id == request.user.id or any(user.id == request.user.id for user in task.additional_assignees.all())]
+        tasks = tasks.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user)).distinct()
+    tasks = list(tasks.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
     for task in tasks:
+        task.status_bucket = _board_bucket_status(task.status)
         task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
     grouped_tasks = [
-        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status == status]}
+        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
         for status in BOARD_COLUMNS
     ]
     return render(request, "workboard/board.html", {"grouped_tasks": grouped_tasks})
 
 
 @app_login_required
+def board_task_move_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    task = get_object_or_404(Task.objects.prefetch_related("additional_assignees"), pk=pk)
+    if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
+        return HttpResponseForbidden("You can only move tasks assigned to you.")
+
+    new_status = request.POST.get("status", "").strip()
+    if new_status not in BOARD_COLUMNS:
+        return HttpResponseBadRequest("Invalid status.")
+
+    before_task_id = request.POST.get("before_task_id", "").strip()
+    ordered_target_tasks = _ordered_status_tasks(new_status, exclude_pk=task.pk)
+    if before_task_id:
+        try:
+            before_task_id_int = int(before_task_id)
+        except ValueError:
+            return HttpResponseBadRequest("Invalid target position.")
+        before_task = next((item for item in ordered_target_tasks if item.pk == before_task_id_int), None)
+        if before_task is None:
+            return HttpResponseBadRequest("Target task not found in destination column.")
+        insert_index = ordered_target_tasks.index(before_task)
+    else:
+        insert_index = len(ordered_target_tasks)
+
+    previous_status = task.status
+    ordered_target_tasks.insert(insert_index, task)
+
+    task.status = new_status
+    if task.status == TaskStatus.DONE and not task.completed_at:
+        task.mark_complete()
+    elif task.status != TaskStatus.DONE:
+        task.completed_at = None
+    task.save(update_fields=["status", "completed_at", "updated_at"])
+
+    _resequence_status_tasks(ordered_target_tasks, new_status)
+    if previous_status != new_status:
+        _resequence_status_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk), previous_status)
+
+    return JsonResponse({"ok": True, "status": task.status, "label": TaskStatus(task.status).label})
+
+
+@app_login_required
 def my_tasks_view(request):
+    if request.user.role == UserRole.SUPERVISOR:
+        tasks = Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user) | Q(status=TaskStatus.WAITING))
+    else:
+        tasks = Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user))
     tasks = (
-        Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user))
-        .select_related("requested_by", "assigned_to")
+        tasks.select_related("requested_by", "assigned_to")
         .prefetch_related("additional_assignees")
         .distinct()
+        .order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk")
     )
-    return render(request, "workboard/my_tasks.html", {"tasks": tasks})
+    tasks = list(tasks)
+    for task in tasks:
+        task.status_bucket = _board_bucket_status(task.status)
+        task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
+    grouped_tasks = [
+        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
+        for status in BOARD_COLUMNS
+    ]
+    return render(request, "workboard/my_tasks.html", {"grouped_tasks": grouped_tasks})
 
 
 @supervisor_required
@@ -230,9 +345,11 @@ def task_intake_review_view(request, pk):
         checklist_values = request.POST.getlist("checklist_items")
         form = TaskForm(request.POST, initial=initial)
         if form.is_valid():
+            original_estimated_minutes = initial.get("estimated_minutes")
             task = form.save(commit=False)
             task.created_by = request.user
             task = _ensure_task_due_date(task)
+            task = _append_task_to_status(task)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -243,6 +360,13 @@ def task_intake_review_view(request, pk):
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
+            TaskEstimateFeedbackService.record_feedback(
+                task=task,
+                original_estimated_minutes=original_estimated_minutes,
+                corrected_estimated_minutes=task.estimated_minutes,
+                corrected_by=request.user,
+                source="intake_review",
+            )
             form.save_m2m()
             for attachment in draft.attachments.all():
                 TaskAttachment.objects.create(
@@ -252,7 +376,7 @@ def task_intake_review_view(request, pk):
                 )
             checklist_items = _normalize_checklist_rows(checklist_values)
             for index, title in enumerate(checklist_items, start=1):
-                TaskChecklistItem.objects.create(task=task, title=title, sort_order=index)
+                TaskChecklistItem.objects.create(task=task, title=title, position=index)
             messages.success(request, "Task created from intake request.")
             return redirect("task-detail", pk=task.pk)
     else:
@@ -286,6 +410,7 @@ def task_create_view(request):
             task = form.save(commit=False)
             task.created_by = request.user
             task = _ensure_task_due_date(task)
+            task = _append_task_to_status(task)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -306,25 +431,34 @@ def task_create_view(request):
 
 @app_login_required
 def task_detail_view(request, pk):
-    task = get_object_or_404(Task.objects.select_related("assigned_to", "requested_by", "created_by").prefetch_related("additional_assignees"), pk=pk)
+    task = get_object_or_404(
+        Task.objects.select_related("assigned_to", "requested_by", "created_by")
+        .prefetch_related("additional_assignees", "checklist_items", "attachments", "notes__author"),
+        pk=pk,
+    )
     if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only view tasks assigned to you.")
 
     note_form = TaskNoteForm()
     status_form = TaskUpdateForm(instance=task)
     checklist_form = TaskChecklistItemForm()
+    attachment_form = TaskAttachmentForm()
 
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "status":
             status_form = TaskUpdateForm(request.POST, instance=task)
             if status_form.is_valid():
+                previous_status = task.status
                 updated_task = status_form.save(commit=False)
                 if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                     updated_task.mark_complete()
                 elif updated_task.status != TaskStatus.DONE:
                     updated_task.completed_at = None
+                updated_task = _append_task_to_status(updated_task, previous_status=previous_status)
                 updated_task.save()
+                if previous_status != updated_task.status:
+                    _close_status_gap(previous_status, exclude_pk=updated_task.pk)
                 messages.success(request, "Task status updated.")
                 return redirect("task-detail", pk=task.pk)
         elif action == "note":
@@ -336,19 +470,113 @@ def task_detail_view(request, pk):
                 note.save()
                 messages.success(request, "Note added.")
                 return redirect("task-detail", pk=task.pk)
+        elif action == "attachment":
+            attachment_form = TaskAttachmentForm(request.POST, request.FILES)
+            if attachment_form.is_valid():
+                attachment = attachment_form.save(commit=False)
+                attachment.task = task
+                attachment.original_name = attachment.file.name
+                attachment.save()
+                messages.success(request, "Attachment added.")
+                return redirect("task-detail", pk=task.pk)
         elif action == "checklist" and request.user.role == UserRole.SUPERVISOR:
             checklist_form = TaskChecklistItemForm(request.POST)
             if checklist_form.is_valid():
                 item = checklist_form.save(commit=False)
                 item.task = task
+                item.position = _next_checklist_position(task)
                 item.save()
                 messages.success(request, "Checklist item added.")
                 return redirect("task-detail", pk=task.pk)
+        elif action == "checklist_save" and request.user.role == UserRole.SUPERVISOR:
+            item_ids = request.POST.getlist("checklist_item_ids")
+            titles = request.POST.getlist("checklist_item_titles")
+            completed_ids = set(request.POST.getlist("checklist_item_completed"))
+            delete_item_id = request.POST.get("delete_item_id", "").strip()
+            if len(item_ids) != len(titles):
+                return HttpResponseBadRequest("Checklist update payload was incomplete.")
+            ordered_items = []
+            seen_ids = set()
+            deleted_any = False
+            for index, raw_id in enumerate(item_ids):
+                try:
+                    item_id = int(raw_id)
+                except ValueError:
+                    return HttpResponseBadRequest("Invalid checklist item.")
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                item = task.checklist_items.filter(pk=item_id).first()
+                if not item:
+                    return HttpResponseBadRequest("Checklist item not found.")
+                updated_title = titles[index].strip()
+                should_delete = not updated_title or delete_item_id == str(item_id)
+                if should_delete:
+                    item.delete()
+                    deleted_any = True
+                    continue
+                item.updated_title = updated_title
+                item.updated_completed = str(item_id) in completed_ids
+                ordered_items.append(item)
+            for index, item in enumerate(ordered_items, start=1):
+                update_fields = []
+                if item.title != item.updated_title:
+                    item.title = item.updated_title
+                    update_fields.append("title")
+                if item.is_completed != item.updated_completed:
+                    item.is_completed = item.updated_completed
+                    update_fields.append("is_completed")
+                if item.position != index:
+                    item.position = index
+                    update_fields.append("position")
+                if update_fields:
+                    item.save(update_fields=update_fields)
+            _resequence_checklist_items(task, ordered_items)
+            messages.success(request, "Checklist updated.")
+            return redirect("task-detail", pk=task.pk)
+        elif action == "checklist_toggle":
+            item_id = request.POST.get("item_id", "").strip()
+            try:
+                checklist_item = task.checklist_items.get(pk=int(item_id))
+            except (ValueError, TaskChecklistItem.DoesNotExist):
+                return HttpResponseBadRequest("Checklist item not found.")
+            checklist_item.is_completed = request.POST.get("is_completed") == "true"
+            checklist_item.save(update_fields=["is_completed"])
+            return JsonResponse({"ok": True, "is_completed": checklist_item.is_completed})
+        elif action == "checklist_reorder":
+            item_ids = request.POST.getlist("item_ids")
+            ordered_items = []
+            seen_ids = set()
+            for raw_id in item_ids:
+                try:
+                    item_id = int(raw_id)
+                except ValueError:
+                    return HttpResponseBadRequest("Invalid checklist item.")
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                item = task.checklist_items.filter(pk=item_id).first()
+                if not item:
+                    return HttpResponseBadRequest("Checklist item not found.")
+                ordered_items.append(item)
+            existing_items = list(task.checklist_items.all())
+            if len(ordered_items) != len(existing_items):
+                return HttpResponseBadRequest("Checklist reorder payload was incomplete.")
+            _resequence_checklist_items(task, ordered_items)
+            return JsonResponse({"ok": True})
 
+    task.detail_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
+    task.note_items = list(task.notes.order_by("created_at", "id"))
     return render(
         request,
         "workboard/task_detail.html",
-        {"task": task, "note_form": note_form, "status_form": status_form, "checklist_form": checklist_form},
+        {
+            "task": task,
+            "note_form": note_form,
+            "status_form": status_form,
+            "checklist_form": checklist_form,
+            "attachment_form": attachment_form,
+        },
     )
 
 
@@ -376,15 +604,27 @@ def password_change_view(request):
 def task_edit_view(request, pk):
     task = get_object_or_404(Task, pk=pk)
     if request.method == "POST":
+        previous_status = task.status
+        original_estimated_minutes = task.estimated_minutes
         form = TaskForm(request.POST, instance=task)
         if form.is_valid():
             updated_task = form.save(commit=False)
             updated_task = _ensure_task_due_date(updated_task)
+            updated_task = _append_task_to_status(updated_task, previous_status=previous_status)
             if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                 updated_task.mark_complete()
             elif updated_task.status != TaskStatus.DONE:
                 updated_task.completed_at = None
             updated_task.save()
+            TaskEstimateFeedbackService.record_feedback(
+                task=updated_task,
+                original_estimated_minutes=original_estimated_minutes,
+                corrected_estimated_minutes=updated_task.estimated_minutes,
+                corrected_by=request.user,
+                source="task_edit",
+            )
+            if previous_status != updated_task.status:
+                _close_status_gap(previous_status, exclude_pk=updated_task.pk)
             form.save_m2m()
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)

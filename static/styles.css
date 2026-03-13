@@ -435,3 +435,250 @@ tr:hover td {
     background: #0b5ea8;
     color: #ffffff;
 }
+
+
+.board-column-title {
+    cursor: grab;
+}
+
+.board-column.is-drop-target {
+    border-color: #5d8fbe;
+    box-shadow: 0 0 0 2px rgba(93, 143, 190, 0.25), 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.board-task-card {
+    cursor: grab;
+}
+
+.board-task-card.is-dragging,
+.board-column.is-dragging-column {
+    opacity: 0.55;
+}
+
+.board-help-text {
+    margin: 0.35rem 0 0;
+}
+
+.board-task-card.is-drop-before {
+    box-shadow: inset 0 4px 0 #5d8fbe, 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.board-column.has-drop-at-end {
+    box-shadow: inset 0 -4px 0 #5d8fbe, 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.my-tasks-groups {
+    display: grid;
+    gap: 1rem;
+}
+
+.task-bucket {
+    padding: 1rem;
+    background: linear-gradient(180deg, var(--paper-elevated) 0%, var(--paper) 100%);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.task-bucket-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.task-bucket-title {
+    margin: 0;
+}
+
+.task-bucket-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.task-bucket.is-drop-target {
+    border-color: #5d8fbe;
+    box-shadow: 0 0 0 2px rgba(93, 143, 190, 0.25), 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.task-bucket.has-drop-at-end .task-bucket-list {
+    box-shadow: inset 0 -4px 0 #5d8fbe;
+    border-radius: 12px;
+}
+
+
+.my-task-card {
+    min-height: 0;
+    padding: 0.8rem 0.9rem;
+    margin-bottom: 0;
+}
+
+.my-task-card article {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.my-task-card .board-task-title {
+    font-size: 1.05rem;
+}
+
+
+.task-detail-shell {
+    max-width: 1240px;
+}
+
+.task-detail-card {
+    display: grid;
+    gap: 1.5rem;
+    width: 100%;
+}
+
+.task-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.task-detail-header h1 {
+    margin-bottom: 0.75rem;
+}
+
+.task-detail-section {
+    display: grid;
+    gap: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+}
+
+.task-detail-section-tight {
+    gap: 0.75rem;
+}
+
+.task-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.inline-form {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.inline-form .form-control {
+    flex: 1 1 280px;
+}
+
+.inline-form-status .form-control {
+    max-width: 260px;
+}
+
+.checklist-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.checklist-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #0d141c;
+}
+
+.checklist-item.is-dragging {
+    opacity: 0.55;
+}
+
+.checklist-item.is-drop-before {
+    box-shadow: inset 0 4px 0 #5d8fbe;
+}
+
+.checklist-list.has-drop-at-end {
+    box-shadow: inset 0 -4px 0 #5d8fbe;
+    border-radius: 12px;
+}
+
+.checklist-grip {
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.checklist-add-form .form-control {
+    min-width: 320px;
+}
+
+.attachment-list {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.task-notes-list {
+    margin-top: 0.5rem;
+}
+
+@media (max-width: 900px) {
+    .task-detail-header,
+    .task-section-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+
+.checklist-grip {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    width: auto;
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    cursor: grab;
+}
+
+.checklist-title-input {
+    flex: 1 1 auto;
+}
+
+.checklist-title-text {
+    flex: 1 1 auto;
+    color: var(--ink);
+}
+
+.attachment-add-form .form-control {
+    flex: 1 1 320px;
+}
+
+
+.checklist-complete {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: #43b467;
+}
+
+.checklist-item.is-completed .checklist-title-input,
+.checklist-item.is-completed .checklist-title-text {
+    text-decoration: line-through;
+    color: var(--muted);
+}
+
+.checklist-delete {
+    width: auto;
+    margin-left: auto;
+    color: #f7c2c2 !important;
+}
+
+.checklist-delete:hover,
+.checklist-delete:focus-visible {
+    color: #ffffff !important;
+}

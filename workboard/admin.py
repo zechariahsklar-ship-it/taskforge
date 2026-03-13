@@ -48,6 +48,8 @@ class TaskNoteInline(admin.TabularInline):
 class TaskChecklistItemInline(admin.TabularInline):
     model = TaskChecklistItem
     extra = 0
+    fields = ("title", "position")
+    ordering = ("position", "id")
 
 
 class TaskAttachmentInline(admin.TabularInline):

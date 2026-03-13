@@ -15,6 +15,7 @@ from .models import (
     TaskNote,
     User,
     UserRole,
+    TaskStatus,
 )
 
 
@@ -121,6 +122,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         student_users = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
+        self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["assigned_to"].queryset = User.objects.order_by("role", "username")
         self.fields["additional_assignees"].queryset = student_users
         self.fields["additional_assignees"].required = False
@@ -141,6 +143,10 @@ class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
         model = Task
         fields = ["status"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
+
 
 class TaskNoteForm(StyledFormMixin, forms.ModelForm):
     class Meta:
@@ -152,7 +158,9 @@ class TaskNoteForm(StyledFormMixin, forms.ModelForm):
 class TaskChecklistItemForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = TaskChecklistItem
-        fields = ["title", "is_completed", "sort_order"]
+        fields = ["title"]
+        widgets = {"title": forms.TextInput(attrs={"placeholder": "Add checklist item"})}
+        labels = {"title": ""}
 
 
 class AppPasswordChangeForm(StyledFormMixin, PasswordChangeForm):

@@ -7,7 +7,7 @@ from urllib import error, request
 from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
-from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, TaskStatus, User, UserRole
+from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, TaskEstimateFeedback, TaskStatus, User, UserRole
 
 
 @dataclass
@@ -112,6 +112,34 @@ class TaskAssignmentService:
         return max(total_minutes - reserved_minutes, 0)
 
 
+class TaskEstimateFeedbackService:
+    @staticmethod
+    def record_feedback(*, task, original_estimated_minutes, corrected_estimated_minutes, corrected_by=None, source=""):
+        if corrected_estimated_minutes in (None, ""):
+            return None
+        try:
+            corrected_value = int(corrected_estimated_minutes)
+        except (TypeError, ValueError):
+            return None
+        original_value = None
+        if original_estimated_minutes not in (None, ""):
+            try:
+                original_value = int(original_estimated_minutes)
+            except (TypeError, ValueError):
+                original_value = None
+        if original_value == corrected_value:
+            return None
+        return TaskEstimateFeedback.objects.create(
+            task=task,
+            raw_message=getattr(task, "raw_message", "") or "",
+            task_title=getattr(task, "title", "") or "",
+            original_estimated_minutes=original_value,
+            corrected_estimated_minutes=corrected_value,
+            corrected_by=corrected_by,
+            source=source[:64],
+        )
+
+
 class TaskParsingService:
     @staticmethod
     def parser_settings() -> dict:
@@ -211,13 +239,28 @@ class TaskParsingService:
         )
 
     @staticmethod
+    def _build_estimate_feedback_examples(limit: int = 5) -> str:
+        feedback_items = list(TaskEstimateFeedback.objects.exclude(raw_message="").order_by("-created_at")[:limit])
+        if not feedback_items:
+            return ""
+        lines = ["Use these recent estimate corrections as examples when judging estimated_minutes:"]
+        for item in feedback_items:
+            original = item.original_estimated_minutes if item.original_estimated_minutes is not None else "none"
+            lines.append(
+                f"- Title: {item.task_title or 'Untitled'} | Original estimate: {original} | Corrected estimate: {item.corrected_estimated_minutes} | Request excerpt: {item.raw_message[:180]}"
+            )
+        return " ".join(lines)
+
+    @staticmethod
     def _parse_with_openai(raw_message: str, attachment_names: list[str], settings: dict) -> ParsedTaskData:
         today = str(timezone.localdate())
+        feedback_examples = TaskParsingService._build_estimate_feedback_examples()
         prompt = (
             "Extract a structured internal task from the supervisor message. "
             "Return strict JSON matching the schema. Use ISO date format YYYY-MM-DD when the due date can be inferred; otherwise return null for due_date. "
             "Interpret relative dates carefully from today's date. For example, if today is Thursday and the message says next Friday, use the Friday of the following week, not tomorrow. "
-            f"Today is {today}. Attachment names: {', '.join(attachment_names) if attachment_names else 'none'}."
+            f"Today is {today}. Attachment names: {', '.join(attachment_names) if attachment_names else 'none'}. "
+            f"{feedback_examples}"
         )
         payload = {
             "model": settings["model"],
