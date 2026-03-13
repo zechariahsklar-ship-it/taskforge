@@ -38,7 +38,7 @@
         <dl class="detail-list">
             <dt>Status</dt><dd>{{ task.get_status_display }}</dd>
             <dt>Priority</dt><dd>{{ task.get_priority_display }}</dd>
-            <dt>Assigned To</dt><dd>{% if task.assigned_to %}{{ task.assigned_to.display_label }}{% else %}Unassigned{% endif %}</dd>
+            <dt>Assigned To</dt><dd>{{ task.assignee_labels }}</dd>
             <dt>Requested By</dt><dd>{{ task.requested_by.username|default:"Unknown" }}</dd>
             <dt>Due</dt><dd>{{ task.due_date|default:task.raw_due_text|default:"Not set" }}</dd>
             <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>

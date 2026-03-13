@@ -4,7 +4,7 @@ from functools import wraps
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Prefetch, Q, Sum
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
@@ -84,6 +84,16 @@ def _build_checklist_editor_rows(values: list[str]) -> list[str]:
     return (rows or [""]) + [""]
 
 
+def _ensure_task_due_date(task: Task) -> Task:
+    if task.due_date:
+        return task
+    _, fallback_due_date = TaskParsingService._priority_due_date(task.priority)
+    task.due_date = fallback_due_date
+    if not task.raw_due_text:
+        task.raw_due_text = f"Priority-based default for {task.priority}"
+    return task
+
+
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
     raw_due_text = (initial.get("raw_due_text") or "").strip()
     parsed_due_date = TaskParsingService._parse_due_date(initial.get("due_date"))
@@ -157,11 +167,13 @@ def dashboard(request):
 
 @app_login_required
 def board_view(request):
-    tasks = Task.objects.select_related("assigned_to", "requested_by").all()
+    tasks = list(Task.objects.select_related("assigned_to", "requested_by").prefetch_related("additional_assignees").all())
     if request.user.role == UserRole.STUDENT_WORKER:
-        tasks = tasks.filter(assigned_to=request.user)
+        tasks = [task for task in tasks if task.assigned_to_id == request.user.id or any(user.id == request.user.id for user in task.additional_assignees.all())]
+    for task in tasks:
+        task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
     grouped_tasks = [
-        {"value": status, "label": TaskStatus(status).label, "tasks": tasks.filter(status=status)}
+        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status == status]}
         for status in BOARD_COLUMNS
     ]
     return render(request, "workboard/board.html", {"grouped_tasks": grouped_tasks})
@@ -169,7 +181,12 @@ def board_view(request):
 
 @app_login_required
 def my_tasks_view(request):
-    tasks = Task.objects.filter(assigned_to=request.user).select_related("requested_by")
+    tasks = (
+        Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user))
+        .select_related("requested_by", "assigned_to")
+        .prefetch_related("additional_assignees")
+        .distinct()
+    )
     return render(request, "workboard/my_tasks.html", {"tasks": tasks})
 
 
@@ -215,6 +232,7 @@ def task_intake_review_view(request, pk):
         if form.is_valid():
             task = form.save(commit=False)
             task.created_by = request.user
+            task = _ensure_task_due_date(task)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -225,6 +243,7 @@ def task_intake_review_view(request, pk):
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
+            form.save_m2m()
             for attachment in draft.attachments.all():
                 TaskAttachment.objects.create(
                     task=task,
@@ -266,6 +285,7 @@ def task_create_view(request):
         if form.is_valid():
             task = form.save(commit=False)
             task.created_by = request.user
+            task = _ensure_task_due_date(task)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -276,6 +296,7 @@ def task_create_view(request):
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
+            form.save_m2m()
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
@@ -285,8 +306,8 @@ def task_create_view(request):
 
 @app_login_required
 def task_detail_view(request, pk):
-    task = get_object_or_404(Task.objects.select_related("assigned_to", "requested_by", "created_by"), pk=pk)
-    if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id:
+    task = get_object_or_404(Task.objects.select_related("assigned_to", "requested_by", "created_by").prefetch_related("additional_assignees"), pk=pk)
+    if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only view tasks assigned to you.")
 
     note_form = TaskNoteForm()
@@ -358,11 +379,13 @@ def task_edit_view(request, pk):
         form = TaskForm(request.POST, instance=task)
         if form.is_valid():
             updated_task = form.save(commit=False)
+            updated_task = _ensure_task_due_date(updated_task)
             if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                 updated_task.mark_complete()
             elif updated_task.status != TaskStatus.DONE:
                 updated_task.completed_at = None
             updated_task.save()
+            form.save_m2m()
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:

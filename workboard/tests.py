@@ -261,3 +261,102 @@ class TaskParsingFallbackTests(TestCase):
         self.assertIn("OPENAI_API_KEY is missing, so the app used the mock parser.", parsed.parser_warnings)
         self.assertTrue(any("Parser mode: mock" in item for item in parsed.assignment_rationale))
         self.assertEqual(parsed.assigned_to_id, self.supervisor.id)
+
+
+class TaskCreateDueDateFallbackTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="create-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_direct_task_create_applies_priority_due_date_fallback(self):
+        with patch("workboard.views.TaskParsingService._priority_due_date", return_value=(date(2026, 3, 15), date(2026, 3, 16))):
+            response = self.client.post(
+                reverse("task-create"),
+                {
+                    "title": "Manual task",
+                    "raw_message": "",
+                    "description": "Manual task without explicit due date",
+                    "priority": Priority.HIGH,
+                    "status": TaskStatus.NEW,
+                    "due_date": "",
+                    "raw_due_text": "",
+                    "waiting_person": "",
+                    "respond_to_text": "",
+                    "estimated_minutes": "30",
+                    "assigned_to": "",
+                    "requested_by": "",
+                    "recurring_task": "",
+                    "recurrence_pattern": "",
+                    "recurrence_interval": "",
+                    "recurrence_day_of_week": "",
+                    "recurrence_day_of_month": "",
+                },
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Manual task")
+        self.assertEqual(task.due_date, date(2026, 3, 16))
+        self.assertEqual(task.raw_due_text, "Priority-based default for high")
+
+
+class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="sup-vis", password="password123", role=UserRole.SUPERVISOR)
+        self.primary_student = User.objects.create_user(username="alex-vis", password="password123", role=UserRole.STUDENT_WORKER)
+        self.extra_student = User.objects.create_user(username="jordan-vis", password="password123", role=UserRole.STUDENT_WORKER)
+        self.other_student = User.objects.create_user(username="other-vis", password="password123", role=UserRole.STUDENT_WORKER)
+        self.task = Task.objects.create(
+            title="Shared task",
+            description="A task with multiple assignees",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.primary_student,
+            created_by=self.supervisor,
+        )
+        self.task.additional_assignees.add(self.extra_student)
+
+    def test_student_my_tasks_includes_additional_assignee_tasks(self):
+        self.client.force_login(self.extra_student)
+        response = self.client.get(reverse("my-tasks"))
+        self.assertContains(response, "Shared task")
+
+    def test_other_student_cannot_view_shared_task_detail(self):
+        self.client.force_login(self.other_student)
+        response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_supervisor_can_set_additional_assignees_on_create(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Supervisor created shared task",
+                "raw_message": "",
+                "description": "Supervisor task",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": str(self.primary_student.pk),
+                "additional_assignees": [str(self.primary_student.pk), str(self.extra_student.pk)],
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Supervisor created shared task")
+        self.assertEqual(task.assigned_to, self.primary_student)
+        self.assertEqual(list(task.additional_assignees.values_list("id", flat=True)), [self.extra_student.id])

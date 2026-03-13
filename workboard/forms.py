@@ -105,6 +105,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "respond_to_text",
             "estimated_minutes",
             "assigned_to",
+            "additional_assignees",
             "requested_by",
             "recurring_task",
             "recurrence_pattern",
@@ -119,8 +120,20 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        student_users = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
         self.fields["assigned_to"].queryset = User.objects.order_by("role", "username")
+        self.fields["additional_assignees"].queryset = student_users
+        self.fields["additional_assignees"].required = False
+        self.fields["additional_assignees"].widget = forms.SelectMultiple(attrs={"class": "form-control", "size": 6})
         self.fields["requested_by"].queryset = User.objects.order_by("username")
+
+    def clean(self):
+        cleaned_data = super().clean()
+        assigned_to = cleaned_data.get("assigned_to")
+        additional_assignees = cleaned_data.get("additional_assignees")
+        if assigned_to and additional_assignees:
+            cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
+        return cleaned_data
 
 
 class TaskUpdateForm(StyledFormMixin, forms.ModelForm):

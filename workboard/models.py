@@ -172,6 +172,12 @@ class Task(models.Model):
         on_delete=models.SET_NULL,
         related_name="assigned_tasks",
     )
+    additional_assignees = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name="collaborative_tasks",
+        limit_choices_to={"role": UserRole.STUDENT_WORKER},
+    )
     requested_by = models.ForeignKey(
         User,
         null=True,
@@ -211,6 +217,16 @@ class Task(models.Model):
     def mark_complete(self):
         self.status = TaskStatus.DONE
         self.completed_at = timezone.now()
+
+    @property
+    def assignee_labels(self):
+        labels = []
+        if self.assigned_to:
+            labels.append(self.assigned_to.display_label)
+        for user in self.additional_assignees.all():
+            if user != self.assigned_to:
+                labels.append(user.display_label)
+        return ", ".join(labels) if labels else "Unassigned"
 
 
 class TaskNote(models.Model):

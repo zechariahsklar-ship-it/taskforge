@@ -473,6 +473,20 @@ class TaskParsingService:
         return parsed
 
     @staticmethod
+    def _priority_due_date(priority: str, base_date: date | None = None) -> tuple[date, date]:
+        days_by_priority = {
+            Priority.URGENT: 0,
+            Priority.HIGH: 2,
+            Priority.MEDIUM: 4,
+            Priority.LOW: 7,
+        }
+        start_date = base_date or timezone.localdate()
+        fallback_days = days_by_priority.get(priority, 4)
+        base_due_date = start_date + timedelta(days=fallback_days)
+        fallback_due_date = TaskParsingService._roll_weekend_to_monday(base_due_date)
+        return base_due_date, fallback_due_date
+
+    @staticmethod
     def _apply_due_date_rules(parsed: ParsedTaskData) -> ParsedTaskData:
         parsed_due_date = TaskParsingService._parse_due_date(parsed.due_date)
         if parsed_due_date:
@@ -490,21 +504,13 @@ class TaskParsingService:
                 parsed.due_date_warning = f"The confirmed due date was adjusted to the next Monday: {parsed.due_date}."
             return parsed
 
-        days_by_priority = {
-            Priority.URGENT: 0,
-            Priority.HIGH: 2,
-            Priority.MEDIUM: 4,
-            Priority.LOW: 7,
-        }
         labels_by_priority = {
             Priority.URGENT: "urgent",
             Priority.HIGH: "high",
             Priority.MEDIUM: "medium",
             Priority.LOW: "low",
         }
-        fallback_days = days_by_priority.get(parsed.priority, 4)
-        base_due_date = timezone.localdate() + timedelta(days=fallback_days)
-        fallback_due_date = TaskParsingService._roll_weekend_to_monday(base_due_date)
+        base_due_date, fallback_due_date = TaskParsingService._priority_due_date(parsed.priority)
         parsed.due_date = str(fallback_due_date)
         parsed.due_date_source = "priority_default"
         parsed.due_date_original = str(base_due_date)

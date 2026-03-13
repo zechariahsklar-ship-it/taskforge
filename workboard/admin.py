@@ -60,6 +60,7 @@ class TaskAdmin(admin.ModelAdmin):
     list_display = ("title", "priority", "status", "assigned_to", "due_date", "recurring_task")
     list_filter = ("priority", "status", "recurring_task")
     search_fields = ("title", "description", "raw_message")
+    filter_horizontal = ("additional_assignees",)
     inlines = [TaskChecklistItemInline, TaskAttachmentInline, TaskNoteInline]
 
 

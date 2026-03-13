@@ -1,16 +1,19 @@
 <!DOCTYPE html>
+{% load static %}
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}TaskForge{% endblock %}</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260313n">
 </head>
 <body>
     <header class="site-header">
         <div>
-            <a href="{% url 'dashboard' %}" class="brand">TaskForge</a>
-            <p class="subtitle">Internal task management for student workers</p>
+            <a href="{% url 'dashboard' %}" class="brand-lockup">
+                <span class="brand">TaskForge</span>
+                <img src="{% static 'taskforge-mark.png' %}" alt="" class="brand-mark">
+            </a>
         </div>
         {% if request.user.is_authenticated %}
             <nav class="site-nav">
@@ -30,7 +33,7 @@
             </nav>
         {% endif %}
     </header>
-    <main class="page-shell">
+    <main class="page-shell {% block page_shell_class %}{% endblock %}">
         {% if messages %}
             <ul class="messages">
                 {% for message in messages %}

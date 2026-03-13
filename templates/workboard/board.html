@@ -1,27 +1,34 @@
 {% extends "base.html" %}
 
 {% block title %}Board | TaskForge{% endblock %}
+{% block page_shell_class %}page-shell-board{% endblock %}
 
 {% block content %}
 <section class="page-heading">
     <h1>Task board</h1>
-    <p>Shared status view for supervisor oversight and worker execution.</p>
 </section>
+<section class="board-shell">
 <section class="board-grid">
     {% for column in grouped_tasks %}
         <div class="board-column">
             <h2>{{ column.label }}</h2>
             {% for task in column.tasks %}
-                <article class="task-card">
-                    <p class="eyebrow">{{ task.get_priority_display }}</p>
-                    <h3><a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a></h3>
-                    <p>{{ task.description|default:task.raw_message|truncatechars:100 }}</p>
-                    <p class="meta">Assigned: {% if task.assigned_to %}{{ task.assigned_to.display_label }}{% else %}Unassigned{% endif %}</p>
-                </article>
+                <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card">
+                    <article>
+                        <h3 class="board-task-title">{{ task.title }}</h3>
+                        <div class="board-task-meta-row">
+                            <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                            <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
+                        </div>
+                        <p class="board-task-description">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
+                        <p class="meta board-task-assignee">Assigned: {{ task.assignee_labels }}</p>
+                    </article>
+                </a>
             {% empty %}
                 <p class="empty-state">No tasks.</p>
             {% endfor %}
         </div>
     {% endfor %}
+</section>
 </section>
 {% endblock %}
