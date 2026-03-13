@@ -102,7 +102,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "status",
             "due_date",
             "raw_due_text",
-            "waiting_person",
             "respond_to_text",
             "estimated_minutes",
             "assigned_to",
@@ -127,6 +126,8 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["additional_assignees"].queryset = student_users
         self.fields["additional_assignees"].required = False
         self.fields["additional_assignees"].widget = forms.SelectMultiple(attrs={"class": "form-control", "size": 6})
+        self.fields["respond_to_text"].label = "Notify when done"
+        self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
         self.fields["requested_by"].queryset = User.objects.order_by("username")
 
     def clean(self):

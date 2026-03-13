@@ -14,6 +14,7 @@ urlpatterns = [
     path("tasks/new/", views.task_create_view, name="task-create"),
     path("tasks/<int:pk>/", views.task_detail_view, name="task-detail"),
     path("tasks/<int:pk>/edit/", views.task_edit_view, name="task-edit"),
+    path("tasks/<int:pk>/delete/", views.task_delete_view, name="task-delete"),
     path("recurring/new/", views.recurring_template_create_view, name="recurring-create"),
     path("workers/", views.worker_list_view, name="worker-list"),
     path("workers/new/", views.worker_profile_create_view, name="worker-create"),

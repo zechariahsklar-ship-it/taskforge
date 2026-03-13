@@ -374,7 +374,7 @@ def task_intake_review_view(request, pk):
                     file=attachment.file.name,
                     original_name=attachment.original_name,
                 )
-            checklist_items = _normalize_checklist_rows(checklist_values)
+            checklist_items = TaskParsingService._append_notify_checklist_item(_normalize_checklist_rows(checklist_values), task.respond_to_text)
             for index, title in enumerate(checklist_items, start=1):
                 TaskChecklistItem.objects.create(task=task, title=title, position=index)
             messages.success(request, "Task created from intake request.")
@@ -631,6 +631,20 @@ def task_edit_view(request, pk):
     else:
         form = TaskForm(instance=task)
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Edit task"})
+
+
+@supervisor_required
+def task_delete_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    task = get_object_or_404(Task, pk=pk)
+    previous_status = task.status
+    delete_title = task.title
+    task.delete()
+    _close_status_gap(_board_bucket_status(previous_status), exclude_pk=0)
+    messages.success(request, f'Task "{delete_title}" deleted.')
+    return redirect("board")
 
 
 @supervisor_required

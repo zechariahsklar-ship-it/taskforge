@@ -682,3 +682,24 @@ tr:hover td {
 .checklist-delete:focus-visible {
     color: #ffffff !important;
 }
+
+
+.task-delete-form {
+    margin-top: 1rem;
+}
+
+.task-delete-button {
+    width: auto;
+    background: #5b0d0d;
+    border: 1px solid #d94a4a;
+    color: #ffd5d5 !important;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    text-decoration: none;
+}
+
+.task-delete-button:hover,
+.task-delete-button:focus-visible {
+    background: #7a1717;
+    color: #ffffff !important;
+}

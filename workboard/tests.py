@@ -80,6 +80,20 @@ class TaskParsingServiceTests(TestCase):
         self.assertEqual(updated.due_date_original, "2026-03-20")
 
 
+    def test_notify_contact_is_normalized_and_appended_to_checklist(self):
+        parsed = TaskParsingService.parse_request(
+            "Lookup and deduplicate records for Billy Bob, Sally May, and Todd Blanch in Slate. Let Billy Bob know when it is done.",
+            fallback_supervisor=self.build_supervisor_for_parse(),
+        )
+
+        self.assertEqual(parsed.waiting_person, "")
+        self.assertEqual(parsed.respond_to_text, "Billy Bob")
+        self.assertEqual(parsed.checklist_items[-1], "Notify Billy Bob when task is complete")
+
+    def build_supervisor_for_parse(self):
+        return User.objects.create_user(username="parse-supervisor-temp", password="password123", role=UserRole.SUPERVISOR)
+
+
 class TaskIntakeReviewViewTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(
@@ -100,7 +114,7 @@ class TaskIntakeReviewViewTests(TestCase):
                 "due_date": "2026-03-20",
                 "raw_due_text": "next Friday",
                 "waiting_person": "",
-                "respond_to_text": "",
+                "respond_to_text": "Billy Bob",
                 "estimated_minutes": 30,
                 "assigned_to_id": None,
                 "assignment_summary": "",
@@ -137,7 +151,7 @@ class TaskIntakeReviewViewTests(TestCase):
                 "due_date": "2026-03-20",
                 "raw_due_text": "next Friday",
                 "waiting_person": "",
-                "respond_to_text": "",
+                "respond_to_text": "Billy Bob",
                 "estimated_minutes": "30",
                 "assigned_to": "",
                 "requested_by": "",
@@ -155,7 +169,7 @@ class TaskIntakeReviewViewTests(TestCase):
         task = Task.objects.get(title="Finish update")
         self.assertEqual(
             list(task.checklist_items.values_list("title", flat=True)),
-            ["Review request", "Send response"],
+            ["Review request", "Send response", "Notify Billy Bob when task is complete"],
         )
 
 
@@ -645,6 +659,13 @@ class TaskDetailChecklistTests(TestCase):
         response = self.client.get(reverse("task-detail", args=[self.task.pk]))
         content = response.content.decode()
         self.assertLess(content.index("First note"), content.index("Second note"))
+
+
+    def test_supervisor_can_delete_task(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(reverse("task-delete", args=[self.task.pk]), follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Task.objects.filter(pk=self.task.pk).exists())
 
 
 class TaskEstimateFeedbackTests(TestCase):

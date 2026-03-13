@@ -180,8 +180,10 @@ class TaskParsingService:
             parsed.parser_warnings.append("Attachments were stored, but the parser currently uses message text and attachment names only.")
         parsed = TaskParsingService._apply_priority_and_due_date_fallbacks(parsed)
         parsed = TaskParsingService._apply_due_date_rules(parsed)
-        if not parsed.respond_to_text and any(word in raw_message.lower() for word in ["reply", "respond", "email"]):
-            parsed.parser_warnings.append("A response action may be needed, but no explicit respond-to text was extracted.")
+        parsed.respond_to_text = TaskParsingService._normalize_notify_contact(parsed.respond_to_text)
+        parsed.checklist_items = TaskParsingService._append_notify_checklist_item(parsed.checklist_items, parsed.respond_to_text)
+        if not parsed.respond_to_text and any(word in raw_message.lower() for word in ["reply", "respond", "email", "let", "tell", "notify"]):
+            parsed.parser_warnings.append("A follow-up contact may be needed, but no clear notify person was extracted.")
         parsed.parser_confidence = TaskParsingService._calculate_parser_confidence(parsed)
         if confidence_override:
             parsed.parser_confidence = confidence_override
@@ -220,7 +222,7 @@ class TaskParsingService:
             due_date=due_date,
             raw_due_text=raw_due_text,
             waiting_person="",
-            respond_to_text="",
+            respond_to_text=TaskParsingService._infer_notify_contact(raw_message),
             estimated_minutes=estimated_minutes,
             assigned_to_id=None,
             assignment_summary="",
@@ -282,7 +284,7 @@ class TaskParsingService:
                             "due_date": {"type": ["string", "null"]},
                             "raw_due_text": {"type": "string"},
                             "waiting_person": {"type": "string"},
-                            "respond_to_text": {"type": "string"},
+                            "respond_to_text": {"type": "string", "description": "Short name of the person or office to notify when the task is complete. Return a contact name only, not a full sentence."},
                             "estimated_minutes": {"type": ["integer", "null"]},
                             "checklist_items": {
                                 "type": "array",
@@ -351,8 +353,8 @@ class TaskParsingService:
             priority=priority,
             due_date=due_date,
             raw_due_text=raw_due_text,
-            waiting_person=(parsed.get("waiting_person") or "")[:255],
-            respond_to_text=(parsed.get("respond_to_text") or "")[:255],
+            waiting_person="",
+            respond_to_text=TaskParsingService._normalize_notify_contact((parsed.get("respond_to_text") or "")[:255]),
             estimated_minutes=TaskParsingService._normalize_estimated_minutes(parsed.get("estimated_minutes")),
             assigned_to_id=None,
             assignment_summary="",
@@ -444,6 +446,66 @@ class TaskParsingService:
             return "parsed", False, "medium"
         return "parsed", True, "medium"
 
+
+    @staticmethod
+    def _normalize_notify_contact(value: str) -> str:
+        contact = (value or "").strip()
+        if not contact:
+            return ""
+        lowered = contact.lower()
+        prefixes = [
+            "respond to ",
+            "reply to ",
+            "email ",
+            "let ",
+            "notify ",
+            "tell ",
+            "follow up with ",
+            "send to ",
+            "contact ",
+        ]
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                contact = contact[len(prefix):].strip()
+                lowered = contact.lower()
+                break
+        for splitter in [" know when ", " when ", " after ", " once ", " about ", " regarding ", ":"]:
+            idx = lowered.find(splitter)
+            if idx > 0:
+                contact = contact[:idx].strip(' .,!;:-')
+                lowered = contact.lower()
+        if lowered.endswith(" know"):
+            contact = contact[:-5].strip(' .,!;:-')
+            lowered = contact.lower()
+        generic_values = {"student worker", "worker", "supervisor", "someone", "them", "him", "her", "team", "staff"}
+        if lowered in generic_values or len(contact) > 120:
+            return ""
+        return contact.strip(' .,!;:-')[:255]
+
+    @staticmethod
+    def _infer_notify_contact(raw_message: str) -> str:
+        lowered = raw_message.lower()
+        patterns = ["let ", "tell ", "notify ", "email ", "reply to ", "respond to ", "send to "]
+        for pattern in patterns:
+            index = lowered.find(pattern)
+            if index >= 0:
+                snippet = raw_message[index + len(pattern):]
+                for splitter in [" when ", " after ", " once ", " about ", " regarding ", ".", "\n", ","]:
+                    lowered_snippet = snippet.lower()
+                    split_index = lowered_snippet.find(splitter)
+                    if split_index > 0:
+                        snippet = snippet[:split_index]
+                        break
+                return TaskParsingService._normalize_notify_contact(snippet)
+        return ""
+
+    @staticmethod
+    def _append_notify_checklist_item(items: list[str], notify_contact: str) -> list[str]:
+        deduped = TaskParsingService._dedupe_checklist_items(items)
+        if not notify_contact:
+            return deduped
+        follow_up_item = f"Notify {notify_contact} when task is complete"
+        return [item for item in deduped if item != follow_up_item] + [follow_up_item]
 
     @staticmethod
     def _dedupe_checklist_items(items: list[str]) -> list[str]:
