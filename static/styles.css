@@ -41,8 +41,8 @@ body a:focus-visible {
     left: 0;
     right: 0;
     z-index: 1000;
-    width: 100vw;
-    min-width: 100vw;
+    width: 100%;
+    min-width: 0;
     display: flex;
     justify-content: space-between;
     gap: 1rem;
@@ -94,16 +94,15 @@ body a:focus-visible {
 }
 
 .page-shell-board {
-    max-width: none;
-    width: max-content;
-    min-width: 100%;
-    padding-right: 2rem;
+    max-width: 1700px;
+    width: 100%;
+    min-width: 0;
     padding-top: 0.5rem;
 }
 
 .board-shell {
-    width: max-content;
-    min-width: 100%;
+    width: 100%;
+    margin: 0 auto;
 }
 
 .site-nav a,
@@ -146,10 +145,11 @@ body a:focus-visible {
 
 .board-grid {
     display: grid;
-    grid-template-columns: repeat(6, 300px);
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 1rem;
-    width: max-content;
-    min-width: max-content;
+    width: 100%;
+    min-width: 0;
+    align-items: start;
 }
 
 .board-column {

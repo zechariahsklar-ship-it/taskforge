@@ -13,11 +13,9 @@
         <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name"></p>
         {{ form.as_p }}
         <h2>Weekly hours</h2>
-        <p>Set how many hours this student usually works on each day.</p>
+        <p>Set how many hours this {{ worker_type_label|default:"student" }} usually works on each day.</p>
         {{ weekly_form.as_p }}
         <button type="submit">{{ submit_label|default:"Create student" }}</button>
     </form>
 </section>
 {% endblock %}
-
-

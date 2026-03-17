@@ -7,6 +7,7 @@
     <h1>People</h1>
     <div class="inline-form">
         <a class="button-link" href="{% url 'worker-create' %}">Add student</a>
+        <a class="button-link" href="{% url 'student-supervisor-create' %}">Add student supervisor</a>
         <a class="button-link" href="{% url 'supervisor-create' %}">Add supervisor</a>
     </div>
 </section>
@@ -49,6 +50,44 @@
     </table>
 </section>
 <section class="table-card">
+    <h2>Student supervisors</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Active</th>
+                <th>Max Hours/Day</th>
+                <th>Open Tasks</th>
+                <th>Estimated Minutes</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in student_supervisors %}
+                <tr>
+                    <td>{{ item.profile.display_name }}</td>
+                    <td>{{ item.profile.email }}</td>
+                    <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td>{{ item.profile.max_hours_per_day }}</td>
+                    <td>{{ item.workload.active_tasks|default:0 }}</td>
+                    <td>{{ item.workload.estimated_minutes|default:0 }}</td>
+                    <td>
+                        <a href="{% url 'worker-availability' item.profile.pk %}">Edit worker</a><br>
+                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a><br>
+                        <form method="post" action="{% url 'worker-delete' item.profile.user.pk %}" onsubmit="return window.confirm('Remove this student supervisor? Assigned tasks will be reassigned to you.');">
+                            {% csrf_token %}
+                            <button type="submit" class="link-button">Remove student supervisor</button>
+                        </form>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">No student supervisors yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+<section class="table-card">
     <h2>Supervisors</h2>
     <table>
         <thead>
@@ -85,4 +124,3 @@
     </table>
 </section>
 {% endblock %}
-

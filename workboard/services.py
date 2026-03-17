@@ -44,12 +44,12 @@ class TaskAssignmentService:
     @staticmethod
     def suggest_assignee(*, due_date, estimated_minutes, fallback_supervisor=None, exclude_user_ids=None):
         supervisors = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True).order_by("username")
-        students = StudentWorkerProfile.objects.filter(active_status=True, user__role=UserRole.STUDENT_WORKER).select_related("user")
+        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
         if exclude_user_ids:
-            students = students.exclude(user_id__in=exclude_user_ids)
+            workers = workers.exclude(user_id__in=exclude_user_ids)
 
         viable = []
-        for profile in students:
+        for profile in workers:
             capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
             open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
             last_assigned_at = (
@@ -68,11 +68,11 @@ class TaskAssignmentService:
         )
         if viable:
             profile, capacity, _, _ = viable[0]
-            summary = f"Suggested student: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
+            summary = f"Suggested worker: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
             rationale = [
                 f"Recommended assignee: {profile.display_name}",
                 f"Estimated open capacity before due date: {int(capacity)} minutes",
-                "Selection favors workers with enough capacity and lighter recent assignment rotation.",
+                "Selection favors worker-level teammates with enough capacity and lighter recent assignment rotation.",
             ]
             return profile.user, summary, rationale
 
@@ -93,9 +93,9 @@ class TaskAssignmentService:
         if supervisor is None and fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
             supervisor = fallback_supervisor
         if supervisor:
-            return supervisor, "No student has enough available capacity before the due date, so this task should be assigned to the next available supervisor in rotation.", [
+            return supervisor, "No worker has enough available capacity before the due date, so this task should be assigned to the next available supervisor in rotation.", [
                 f"Recommended assignee: {supervisor.display_label}",
-                "No student currently has enough available hours before the due date window.",
+                "No worker currently has enough available hours before the due date window.",
                 "Fallback rule assigned the task using supervisor rotation.",
             ]
         return None, "No eligible assignee found.", ["No eligible assignee found."]

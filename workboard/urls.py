@@ -22,6 +22,7 @@ urlpatterns = [
     path("recurring/<int:pk>/move/", views.recurring_template_move_view, name="recurring-move"),
     path("workers/", views.worker_list_view, name="worker-list"),
     path("workers/new/", views.worker_profile_create_view, name="worker-create"),
+    path("workers/student-supervisors/new/", views.student_supervisor_create_view, name="student-supervisor-create"),
     path("workers/supervisors/new/", views.supervisor_create_view, name="supervisor-create"),
     path("workers/<int:pk>/availability/", views.worker_availability_view, name="worker-availability"),
     path("workers/<int:pk>/delete/", views.worker_profile_delete_view, name="worker-delete"),
@@ -29,5 +30,3 @@ urlpatterns = [
     path("workers/supervisors/<int:pk>/edit/", views.supervisor_edit_view, name="supervisor-edit"),
     path("workers/supervisors/<int:pk>/delete/", views.supervisor_delete_view, name="supervisor-delete"),
 ]
-
-

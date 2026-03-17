@@ -18,7 +18,7 @@ class Command(BaseCommand):
             next_order = (Task.objects.filter(status=TaskStatus.NEW).aggregate(max_order=Max("board_order")).get("max_order") or 0) + 1
             last_generated_task = template.generated_tasks.exclude(assigned_to__isnull=True).order_by("-created_at", "-pk").first()
             exclude_user_ids = []
-            if last_generated_task and User.objects.filter(role=UserRole.STUDENT_WORKER, worker_profile__active_status=True).exclude(pk=last_generated_task.assigned_to_id).exists():
+            if last_generated_task and User.objects.filter(role__in=UserRole.worker_roles(), worker_profile__active_status=True).exclude(pk=last_generated_task.assigned_to_id).exists():
                 exclude_user_ids = [last_generated_task.assigned_to_id]
 
             assigned_to = template.assign_to if last_generated_task is None else None

@@ -7,7 +7,12 @@ from django.utils import timezone
 
 class UserRole(models.TextChoices):
     SUPERVISOR = "supervisor", "Supervisor"
+    STUDENT_SUPERVISOR = "student_supervisor", "Student Supervisor"
     STUDENT_WORKER = "student_worker", "Student Worker"
+
+    @classmethod
+    def worker_roles(cls):
+        return [cls.STUDENT_WORKER, cls.STUDENT_SUPERVISOR]
 
 
 class Priority(models.TextChoices):
@@ -50,6 +55,22 @@ class User(AbstractUser):
     @property
     def is_supervisor(self):
         return self.role == UserRole.SUPERVISOR
+
+    @property
+    def is_student_supervisor(self):
+        return self.role == UserRole.STUDENT_SUPERVISOR
+
+    @property
+    def is_worker_role(self):
+        return self.role in UserRole.worker_roles()
+
+    @property
+    def can_view_full_board(self):
+        return self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
+
+    @property
+    def can_edit_tasks(self):
+        return self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
 
     @property
     def display_label(self):
@@ -120,7 +141,7 @@ class RecurringTaskTemplate(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="recurring_templates",
-        limit_choices_to={"role": UserRole.STUDENT_WORKER},
+        limit_choices_to={"role__in": UserRole.worker_roles()},
     )
     requested_by = models.ForeignKey(
         User,
@@ -188,7 +209,7 @@ class Task(models.Model):
         User,
         blank=True,
         related_name="collaborative_tasks",
-        limit_choices_to={"role": UserRole.STUDENT_WORKER},
+        limit_choices_to={"role__in": UserRole.worker_roles()},
     )
     requested_by = models.ForeignKey(
         User,

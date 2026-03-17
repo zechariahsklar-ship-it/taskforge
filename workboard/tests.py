@@ -645,6 +645,62 @@ class MyTasksViewOrderingTests(TestCase):
         self.assertIn(waiting_task, waiting_column["tasks"])
 
 
+class StudentSupervisorPermissionsTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="lead-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.student_supervisor = User.objects.create_user(username="student-lead", password="password123", role=UserRole.STUDENT_SUPERVISOR)
+        self.worker = User.objects.create_user(username="board-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        StudentWorkerProfile.objects.create(
+            user=self.student_supervisor,
+            display_name="Student Lead",
+            email="lead@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.worker,
+            display_name="Board Worker",
+            email="worker@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+        self.task = Task.objects.create(
+            title="Shared board task",
+            description="Visible to the student supervisor",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.worker,
+            created_by=self.supervisor,
+            board_order=1,
+        )
+
+    def test_student_supervisor_sees_full_board_and_can_open_task_edit(self):
+        self.client.force_login(self.student_supervisor)
+
+        board_response = self.client.get(reverse("board"))
+        self.assertEqual(board_response.status_code, 200)
+        self.assertContains(board_response, "Shared board task")
+
+        detail_response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, reverse("task-edit", args=[self.task.pk]))
+
+        edit_response = self.client.get(reverse("task-edit", args=[self.task.pk]))
+        self.assertEqual(edit_response.status_code, 200)
+
+    def test_student_supervisor_cannot_create_tasks(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("task-create"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_student_supervisor_can_move_other_workers_task_on_board(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.post(reverse("board-task-move", args=[self.task.pk]), {"status": TaskStatus.IN_PROGRESS})
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, TaskStatus.IN_PROGRESS)
+
+
 class BoardTaskMoveTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="move-sup", password="password123", role=UserRole.SUPERVISOR)
@@ -961,7 +1017,9 @@ class PeopleManagementTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("worker-create"))
+        self.assertContains(response, reverse("student-supervisor-create"))
         self.assertContains(response, reverse("supervisor-create"))
+        self.assertContains(response, "Student supervisors")
         self.assertContains(response, "Remove supervisor")
         self.assertContains(response, "Edit worker")
         self.assertNotContains(response, "Manage student workers, supervisors, and assignment availability.")
@@ -1089,6 +1147,36 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.WEDNESDAY).hours_available, 2)
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.THURSDAY).hours_available, 4)
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.FRIDAY).hours_available, 1)
+    def test_creating_student_supervisor_uses_worker_profile_and_saves_weekly_hours(self):
+        response = self.client.post(
+            reverse("student-supervisor-create"),
+            {
+                "username": "lead-student",
+                "password": "password123",
+                "first_name": "Morgan",
+                "last_name": "Lee",
+                "email": "morgan@example.com",
+                "active_status": "on",
+                "skill_notes": "Can help triage and QA tasks",
+                "monday_hours": "4",
+                "tuesday_hours": "3",
+                "wednesday_hours": "2",
+                "thursday_hours": "4",
+                "friday_hours": "1",
+                "saturday_hours": "0",
+                "sunday_hours": "0",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="lead-student")
+        self.assertEqual(user.role, UserRole.STUDENT_SUPERVISOR)
+        profile = user.worker_profile
+        self.assertEqual(profile.display_name, "Morgan Lee")
+        self.assertEqual(profile.weekly_availability.get(weekday=Weekday.MONDAY).hours_available, 4)
+        self.assertEqual(profile.weekly_availability.get(weekday=Weekday.THURSDAY).hours_available, 4)
+
     def test_removing_student_reassigns_tasks_and_recurring_templates_to_current_supervisor(self):
         response = self.client.post(reverse("worker-delete", args=[self.student.pk]), follow=True)
 

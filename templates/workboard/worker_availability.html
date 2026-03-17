@@ -6,7 +6,7 @@
 <section class="page-heading">
     <div>
         <h1>Edit worker: {{ profile.display_name }}</h1>
-        <p>Update student details and weekly hours in one place.</p>
+        <p>Update {{ profile.user.get_role_display|lower }} details and weekly hours in one place.</p>
     </div>
     <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
 </section>
@@ -21,7 +21,7 @@
             <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name" value="{{ profile.user.last_name }}"></p>
             {{ worker_form.as_p }}
             <h2>Weekly hours</h2>
-            <p>Set how many hours this student usually works on each day.</p>
+            <p>Set how many hours this worker usually works on each day.</p>
             {{ weekly_form.as_p }}
             <button type="submit">Save worker</button>
         </form>
@@ -58,4 +58,3 @@
     </aside>
 </section>
 {% endblock %}
-

@@ -144,10 +144,10 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        student_users = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
+        worker_users = User.objects.filter(role__in=UserRole.worker_roles()).order_by("role", "username")
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
-        self.fields["assigned_to"].queryset = User.objects.filter(Q(role=UserRole.STUDENT_WORKER) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("role", "username")
-        self.fields["additional_assignees"].queryset = student_users
+        self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("role", "username")
+        self.fields["additional_assignees"].queryset = worker_users
         self.fields["additional_assignees"].required = False
         self.fields["additional_assignees"].widget = forms.SelectMultiple(attrs={"class": "form-control", "size": 6})
         self.fields["respond_to_text"].label = "Notify when done"
@@ -316,8 +316,8 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
         self.fields["assign_to"].label = "Default assignee"
-        self.fields["assign_to"].help_text = "Choose the student who should get the first run. Later runs can rotate based on workload."
-        self.fields["assign_to"].queryset = User.objects.filter(role=UserRole.STUDENT_WORKER).order_by("username")
+        self.fields["assign_to"].help_text = "Choose the worker who should get the first run. Later runs can rotate based on workload."
+        self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("role", "username")
         self.fields["requested_by"].queryset = User.objects.order_by("username")
         self.fields["recurrence_pattern"].label = "Repeat cadence"
         self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."

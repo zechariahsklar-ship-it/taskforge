@@ -68,6 +68,18 @@ def supervisor_required(view_func):
     return wrapped
 
 
+def task_editor_required(view_func):
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect("login")
+        if not request.user.can_edit_tasks:
+            return HttpResponseForbidden("Task editor access required.")
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
+
+
 def app_login_required(view_func):
     @wraps(view_func)
     @login_required
@@ -235,7 +247,7 @@ def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
 
 @app_login_required
 def dashboard(request):
-    if request.user.role == UserRole.SUPERVISOR:
+    if request.user.can_view_full_board:
         return redirect("board")
     return redirect("my-tasks")
 
@@ -243,7 +255,7 @@ def dashboard(request):
 @app_login_required
 def board_view(request):
     tasks = Task.objects.select_related("assigned_to", "requested_by").prefetch_related("additional_assignees")
-    if request.user.role == UserRole.STUDENT_WORKER:
+    if not request.user.can_view_full_board:
         tasks = tasks.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user)).distinct()
     tasks = list(tasks.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
     for task in tasks:
@@ -262,7 +274,7 @@ def board_task_move_view(request, pk):
         return HttpResponseBadRequest("POST required.")
 
     task = get_object_or_404(Task.objects.prefetch_related("additional_assignees"), pk=pk)
-    if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
+    if not request.user.can_edit_tasks and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only move tasks assigned to you.")
 
     new_status = request.POST.get("status", "").strip()
@@ -465,7 +477,7 @@ def task_detail_view(request, pk):
         .prefetch_related("additional_assignees", "checklist_items", "attachments", "notes__author"),
         pk=pk,
     )
-    if request.user.role == UserRole.STUDENT_WORKER and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
+    if not request.user.can_view_full_board and task.assigned_to_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only view tasks assigned to you.")
 
     note_form = TaskNoteForm()
@@ -508,7 +520,7 @@ def task_detail_view(request, pk):
                 attachment.save()
                 messages.success(request, "Attachment added.")
                 return redirect("task-detail", pk=task.pk)
-        elif action == "checklist" and request.user.role == UserRole.SUPERVISOR:
+        elif action == "checklist" and request.user.can_edit_tasks:
             checklist_form = TaskChecklistItemForm(request.POST)
             if checklist_form.is_valid():
                 item = checklist_form.save(commit=False)
@@ -517,7 +529,7 @@ def task_detail_view(request, pk):
                 item.save()
                 messages.success(request, "Checklist item added.")
                 return redirect("task-detail", pk=task.pk)
-        elif action == "checklist_save" and request.user.role == UserRole.SUPERVISOR:
+        elif action == "checklist_save" and request.user.can_edit_tasks:
             item_ids = request.POST.getlist("checklist_item_ids")
             titles = request.POST.getlist("checklist_item_titles")
             completed_ids = set(request.POST.getlist("checklist_item_completed"))
@@ -629,7 +641,7 @@ def password_change_view(request):
     )
 
 
-@supervisor_required
+@task_editor_required
 def task_edit_view(request, pk):
     task = get_object_or_404(Task, pk=pk)
     if request.method == "POST":
@@ -745,16 +757,29 @@ def recurring_template_edit_view(request, pk):
 
 @supervisor_required
 def worker_list_view(request):
-    student_profiles = list(StudentWorkerProfile.objects.select_related("user").order_by("display_name"))
-    student_workload = {
+    worker_profiles = list(
+        StudentWorkerProfile.objects.select_related("user")
+        .filter(user__role__in=UserRole.worker_roles())
+        .order_by("display_name")
+    )
+    worker_workload = {
         worker.pk: worker
-        for worker in User.objects.filter(role=UserRole.STUDENT_WORKER)
+        for worker in User.objects.filter(role__in=UserRole.worker_roles())
         .annotate(
             active_tasks=Count("assigned_tasks", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
             estimated_minutes=Sum("assigned_tasks__estimated_minutes", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
         )
     }
-    students = [{"profile": profile, "workload": student_workload.get(profile.user_id)} for profile in student_profiles]
+    students = [
+        {"profile": profile, "workload": worker_workload.get(profile.user_id)}
+        for profile in worker_profiles
+        if profile.user.role == UserRole.STUDENT_WORKER
+    ]
+    student_supervisors = [
+        {"profile": profile, "workload": worker_workload.get(profile.user_id)}
+        for profile in worker_profiles
+        if profile.user.role == UserRole.STUDENT_SUPERVISOR
+    ]
     supervisors = (
         User.objects.filter(role=UserRole.SUPERVISOR)
         .annotate(
@@ -763,7 +788,11 @@ def worker_list_view(request):
         )
         .order_by("username")
     )
-    return render(request, "workboard/worker_list.html", {"students": students, "supervisors": supervisors})
+    return render(
+        request,
+        "workboard/worker_list.html",
+        {"students": students, "student_supervisors": student_supervisors, "supervisors": supervisors},
+    )
 
 
 @supervisor_required
@@ -880,6 +909,69 @@ def supervisor_create_view(request):
 
 
 @supervisor_required
+def student_supervisor_create_view(request):
+    form = StudentWorkerProfileForm(request.POST or None)
+    weekly_form = WeeklyAvailabilityForm(request.POST or None, initial={
+        "monday_hours": 0,
+        "tuesday_hours": 0,
+        "wednesday_hours": 0,
+        "thursday_hours": 0,
+        "friday_hours": 0,
+        "saturday_hours": 0,
+        "sunday_hours": 0,
+    })
+    context = {
+        "form": form,
+        "weekly_form": weekly_form,
+        "page_title": "Add student supervisor",
+        "submit_label": "Create student supervisor",
+        "worker_type_label": "student supervisor",
+    }
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        password = request.POST.get("password", "").strip() or "changeme123"
+        first_name = request.POST.get("first_name", "").strip()
+        last_name = request.POST.get("last_name", "").strip()
+        email = request.POST.get("email", "").strip()
+        if not username:
+            messages.error(request, "Username is required.")
+            return render(request, "workboard/worker_form.html", context)
+        if form.is_valid() and weekly_form.is_valid():
+            user = User.objects.create_user(
+                username=username,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                role=UserRole.STUDENT_SUPERVISOR,
+                must_change_password=True,
+            )
+            profile = form.save(commit=False)
+            profile.user = user
+            profile.email = profile.email or email
+            profile.display_name = user.get_full_name().strip() or user.username
+            profile.save()
+            field_map = {
+                Weekday.MONDAY: "monday_hours",
+                Weekday.TUESDAY: "tuesday_hours",
+                Weekday.WEDNESDAY: "wednesday_hours",
+                Weekday.THURSDAY: "thursday_hours",
+                Weekday.FRIDAY: "friday_hours",
+                Weekday.SATURDAY: "saturday_hours",
+                Weekday.SUNDAY: "sunday_hours",
+            }
+            for weekday, field_name in field_map.items():
+                StudentAvailability.objects.update_or_create(
+                    profile=profile,
+                    weekday=weekday,
+                    defaults={"hours_available": weekly_form.cleaned_data[field_name]},
+                )
+            messages.success(request, "Student supervisor created.")
+            return redirect("worker-list")
+    return render(request, "workboard/worker_form.html", context)
+
+
+@supervisor_required
 def worker_profile_create_view(request):
     form = StudentWorkerProfileForm(request.POST or None)
     weekly_form = WeeklyAvailabilityForm(request.POST or None, initial={
@@ -941,12 +1033,12 @@ def worker_profile_delete_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    student = get_object_or_404(User.objects.select_related("worker_profile"), pk=pk, role=UserRole.STUDENT_WORKER)
-    Task.objects.filter(assigned_to=student).update(assigned_to=request.user, updated_at=timezone.now())
-    RecurringTaskTemplate.objects.filter(assign_to=student).update(assign_to=request.user, updated_at=timezone.now())
-    student_name = student.display_label
-    student.delete()
-    messages.success(request, f"Removed {student_name}. Any assigned tasks were reassigned to you.")
+    worker = get_object_or_404(User.objects.select_related("worker_profile"), pk=pk, role__in=UserRole.worker_roles())
+    Task.objects.filter(assigned_to=worker).update(assigned_to=request.user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=worker).update(assign_to=request.user, updated_at=timezone.now())
+    worker_name = worker.display_label
+    worker.delete()
+    messages.success(request, f"Removed {worker_name}. Any assigned tasks were reassigned to you.")
     return redirect("worker-list")
 
 
@@ -985,7 +1077,7 @@ def supervisor_edit_view(request, pk):
 
 @supervisor_required
 def worker_password_reset_view(request, pk):
-    person = get_object_or_404(User, pk=pk, role__in=[UserRole.STUDENT_WORKER, UserRole.SUPERVISOR])
+    person = get_object_or_404(User, pk=pk, role__in=[UserRole.STUDENT_WORKER, UserRole.STUDENT_SUPERVISOR, UserRole.SUPERVISOR])
     if request.method == "POST":
         form = SupervisorStudentPasswordResetForm(person, request.POST)
         if form.is_valid():
