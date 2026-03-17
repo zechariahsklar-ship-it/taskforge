@@ -44,27 +44,10 @@ class TaskAssignmentService:
     @staticmethod
     def suggest_assignee(*, due_date, estimated_minutes, fallback_supervisor=None, exclude_user_ids=None):
         supervisors = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True).order_by("username")
-        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
-        if exclude_user_ids:
-            workers = workers.exclude(user_id__in=exclude_user_ids)
-
-        viable = []
-        for profile in workers:
-            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
-            open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
-            last_assigned_at = (
-                profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            )
-            if estimated_minutes is None or capacity >= estimated_minutes:
-                viable.append((profile, capacity, open_tasks, last_assigned_at))
-
-        viable.sort(
-            key=lambda item: (
-                item[3] is not None,
-                item[3] or timezone.make_aware(datetime(2000, 1, 1)),
-                item[2],
-                -item[1],
-            )
+        viable = TaskAssignmentService._viable_worker_candidates(
+            due_date=due_date,
+            estimated_minutes=estimated_minutes,
+            exclude_user_ids=exclude_user_ids,
         )
         if viable:
             profile, capacity, _, _ = viable[0]
@@ -99,6 +82,43 @@ class TaskAssignmentService:
                 "Fallback rule assigned the task using supervisor rotation.",
             ]
         return None, "No eligible assignee found.", ["No eligible assignee found."]
+
+    @staticmethod
+    def suggest_worker_assignee(*, due_date, estimated_minutes, exclude_user_ids=None):
+        viable = TaskAssignmentService._viable_worker_candidates(
+            due_date=due_date,
+            estimated_minutes=estimated_minutes,
+            exclude_user_ids=exclude_user_ids,
+        )
+        if viable:
+            return viable[0][0].user
+        return None
+
+    @staticmethod
+    def _viable_worker_candidates(*, due_date, estimated_minutes, exclude_user_ids=None):
+        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
+        if exclude_user_ids:
+            workers = workers.exclude(user_id__in=exclude_user_ids)
+
+        viable = []
+        for profile in workers:
+            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
+            open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
+            last_assigned_at = (
+                profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
+            )
+            if estimated_minutes is None or capacity >= estimated_minutes:
+                viable.append((profile, capacity, open_tasks, last_assigned_at))
+
+        viable.sort(
+            key=lambda item: (
+                item[3] is not None,
+                item[3] or timezone.make_aware(datetime(2000, 1, 1)),
+                item[2],
+                -item[1],
+            )
+        )
+        return viable
 
     @staticmethod
     def _remaining_capacity_minutes(profile, due_date):

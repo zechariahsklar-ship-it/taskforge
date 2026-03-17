@@ -22,8 +22,9 @@
             <h2>Recurring details</h2>
             <p>{{ template.description|default:"No recurring task description yet."|linebreaksbr }}</p>
             <dl class="detail-list">
-                <dt>Assigned To</dt><dd>{{ template.assign_to.username|default:"Unassigned" }}</dd>
-                <dt>Requested By</dt><dd>{{ template.requested_by.username|default:"Unknown" }}</dd>
+                <dt>Assigned To</dt><dd>{% if template.assign_to %}{{ template.assign_to.display_label }}{% else %}Rotation{% endif %}</dd>
+                <dt>Additional Teammates</dt><dd>{{ template.additional_assignee_labels }}</dd>
+                <dt>Requested By</dt><dd>{{ template.requested_by.display_label|default:"Unknown" }}</dd>
                 <dt>Estimate</dt><dd>{{ template.estimated_minutes|default:"-" }} minutes</dd>
                 <dt>Start Date</dt><dd>{{ template.start_date|date:"M j, Y" }}</dd>
                 <dt>Generated Tasks</dt><dd>{{ template.generated_tasks.count }}</dd>

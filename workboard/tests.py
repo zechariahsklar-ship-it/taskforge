@@ -211,6 +211,13 @@ class RecurringTaskListViewTests(TestCase):
             first_name="Jamie",
             last_name="Worker",
         )
+        self.helper = User.objects.create_user(
+            username="recurring-helper",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Casey",
+            last_name="Helper",
+        )
         self.first_template = RecurringTaskTemplate.objects.create(
             title="Weekly mail run",
             description="Pick up and sort campus mail.",
@@ -270,6 +277,15 @@ class RecurringTaskListViewTests(TestCase):
         self.assertIsNotNone(task.recurring_template)
         self.assertEqual(task.recurring_template.assign_to, self.worker)
 
+    def test_recurring_page_shows_additional_teammates_summary(self):
+        self.first_template.additional_assignees.add(self.helper)
+        self.first_template.rotate_additional_assignee = True
+        self.first_template.save(update_fields=["rotate_additional_assignee", "updated_at"])
+
+        response = self.client.get(reverse("recurring-list"))
+
+        self.assertContains(response, "Additional teammates: Casey Helper, Rotation")
+
     def test_recurring_detail_page_renders_template_details(self):
         response = self.client.get(reverse("recurring-detail", args=[self.first_template.pk]))
 
@@ -299,6 +315,8 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Repeat every")
         self.assertContains(response, "Weekday to repeat on")
         self.assertContains(response, "Day of month to repeat on")
+        self.assertContains(response, "Fixed additional assignees")
+        self.assertContains(response, "Also add one rotating teammate")
         self.assertContains(response, "Recurring task is active")
     def test_recurring_move_view_reorders_templates(self):
         response = self.client.post(
@@ -421,6 +439,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.supervisor = User.objects.create_user(username="recurring-gen-sup", password="password123", role=UserRole.SUPERVISOR)
         self.alex = User.objects.create_user(username="recurring-gen-alex", password="password123", role=UserRole.STUDENT_WORKER)
         self.jordan = User.objects.create_user(username="recurring-gen-jordan", password="password123", role=UserRole.STUDENT_WORKER)
+        self.sam = User.objects.create_user(username="recurring-gen-sam", password="password123", role=UserRole.STUDENT_WORKER)
         self.alex_profile = StudentWorkerProfile.objects.create(
             user=self.alex,
             display_name="Alex Carter",
@@ -435,7 +454,14 @@ class RecurringTaskGenerationRotationTests(TestCase):
             normal_shift_availability="Weekdays",
             max_hours_per_day=4,
         )
-        for profile in (self.alex_profile, self.jordan_profile):
+        self.sam_profile = StudentWorkerProfile.objects.create(
+            user=self.sam,
+            display_name="Sam Patel",
+            email="sam-rotation@example.com",
+            normal_shift_availability="Weekdays",
+            max_hours_per_day=4,
+        )
+        for profile in (self.alex_profile, self.jordan_profile, self.sam_profile):
             for weekday in Weekday.values:
                 StudentAvailability.objects.create(
                     profile=profile,
@@ -471,6 +497,29 @@ class RecurringTaskGenerationRotationTests(TestCase):
 
         generated = Task.objects.filter(recurring_template=self.template, status=TaskStatus.NEW).latest("pk")
         self.assertEqual(generated.assigned_to, self.jordan)
+
+    def test_generate_recurring_tasks_sets_fixed_and_rotating_additional_assignees(self):
+        extra_template = RecurringTaskTemplate.objects.create(
+            title="Recurring team task",
+            description="Needs backup help",
+            priority=Priority.MEDIUM,
+            estimated_minutes=30,
+            assign_to=self.alex,
+            requested_by=self.supervisor,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 13),
+            rotate_additional_assignee=True,
+        )
+        extra_template.additional_assignees.add(self.jordan)
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+            call_command("generate_recurring_tasks")
+
+        generated = Task.objects.filter(recurring_template=extra_template, status=TaskStatus.NEW).latest("pk")
+        self.assertEqual(generated.assigned_to, self.alex)
+        self.assertEqual(list(generated.additional_assignees.values_list("id", flat=True)), [self.jordan.id])
+        self.assertEqual(generated.rotating_additional_assignee, self.sam)
 
 
 class TaskParsingFallbackTests(TestCase):
@@ -626,6 +675,9 @@ class TaskCreateLabelTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Alex Johnson")
         self.assertContains(response, "Avery Stone")
+        self.assertContains(response, "Fixed additional assignees")
+        self.assertContains(response, "Also add one rotating teammate")
+        self.assertNotContains(response, '<select name="additional_assignees"', html=False)
         self.assertNotContains(response, ">alex-worker<", html=False)
         self.assertNotContains(response, ">create-label-supervisor<", html=False)
 
@@ -650,6 +702,18 @@ class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
         self.client.force_login(self.extra_student)
         response = self.client.get(reverse("my-tasks"))
         self.assertContains(response, "Shared task")
+
+    def test_rotating_additional_assignee_can_view_shared_task(self):
+        self.task.rotate_additional_assignee = True
+        self.task.rotating_additional_assignee = self.other_student
+        self.task.save(update_fields=["rotate_additional_assignee", "rotating_additional_assignee", "updated_at"])
+
+        self.client.force_login(self.other_student)
+        response = self.client.get(reverse("my-tasks"))
+        self.assertContains(response, "Shared task")
+        detail_response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, "other-vis (rotation)")
 
     def test_other_student_cannot_view_shared_task_detail(self):
         self.client.force_login(self.other_student)
@@ -686,6 +750,70 @@ class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
         task = Task.objects.get(title="Supervisor created shared task")
         self.assertEqual(task.assigned_to, self.primary_student)
         self.assertEqual(list(task.additional_assignees.values_list("id", flat=True)), [self.extra_student.id])
+
+
+class TaskCreateAdditionalAssigneeRotationTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="rotation-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.primary_student = self._create_worker("primary-helper", "Primary Helper")
+        self.fixed_student = self._create_worker("fixed-helper", "Fixed Helper")
+        self.rotating_student = self._create_worker("rotating-helper", "Rotating Helper")
+        self.client.force_login(self.supervisor)
+
+    def _create_worker(self, username, display_name):
+        first_name, last_name = display_name.split(" ", 1)
+        user = User.objects.create_user(
+            username=username,
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        profile = StudentWorkerProfile.objects.create(
+            user=user,
+            display_name=display_name,
+            email=f"{username}@example.com",
+            normal_shift_availability="Weekdays",
+            max_hours_per_day=4,
+        )
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(
+                profile=profile,
+                weekday=weekday,
+                hours_available=4 if weekday < 5 else 0,
+            )
+        return user
+
+    def test_create_task_can_add_fixed_and_rotating_additional_assignees(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Collaborative task",
+                "description": "Needs a main worker, one fixed helper, and one rotating helper.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-20",
+                "respond_to_text": "",
+                "estimated_minutes": "45",
+                "assigned_to": str(self.primary_student.pk),
+                "additional_assignees": [str(self.fixed_student.pk)],
+                "rotate_additional_assignee": "on",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Collaborative task")
+        self.assertEqual(list(task.additional_assignees.values_list("id", flat=True)), [self.fixed_student.id])
+        self.assertEqual(task.rotating_additional_assignee, self.rotating_student)
+        self.assertContains(response, "Fixed Helper")
+        self.assertContains(response, "Rotating Helper (rotation)")
 
 
 class MyTasksViewOrderingTests(TestCase):

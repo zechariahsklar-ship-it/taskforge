@@ -19,7 +19,7 @@
         {% endfor %}
 
         {% for field in form %}
-            {% if field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
+            {% if field.name != "additional_assignees" and field.name != "rotate_additional_assignee" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -28,6 +28,32 @@
                 </p>
             {% endif %}
         {% endfor %}
+
+        <section class="review-field assignee-panel">
+            <div class="stack">
+                <div>
+                    <label>{{ form.additional_assignees.label }}</label>
+                    {% if form.additional_assignees.help_text %}<p class="meta">{{ form.additional_assignees.help_text }}</p>{% endif %}
+                </div>
+                <div class="assignee-choice-grid">
+                    {% for checkbox in form.additional_assignees %}
+                        <label class="assignee-choice-card" for="{{ checkbox.id_for_label }}">
+                            {{ checkbox.tag }}
+                            <span>{{ checkbox.choice_label }}</span>
+                        </label>
+                    {% empty %}
+                        <p class="empty-state">No worker teammates are available yet.</p>
+                    {% endfor %}
+                </div>
+                {% if form.additional_assignees.errors %}<div class="meta">{{ form.additional_assignees.errors }}</div>{% endif %}
+                <label class="inline-checkbox" for="{{ form.rotate_additional_assignee.id_for_label }}">
+                    {{ form.rotate_additional_assignee }}
+                    <span>{{ form.rotate_additional_assignee.label }}</span>
+                </label>
+                {% if form.rotate_additional_assignee.help_text %}<p class="meta">{{ form.rotate_additional_assignee.help_text }}</p>{% endif %}
+                {% if form.rotate_additional_assignee.errors %}<div class="meta">{{ form.rotate_additional_assignee.errors }}</div>{% endif %}
+            </div>
+        </section>
 
         <section class="review-field recurring-task-panel">
             <div>

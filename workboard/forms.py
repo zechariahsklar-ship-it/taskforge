@@ -41,7 +41,10 @@ class StyledFormMixin:
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             widget = field.widget
-            widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-control".strip()
+            if isinstance(widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple)):
+                widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-check-input".strip()
+            else:
+                widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-control".strip()
 
 
 def _user_choice_label(user: User) -> str:
@@ -135,6 +138,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "estimated_minutes",
             "assigned_to",
             "additional_assignees",
+            "rotate_additional_assignee",
             "requested_by",
             "recurring_task",
             "recurrence_pattern",
@@ -149,12 +153,16 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        worker_users = User.objects.filter(role__in=UserRole.worker_roles()).order_by("role", "username")
+        worker_users = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
-        self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("role", "username")
+        self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].queryset = worker_users
         self.fields["additional_assignees"].required = False
-        self.fields["additional_assignees"].widget = forms.SelectMultiple(attrs={"class": "form-control", "size": 6})
+        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple()
+        self.fields["additional_assignees"].label = "Fixed additional assignees"
+        self.fields["additional_assignees"].help_text = "Pick any teammates who should always be added to this task."
+        self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
+        self.fields["rotate_additional_assignee"].help_text = "TaskForge will pick one more worker automatically based on availability and rotation."
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
         self.fields["requested_by"].queryset = User.objects.order_by("username")
@@ -224,6 +232,7 @@ class TaskManualForm(TaskForm):
             "estimated_minutes",
             "assigned_to",
             "additional_assignees",
+            "rotate_additional_assignee",
             "requested_by",
             "recurring_task",
             "recurrence_pattern",
@@ -307,6 +316,8 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             "priority",
             "estimated_minutes",
             "assign_to",
+            "additional_assignees",
+            "rotate_additional_assignee",
             "requested_by",
             "recurrence_pattern",
             "recurrence_interval",
@@ -324,10 +335,18 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
         self.fields["assign_to"].label = "Default assignee"
-        self.fields["assign_to"].help_text = "Choose the worker who should get the first run. Later runs can rotate based on workload."
-        self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("role", "username")
-        self.fields["requested_by"].queryset = User.objects.order_by("username")
+        self.fields["assign_to"].help_text = "Choose the main teammate for the first run. Later runs can rotate based on workload."
+        self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
+        self.fields["additional_assignees"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
+        self.fields["additional_assignees"].required = False
+        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple()
+        self.fields["additional_assignees"].label = "Fixed additional assignees"
+        self.fields["additional_assignees"].help_text = "Pick any teammates who should always join each run of this recurring task."
+        self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
+        self.fields["rotate_additional_assignee"].help_text = "Each generated task can add one more worker automatically based on availability and rotation."
+        self.fields["requested_by"].queryset = User.objects.order_by("first_name", "last_name", "username")
         self.fields["assign_to"].label_from_instance = _user_choice_label
+        self.fields["additional_assignees"].label_from_instance = _user_choice_label
         self.fields["requested_by"].label_from_instance = _user_choice_label
         self.fields["recurrence_pattern"].label = "Repeat cadence"
         self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."
@@ -346,6 +365,11 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        assign_to = cleaned_data.get("assign_to")
+        additional_assignees = cleaned_data.get("additional_assignees")
+        if assign_to and additional_assignees:
+            cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
+
         recurrence_pattern = cleaned_data.get("recurrence_pattern")
         day_of_week = cleaned_data.get("day_of_week")
         day_of_month = cleaned_data.get("day_of_month")

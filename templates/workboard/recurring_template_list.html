@@ -21,6 +21,9 @@
                         </div>
                         <p class="board-task-description">{{ template.description|default:"No recurring task description yet."|truncatechars:140 }}</p>
                         <p class="meta">Assigned to: {% if template.assign_to %}{{ template.assign_to.display_label }}{% else %}Rotation{% endif %}</p>
+                        {% if template.additional_assignee_labels != "None" %}
+                            <p class="meta">Additional teammates: {{ template.additional_assignee_labels }}</p>
+                        {% endif %}
                         <p class="meta board-task-estimate">Time: {% if template.estimated_minutes %}{{ template.estimated_minutes }} min{% else %}TBD{% endif %}</p>
                     </article>
                 </a>

@@ -143,6 +143,13 @@ class RecurringTaskTemplate(models.Model):
         related_name="recurring_templates",
         limit_choices_to={"role__in": UserRole.worker_roles()},
     )
+    additional_assignees = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name="additional_recurring_templates",
+        limit_choices_to={"role__in": UserRole.worker_roles()},
+    )
+    rotate_additional_assignee = models.BooleanField(default=False)
     requested_by = models.ForeignKey(
         User,
         null=True,
@@ -172,6 +179,13 @@ class RecurringTaskTemplate(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def additional_assignee_labels(self):
+        labels = [user.display_label for user in self.additional_assignees.all()]
+        if self.rotate_additional_assignee:
+            labels.append("Rotation")
+        return ", ".join(labels) if labels else "None"
 
     def advance_next_run_date(self):
         if self.recurrence_pattern == RecurrencePattern.DAILY:
@@ -209,6 +223,15 @@ class Task(models.Model):
         User,
         blank=True,
         related_name="collaborative_tasks",
+        limit_choices_to={"role__in": UserRole.worker_roles()},
+    )
+    rotate_additional_assignee = models.BooleanField(default=False)
+    rotating_additional_assignee = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="rotating_collaborative_tasks",
         limit_choices_to={"role__in": UserRole.worker_roles()},
     )
     requested_by = models.ForeignKey(
@@ -255,12 +278,26 @@ class Task(models.Model):
     @property
     def assignee_labels(self):
         labels = []
+        seen_ids = set()
         if self.assigned_to:
             labels.append(self.assigned_to.display_label)
+            seen_ids.add(self.assigned_to_id)
         for user in self.additional_assignees.all():
-            if user != self.assigned_to:
+            if user.pk not in seen_ids:
                 labels.append(user.display_label)
+                seen_ids.add(user.pk)
+        if self.rotating_additional_assignee and self.rotating_additional_assignee_id not in seen_ids:
+            labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
         return ", ".join(labels) if labels else "Unassigned"
+
+    @property
+    def additional_assignee_labels(self):
+        labels = [user.display_label for user in self.additional_assignees.all()]
+        if self.rotating_additional_assignee:
+            labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
+        elif self.rotate_additional_assignee:
+            labels.append("Rotation")
+        return ", ".join(labels) if labels else "None"
 
 
 class TaskNote(models.Model):
