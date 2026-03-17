@@ -677,6 +677,8 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, "Avery Stone")
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Also add one rotating teammate")
+        self.assertContains(response, 'name="additional_assignees"', count=1)
+        self.assertContains(response, 'type="checkbox"', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
         self.assertNotContains(response, ">alex-worker<", html=False)
         self.assertNotContains(response, ">create-label-supervisor<", html=False)

@@ -158,7 +158,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].queryset = worker_users
         self.fields["additional_assignees"].required = False
-        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple()
+        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
         self.fields["additional_assignees"].label = "Fixed additional assignees"
         self.fields["additional_assignees"].help_text = "Pick any teammates who should always be added to this task."
         self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
@@ -339,7 +339,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].required = False
-        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple()
+        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
         self.fields["additional_assignees"].label = "Fixed additional assignees"
         self.fields["additional_assignees"].help_text = "Pick any teammates who should always join each run of this recurring task."
         self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
