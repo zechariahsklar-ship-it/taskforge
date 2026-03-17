@@ -181,6 +181,90 @@ def _resequence_recurring_templates(templates: list[RecurringTaskTemplate]) -> N
             template.save(update_fields=["display_order", "updated_at"])
 
 
+def _recurring_assignee_from_task(task: Task) -> User | None:
+    assignee = task.assigned_to
+    if assignee and assignee.role in UserRole.worker_roles():
+        return assignee
+    return None
+
+
+def _next_recurring_run_from_task(task: Task) -> date:
+    seed_date = task.due_date or timezone.localdate()
+    template = RecurringTaskTemplate(
+        recurrence_pattern=task.recurrence_pattern,
+        recurrence_interval=task.recurrence_interval or 1,
+        day_of_week=task.recurrence_day_of_week,
+        day_of_month=task.recurrence_day_of_month,
+        start_date=seed_date,
+        next_run_date=seed_date,
+    )
+    template.advance_next_run_date()
+    return template.next_run_date
+
+
+def _sync_task_recurring_template(task: Task) -> Task:
+    if not task.recurring_task or not task.recurrence_pattern:
+        return task
+
+    seed_date = task.due_date or timezone.localdate()
+    desired_next_run = _next_recurring_run_from_task(task)
+    assignee = _recurring_assignee_from_task(task)
+    template = task.recurring_template
+
+    if template is None:
+        template = RecurringTaskTemplate.objects.create(
+            title=task.title,
+            description=task.description or task.raw_message,
+            priority=task.priority,
+            estimated_minutes=task.estimated_minutes,
+            assign_to=assignee,
+            requested_by=task.requested_by or task.created_by,
+            recurrence_pattern=task.recurrence_pattern,
+            recurrence_interval=task.recurrence_interval or 1,
+            day_of_week=task.recurrence_day_of_week,
+            day_of_month=task.recurrence_day_of_month,
+            start_date=seed_date,
+            next_run_date=desired_next_run,
+            active=True,
+        )
+        task.recurring_template = template
+        task.save(update_fields=["recurring_template", "updated_at"])
+        return task
+
+    schedule_changed = (
+        template.recurrence_pattern != task.recurrence_pattern
+        or template.recurrence_interval != (task.recurrence_interval or 1)
+        or template.day_of_week != task.recurrence_day_of_week
+        or template.day_of_month != task.recurrence_day_of_month
+    )
+    template.title = task.title
+    template.description = task.description or task.raw_message
+    template.priority = task.priority
+    template.estimated_minutes = task.estimated_minutes
+    template.assign_to = assignee
+    template.requested_by = task.requested_by or task.created_by
+    template.recurrence_pattern = task.recurrence_pattern
+    template.recurrence_interval = task.recurrence_interval or 1
+    template.day_of_week = task.recurrence_day_of_week
+    template.day_of_month = task.recurrence_day_of_month
+    template.active = True
+    if schedule_changed or template.next_run_date <= seed_date:
+        template.start_date = seed_date
+        template.next_run_date = desired_next_run
+    template.save()
+    return task
+
+
+def _backfill_orphan_recurring_tasks() -> None:
+    orphan_tasks = (
+        Task.objects.filter(recurring_task=True, recurring_template__isnull=True)
+        .exclude(recurrence_pattern="")
+        .select_related("assigned_to", "requested_by", "created_by")
+    )
+    for task in orphan_tasks:
+        _sync_task_recurring_template(task)
+
+
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
     raw_due_text = (initial.get("raw_due_text") or "").strip()
     parsed_due_date = TaskParsingService._parse_due_date(initial.get("due_date"))
@@ -463,6 +547,7 @@ def task_create_view(request):
                 task.mark_complete()
             task.save()
             form.save_m2m()
+            task = _sync_task_recurring_template(task)
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
@@ -667,6 +752,7 @@ def task_edit_view(request, pk):
             if previous_status != updated_task.status:
                 _close_status_gap(previous_status, exclude_pk=updated_task.pk)
             form.save_m2m()
+            updated_task = _sync_task_recurring_template(updated_task)
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:
@@ -690,6 +776,7 @@ def task_delete_view(request, pk):
 
 @supervisor_required
 def recurring_template_list_view(request):
+    _backfill_orphan_recurring_tasks()
     templates = (
         RecurringTaskTemplate.objects.select_related("assign_to", "requested_by")
         .annotate(generated_task_count=Count("generated_tasks"))

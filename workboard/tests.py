@@ -246,6 +246,30 @@ class RecurringTaskListViewTests(TestCase):
         self.assertNotContains(response, "Create recurring task template")
         self.assertNotContains(response, "Save template")
 
+    def test_recurring_page_backfills_standalone_recurring_tasks(self):
+        task = Task.objects.create(
+            title="Standalone recurring cleanup",
+            description="Weekly cleanup task",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 17),
+            assigned_to=self.worker,
+            requested_by=self.supervisor,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.TUESDAY,
+        )
+
+        response = self.client.get(reverse("recurring-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Standalone recurring cleanup")
+        task.refresh_from_db()
+        self.assertIsNotNone(task.recurring_template)
+        self.assertEqual(task.recurring_template.assign_to, self.worker)
+
     def test_recurring_detail_page_renders_template_details(self):
         response = self.client.get(reverse("recurring-detail", args=[self.first_template.pk]))
 
@@ -492,6 +516,20 @@ class TaskCreateDueDateFallbackTests(TestCase):
             password="password123",
             role=UserRole.SUPERVISOR,
         )
+        self.worker = User.objects.create_user(
+            username="create-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Taylor",
+            last_name="Worker",
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.worker,
+            display_name="Taylor Worker",
+            email="taylor.worker@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
         self.client.force_login(self.supervisor)
 
     def test_direct_task_create_applies_priority_due_date_fallback(self):
@@ -524,6 +562,37 @@ class TaskCreateDueDateFallbackTests(TestCase):
         task = Task.objects.get(title="Manual task")
         self.assertEqual(task.due_date, date(2026, 3, 16))
         self.assertEqual(task.raw_due_text, "Priority-based default for high")
+
+    def test_direct_task_create_builds_recurring_template_when_enabled(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Weekly clean up",
+                "raw_message": "",
+                "description": "Recurring weekly clean up",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "45",
+                "assigned_to": str(self.worker.pk),
+                "requested_by": str(self.supervisor.pk),
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.MONDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Weekly clean up")
+        self.assertIsNotNone(task.recurring_template)
+        self.assertEqual(task.recurring_template.assign_to, self.worker)
+        self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
 
 
 class TaskCreateLabelTests(TestCase):
