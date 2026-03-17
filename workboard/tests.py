@@ -208,6 +208,8 @@ class RecurringTaskListViewTests(TestCase):
             username="recurring-worker",
             password="password123",
             role=UserRole.STUDENT_WORKER,
+            first_name="Jamie",
+            last_name="Worker",
         )
         self.first_template = RecurringTaskTemplate.objects.create(
             title="Weekly mail run",
@@ -238,6 +240,7 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Recurring tasks")
         self.assertContains(response, "Weekly mail run")
         self.assertContains(response, "Pick up and sort campus mail.")
+        self.assertContains(response, "Assigned to: Jamie Worker")
         self.assertContains(response, 'data-template-id="%s"' % self.first_template.pk)
         self.assertContains(response, reverse("recurring-detail", args=[self.first_template.pk]))
         self.assertNotContains(response, "Create recurring task template")
@@ -521,6 +524,41 @@ class TaskCreateDueDateFallbackTests(TestCase):
         task = Task.objects.get(title="Manual task")
         self.assertEqual(task.due_date, date(2026, 3, 16))
         self.assertEqual(task.raw_due_text, "Priority-based default for high")
+
+
+class TaskCreateLabelTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="create-label-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            first_name="Avery",
+            last_name="Stone",
+        )
+        self.student = User.objects.create_user(
+            username="alex-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Alex",
+            last_name="Johnson",
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.student,
+            display_name="Alex Johnson",
+            email="alex@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_task_create_uses_full_names_in_user_dropdowns(self):
+        response = self.client.get(reverse("task-create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Alex Johnson")
+        self.assertContains(response, "Avery Stone")
+        self.assertNotContains(response, ">alex-worker<", html=False)
+        self.assertNotContains(response, ">create-label-supervisor<", html=False)
 
 
 class TaskVisibilityAndAdditionalAssigneeTests(TestCase):

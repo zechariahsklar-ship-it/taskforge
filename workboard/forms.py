@@ -44,6 +44,11 @@ class StyledFormMixin:
             widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-control".strip()
 
 
+def _user_choice_label(user: User) -> str:
+    full_name = user.get_full_name().strip()
+    return full_name or user.display_label
+
+
 class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = StudentWorkerProfile
@@ -153,6 +158,9 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
         self.fields["requested_by"].queryset = User.objects.order_by("username")
+        self.fields["assigned_to"].label_from_instance = _user_choice_label
+        self.fields["additional_assignees"].label_from_instance = _user_choice_label
+        self.fields["requested_by"].label_from_instance = _user_choice_label
         self.fields["recurring_task"].label = "Repeats on a schedule"
         self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
         self.fields["recurrence_pattern"].label = "Repeat cadence"
@@ -319,6 +327,8 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["assign_to"].help_text = "Choose the worker who should get the first run. Later runs can rotate based on workload."
         self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("role", "username")
         self.fields["requested_by"].queryset = User.objects.order_by("username")
+        self.fields["assign_to"].label_from_instance = _user_choice_label
+        self.fields["requested_by"].label_from_instance = _user_choice_label
         self.fields["recurrence_pattern"].label = "Repeat cadence"
         self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."
         self.fields["recurrence_interval"].label = "Repeat every"

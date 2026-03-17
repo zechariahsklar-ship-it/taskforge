@@ -20,6 +20,7 @@
                             <span class="meta">Next run: {{ template.next_run_date|date:"M j, Y" }}</span>
                         </div>
                         <p class="board-task-description">{{ template.description|default:"No recurring task description yet."|truncatechars:140 }}</p>
+                        <p class="meta">Assigned to: {% if template.assign_to %}{{ template.assign_to.display_label }}{% else %}Rotation{% endif %}</p>
                         <p class="meta board-task-estimate">Time: {% if template.estimated_minutes %}{{ template.estimated_minutes }} min{% else %}TBD{% endif %}</p>
                     </article>
                 </a>
