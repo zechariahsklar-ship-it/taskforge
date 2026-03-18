@@ -28,8 +28,7 @@
         return Math.max(0, endMinutes - startMinutes);
     }
 
-    function formatDuration(startValue, endValue) {
-        var totalMinutes = minutesBetween(startValue, endValue);
+    function formatHours(totalMinutes) {
         if (!totalMinutes) {
             return "";
         }
@@ -38,66 +37,144 @@
         return label + " hr" + (label === "1" ? "" : "s");
     }
 
+    function parseSegments(rawValue) {
+        if (!rawValue) {
+            return [];
+        }
+        try {
+            var payload = JSON.parse(rawValue);
+            if (!Array.isArray(payload)) {
+                return [];
+            }
+            return payload.filter(function (item) {
+                return Array.isArray(item) && item.length === 2 && item[0] && item[1];
+            });
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function contiguousSegmentsFromSelection(state, selectedSet) {
+        var sorted = Array.from(selectedSet).sort(function (left, right) {
+            return left - right;
+        });
+        if (!sorted.length) {
+            return [];
+        }
+        var segments = [];
+        var segmentStart = sorted[0];
+        var previous = sorted[0];
+        for (var index = 1; index < sorted.length; index += 1) {
+            var current = sorted[index];
+            if (current === previous + 1) {
+                previous = current;
+                continue;
+            }
+            segments.push([
+                state.cells[segmentStart].dataset.slotValue,
+                state.cells[previous].dataset.slotEnd,
+            ]);
+            segmentStart = current;
+            previous = current;
+        }
+        segments.push([
+            state.cells[segmentStart].dataset.slotValue,
+            state.cells[previous].dataset.slotEnd,
+        ]);
+        return segments;
+    }
+
+    function selectedSetFromSegments(state, segments) {
+        var selected = new Set();
+        segments.forEach(function (segment) {
+            var startValue = segment[0];
+            var endValue = segment[1];
+            state.cells.forEach(function (cell, index) {
+                if (cell.dataset.slotValue >= startValue && cell.dataset.slotEnd <= endValue) {
+                    selected.add(index);
+                }
+            });
+        });
+        return selected;
+    }
+
+    function updateLegacyFields(state, segments) {
+        var startInput = state.startInput;
+        var endInput = state.endInput;
+        var hoursInput = state.hoursInput;
+        if (!segments.length) {
+            if (startInput) {
+                startInput.value = "";
+            }
+            if (endInput) {
+                endInput.value = "";
+            }
+            if (hoursInput) {
+                hoursInput.value = "0";
+            }
+            return;
+        }
+        var totalMinutes = segments.reduce(function (sum, segment) {
+            return sum + minutesBetween(segment[0], segment[1]);
+        }, 0);
+        if (startInput) {
+            startInput.value = segments[0][0];
+        }
+        if (endInput) {
+            endInput.value = segments[segments.length - 1][1];
+        }
+        if (hoursInput) {
+            hoursInput.value = String(totalMinutes / 60);
+        }
+    }
+
     function initPicker(root) {
+        if (root.dataset.pickerBound === "true") {
+            return;
+        }
+        root.dataset.pickerBound = "true";
+
         var states = {};
         var dragging = null;
         var frame = root.querySelector(".weekly-calendar-frame");
 
         root.querySelectorAll("[data-schedule-summary-card]").forEach(function (card) {
             var day = card.getAttribute("data-schedule-summary-card");
-            var startSelect = root.querySelector("#id_" + day + "_start");
-            var endSelect = root.querySelector("#id_" + day + "_end");
-            var summary = root.querySelector('[data-schedule-summary-text="' + day + '"]');
-            var clearButton = root.querySelector('[data-clear-day="' + day + '"]');
+            var segmentsInput = root.querySelector("#id_" + day + "_segments");
             states[day] = {
                 card: card,
-                startSelect: startSelect,
-                endSelect: endSelect,
-                summary: summary,
+                segmentsInput: segmentsInput,
+                startInput: root.querySelector("#id_" + day + "_start"),
+                endInput: root.querySelector("#id_" + day + "_end"),
+                hoursInput: root.querySelector("#id_" + day + "_hours"),
+                summary: root.querySelector('[data-schedule-summary-text="' + day + '"]'),
                 cells: Array.from(root.querySelectorAll('.weekly-calendar-cell[data-day="' + day + '"]')),
+                selectedIndices: new Set(),
             };
+            var clearButton = root.querySelector('[data-clear-day="' + day + '"]');
             if (clearButton) {
                 clearButton.addEventListener("click", function () {
-                    clearDay(day);
-                });
-            }
-            if (startSelect) {
-                startSelect.addEventListener("change", function () {
-                    refreshDay(day);
-                });
-            }
-            if (endSelect) {
-                endSelect.addEventListener("change", function () {
-                    refreshDay(day);
+                    setSegments(day, []);
                 });
             }
         });
 
-        function getRange(day) {
+        function readSegments(day) {
             var state = states[day];
-            if (!state || !state.startSelect || !state.endSelect) {
-                return null;
+            if (!state || !state.segmentsInput) {
+                return [];
             }
-            var startValue = state.startSelect.value;
-            var endValue = state.endSelect.value;
-            if (!startValue || !endValue) {
-                return null;
+            return parseSegments(state.segmentsInput.value);
+        }
+
+        function setSegments(day, segments) {
+            var state = states[day];
+            if (!state || !state.segmentsInput) {
+                return;
             }
-            var startIndex = state.cells.findIndex(function (cell) {
-                return cell.dataset.slotValue === startValue;
-            });
-            var endIndex = state.cells.findIndex(function (cell) {
-                return cell.dataset.slotEnd === endValue;
-            });
-            if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-                return null;
-            }
-            return {
-                startValue: startValue,
-                endValue: endValue,
-                startIndex: startIndex,
-                endIndex: endIndex,
-            };
+            state.segmentsInput.value = JSON.stringify(segments);
+            updateLegacyFields(state, segments);
+            refreshDay(day);
         }
 
         function refreshDay(day) {
@@ -105,21 +182,26 @@
             if (!state) {
                 return;
             }
-            var startValue = state.startSelect ? state.startSelect.value : "";
-            var endValue = state.endSelect ? state.endSelect.value : "";
-            var range = getRange(day);
-            var hasWindow = Boolean(startValue && endValue);
-            state.card.classList.toggle("is-scheduled", hasWindow);
+            var segments = readSegments(day);
+            var selectedIndices = selectedSetFromSegments(state, segments);
+            state.selectedIndices = selectedIndices;
+            state.card.classList.toggle("is-scheduled", segments.length > 0);
             if (state.summary) {
-                if (hasWindow) {
-                    var duration = formatDuration(startValue, endValue);
-                    state.summary.textContent = formatTimeLabel(startValue) + " - " + formatTimeLabel(endValue) + (duration ? " (" + duration + ")" : "");
+                if (segments.length) {
+                    var labels = segments.map(function (segment) {
+                        return formatTimeLabel(segment[0]) + " - " + formatTimeLabel(segment[1]);
+                    });
+                    var totalMinutes = segments.reduce(function (sum, segment) {
+                        return sum + minutesBetween(segment[0], segment[1]);
+                    }, 0);
+                    var durationLabel = formatHours(totalMinutes);
+                    state.summary.textContent = labels.join(", ") + (durationLabel ? " (" + durationLabel + ")" : "");
                 } else {
                     state.summary.textContent = "Not scheduled";
                 }
             }
             state.cells.forEach(function (cell, index) {
-                var selected = Boolean(range && index >= range.startIndex && index <= range.endIndex);
+                var selected = selectedIndices.has(index);
                 cell.classList.toggle("is-selected", selected);
                 cell.setAttribute("aria-pressed", selected ? "true" : "false");
             });
@@ -131,42 +213,29 @@
             });
         }
 
-        function clearDay(day) {
+        function applySelection(day, baseSelected, anchorIndex, currentIndex, mode) {
             var state = states[day];
             if (!state) {
                 return;
             }
-            if (state.startSelect) {
-                state.startSelect.value = "";
+            var startIndex = Math.min(anchorIndex, currentIndex);
+            var endIndex = Math.max(anchorIndex, currentIndex);
+            var selected = new Set(baseSelected);
+            for (var index = startIndex; index <= endIndex; index += 1) {
+                if (mode === "remove") {
+                    selected.delete(index);
+                } else {
+                    selected.add(index);
+                }
             }
-            if (state.endSelect) {
-                state.endSelect.value = "";
-            }
-            refreshDay(day);
-        }
-
-        function setRange(day, firstIndex, secondIndex) {
-            var state = states[day];
-            if (!state || !state.startSelect || !state.endSelect) {
-                return;
-            }
-            var startIndex = Math.min(firstIndex, secondIndex);
-            var endIndex = Math.max(firstIndex, secondIndex);
-            var startCell = state.cells[startIndex];
-            var endCell = state.cells[endIndex];
-            if (!startCell || !endCell) {
-                return;
-            }
-            state.startSelect.value = startCell.dataset.slotValue;
-            state.endSelect.value = endCell.dataset.slotEnd;
-            refreshDay(day);
+            setSegments(day, contiguousSegmentsFromSelection(state, selected));
         }
 
         var clearWeekButton = root.querySelector("[data-clear-week]");
         if (clearWeekButton) {
             clearWeekButton.addEventListener("click", function () {
                 Object.keys(states).forEach(function (day) {
-                    clearDay(day);
+                    setSegments(day, []);
                 });
             });
         }
@@ -174,18 +243,26 @@
         root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
             cell.addEventListener("mousedown", function (event) {
                 event.preventDefault();
+                var day = cell.dataset.day;
+                var state = states[day];
+                if (!state) {
+                    return;
+                }
+                var index = Number(cell.dataset.slotIndex);
                 dragging = {
-                    day: cell.dataset.day,
-                    anchorIndex: Number(cell.dataset.slotIndex),
+                    day: day,
+                    anchorIndex: index,
+                    mode: state.selectedIndices.has(index) ? "remove" : "add",
+                    baseSelected: new Set(state.selectedIndices),
                 };
                 root.classList.add("is-dragging");
-                setRange(dragging.day, dragging.anchorIndex, dragging.anchorIndex);
+                applySelection(day, dragging.baseSelected, index, index, dragging.mode);
             });
             cell.addEventListener("mouseenter", function () {
                 if (!dragging || dragging.day !== cell.dataset.day) {
                     return;
                 }
-                setRange(dragging.day, dragging.anchorIndex, Number(cell.dataset.slotIndex));
+                applySelection(dragging.day, dragging.baseSelected, dragging.anchorIndex, Number(cell.dataset.slotIndex), dragging.mode);
             });
         });
 

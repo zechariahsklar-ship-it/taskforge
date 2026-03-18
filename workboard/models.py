@@ -109,6 +109,30 @@ class StudentAvailability(models.Model):
     def __str__(self):
         return f"{self.profile.display_name} - {self.get_weekday_display()}"
 
+    @property
+    def block_summary(self):
+        blocks = list(self.blocks.order_by("position", "start_time", "end_time", "pk"))
+        if not blocks:
+            return "Not scheduled"
+        return ", ".join(block.display_label for block in blocks)
+
+
+class StudentAvailabilityBlock(models.Model):
+    availability = models.ForeignKey(StudentAvailability, on_delete=models.CASCADE, related_name="blocks")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["availability__weekday", "position", "start_time", "end_time", "pk"]
+
+    def __str__(self):
+        return f"{self.availability.profile.display_name} - {self.display_label}"
+
+    @property
+    def display_label(self):
+        return f"{self.start_time.strftime('%I:%M %p').lstrip('0')} - {self.end_time.strftime('%I:%M %p').lstrip('0')}"
+
 
 class StudentAvailabilityOverride(models.Model):
     profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="availability_overrides")
@@ -130,6 +154,45 @@ class StudentAvailabilityOverride(models.Model):
         if self.hours_available > 0:
             return f"+{self.hours_available}"
         return str(self.hours_available)
+
+
+class StudentScheduleOverride(models.Model):
+    profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="schedule_overrides")
+    override_date = models.DateField()
+    note = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_schedule_overrides")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["override_date", "profile__display_name"]
+        unique_together = ("profile", "override_date")
+
+    def __str__(self):
+        return f"{self.profile.display_name} schedule override for {self.override_date}"
+
+    @property
+    def block_summary(self):
+        blocks = list(self.blocks.order_by("position", "start_time", "end_time", "pk"))
+        if not blocks:
+            return "Not scheduled"
+        return ", ".join(block.display_label for block in blocks)
+
+
+class StudentScheduleOverrideBlock(models.Model):
+    schedule_override = models.ForeignKey(StudentScheduleOverride, on_delete=models.CASCADE, related_name="blocks")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["schedule_override__override_date", "position", "start_time", "end_time", "pk"]
+
+    def __str__(self):
+        return f"{self.schedule_override.profile.display_name} - {self.display_label}"
+
+    @property
+    def display_label(self):
+        return f"{self.start_time.strftime('%I:%M %p').lstrip('0')} - {self.end_time.strftime('%I:%M %p').lstrip('0')}"
 
 
 class RecurringTaskTemplate(models.Model):

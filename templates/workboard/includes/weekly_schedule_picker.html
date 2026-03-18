@@ -1,27 +1,28 @@
 {% load static %}
-{% for hidden in weekly_form.hidden_fields %}
+{% with picker_form=schedule_form|default:weekly_form %}
+{% with day_rows=picker_form.day_rows %}
+{% for hidden in picker_form.hidden_fields %}
     {{ hidden }}
 {% endfor %}
-<div class="weekly-schedule-shell" data-weekly-schedule-picker>
+<div class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
     <div class="weekly-schedule-toolbar">
         <div>
-            <h2>Weekly schedule</h2>
-            <p>Drag through the calendar to block out one usual shift per day in 30-minute increments. Use Clear when this person is off that day.</p>
+            <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
+            <p>{{ picker_help_text|default:"Drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Drag across a blue block again to erase that range." }}</p>
         </div>
-        <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>Clear week</button>
+        <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>{{ clear_all_label|default:"Clear all" }}</button>
     </div>
     <div class="weekly-schedule-summary-grid">
-        {% for row in weekly_form.day_rows %}
+        {% for row in day_rows %}
             <article class="weekly-schedule-summary-card" data-schedule-summary-card="{{ row.prefix }}">
                 <div class="weekly-schedule-summary-head">
                     <h3>{{ row.label }}</h3>
                     <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
                 </div>
-                <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">Not scheduled</p>
-                {% if row.start.errors or row.end.errors %}
+                <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
+                {% if row.segments.errors %}
                     <div class="weekly-schedule-errors">
-                        {% for error in row.start.errors %}<div class="meta">{{ error }}</div>{% endfor %}
-                        {% for error in row.end.errors %}<div class="meta">{{ error }}</div>{% endfor %}
+                        {% for error in row.segments.errors %}<div class="meta">{{ error }}</div>{% endfor %}
                     </div>
                 {% endif %}
             </article>
@@ -30,12 +31,12 @@
     <div class="weekly-calendar-frame">
         <div class="weekly-calendar-grid">
             <div class="weekly-calendar-corner">Time</div>
-            {% for row in weekly_form.day_rows %}
+            {% for row in day_rows %}
                 <div class="weekly-calendar-header">{{ row.label }}</div>
             {% endfor %}
-            {% for slot in weekly_form.calendar_slots %}
+            {% for slot in picker_form.calendar_slots %}
                 <div class="weekly-calendar-time{% if not slot.label %} weekly-calendar-time-half{% endif %}">{% if slot.label %}{{ slot.label }}{% endif %}</div>
-                {% for row in weekly_form.day_rows %}
+                {% for row in day_rows %}
                     <button
                         type="button"
                         class="weekly-calendar-cell"
@@ -50,26 +51,7 @@
             {% endfor %}
         </div>
     </div>
-    <details class="weekly-schedule-manual">
-        <summary>Manual time fields</summary>
-        <p class="meta">Use these only if you want to fine-tune the exact start and end time without the calendar.</p>
-        <div class="weekly-schedule-manual-grid">
-            {% for row in weekly_form.day_rows %}
-                <div class="weekly-schedule-manual-row">
-                    <div class="weekly-schedule-manual-day">{{ row.label }}</div>
-                    <div class="weekly-schedule-manual-pair">
-                        <div>
-                            <label for="{{ row.start.id_for_label }}">Start</label>
-                            {{ row.start }}
-                        </div>
-                        <div>
-                            <label for="{{ row.end.id_for_label }}">End</label>
-                            {{ row.end }}
-                        </div>
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-    </details>
 </div>
-<script src="{% static 'weekly_schedule_picker.js' %}?v=20260318a" defer></script>
+{% endwith %}
+{% endwith %}
+{% if include_schedule_script|default:True %}<script src="{% static 'weekly_schedule_picker.js' %}?v=20260318b" defer></script>{% endif %}

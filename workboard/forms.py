@@ -1,4 +1,5 @@
 from datetime import datetime, time, timedelta
+import json
 from decimal import Decimal
 
 from django import forms
@@ -9,6 +10,7 @@ from .models import (
     RecurringTaskTemplate,
     StudentAvailability,
     StudentAvailabilityOverride,
+    StudentScheduleOverride,
     StudentWorkerProfile,
     Task,
     TaskAttachment,
@@ -170,101 +172,234 @@ class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
         hour_adjustment = cleaned_data.get("hours_available")
         if override_date is None or hour_adjustment is None:
             return cleaned_data
-        baseline = (
-            StudentAvailability.objects.filter(profile=self.profile, weekday=override_date.weekday())
-            .values_list("hours_available", flat=True)
-            .first()
-            or Decimal("0")
-        )
-        adjusted_total = baseline + hour_adjustment
+        baseline_minutes = TaskAssignmentService._scheduled_minutes_for_date(self.profile, override_date)
+        adjusted_total = Decimal(baseline_minutes) / Decimal("60") + hour_adjustment
         if adjusted_total < 0:
             self.add_error("hours_available", "This adjustment would reduce the day below 0 hours.")
         return cleaned_data
 
 
-class WeeklyAvailabilityForm(StyledFormMixin, forms.Form):
-    monday_start = HalfHourTimeField(label="Monday start")
-    monday_end = HalfHourTimeField(label="Monday end")
-    monday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    tuesday_start = HalfHourTimeField(label="Tuesday start")
-    tuesday_end = HalfHourTimeField(label="Tuesday end")
-    tuesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    wednesday_start = HalfHourTimeField(label="Wednesday start")
-    wednesday_end = HalfHourTimeField(label="Wednesday end")
-    wednesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    thursday_start = HalfHourTimeField(label="Thursday start")
-    thursday_end = HalfHourTimeField(label="Thursday end")
-    thursday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    friday_start = HalfHourTimeField(label="Friday start")
-    friday_end = HalfHourTimeField(label="Friday end")
-    friday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    saturday_start = HalfHourTimeField(label="Saturday start")
-    saturday_end = HalfHourTimeField(label="Saturday end")
-    saturday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
-    sunday_start = HalfHourTimeField(label="Sunday start")
-    sunday_end = HalfHourTimeField(label="Sunday end")
-    sunday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+def _serialize_schedule_segments(blocks):
+    return json.dumps([[start_time.strftime("%H:%M"), end_time.strftime("%H:%M")] for start_time, end_time in blocks])
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for prefix, label, _ in DAY_FIELD_CONFIG:
-            self.fields[f"{prefix}_start"].label = f"{label} start"
-            self.fields[f"{prefix}_end"].label = f"{label} end"
-            self.fields[f"{prefix}_start"].help_text = "Leave both blank if this person is not scheduled that day."
-        self.schedule_windows = {}
+
+def _aggregate_schedule_blocks(blocks):
+    if not blocks:
+        return None, None, Decimal("0")
+    total_minutes = sum(_window_minutes(start_time, end_time) for start_time, end_time in blocks)
+    return blocks[0][0], blocks[-1][1], Decimal(total_minutes) / Decimal("60")
+
+
+class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
+    schedule_day_config = []
 
     def day_rows(self):
         return [
             {
                 "prefix": prefix,
                 "label": label,
-                "start": self[f"{prefix}_start"],
-                "end": self[f"{prefix}_end"],
+                "segments": self[f"{prefix}_segments"],
             }
-            for prefix, label, _ in DAY_FIELD_CONFIG
+            for prefix, label, *_ in self.schedule_day_config
         ]
 
     def calendar_slots(self):
         return WEEKLY_CALENDAR_SLOTS
 
+    def _parse_segments(self, raw_value, *, field_name, label):
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            self.add_error(field_name, f"{label} has an invalid schedule payload.")
+            return None
+        if not isinstance(payload, list):
+            self.add_error(field_name, f"{label} has an invalid schedule payload.")
+            return None
+
+        parsed_blocks = []
+        for item in payload:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                self.add_error(field_name, f"{label} has an invalid schedule block.")
+                return None
+            start_raw, end_raw = item
+            try:
+                start_value = datetime.strptime(str(start_raw), "%H:%M").time()
+                end_value = datetime.strptime(str(end_raw), "%H:%M").time()
+            except ValueError:
+                self.add_error(field_name, f"{label} must use 30-minute times.")
+                return None
+            if end_value <= start_value:
+                self.add_error(field_name, f"{label} end time must be after the start time.")
+                return None
+            if _window_minutes(start_value, end_value) % 30 != 0:
+                self.add_error(field_name, f"{label} must use 30-minute increments.")
+                return None
+            parsed_blocks.append((start_value, end_value))
+
+        parsed_blocks.sort(key=lambda block: (block[0], block[1]))
+        normalized_blocks = []
+        for start_value, end_value in parsed_blocks:
+            if not normalized_blocks:
+                normalized_blocks.append([start_value, end_value])
+                continue
+            last_start, last_end = normalized_blocks[-1]
+            if start_value <= last_end:
+                normalized_blocks[-1][1] = max(last_end, end_value)
+            else:
+                normalized_blocks.append([start_value, end_value])
+        return [(start_value, end_value) for start_value, end_value in normalized_blocks]
+
+    def _legacy_blocks_for_day(self, cleaned_data, *, prefix, label):
+        start_value = cleaned_data.get(f"{prefix}_start")
+        end_value = cleaned_data.get(f"{prefix}_end")
+        legacy_hours = cleaned_data.get(f"{prefix}_hours")
+
+        if start_value or end_value:
+            if not start_value:
+                self.add_error(f"{prefix}_start", f"Choose a start time for {label}.")
+                return None
+            if not end_value:
+                self.add_error(f"{prefix}_end", f"Choose an end time for {label}.")
+                return None
+            if end_value <= start_value:
+                self.add_error(f"{prefix}_end", f"{label} end time must be after the start time.")
+                return None
+            if _window_minutes(start_value, end_value) % 30 != 0:
+                self.add_error(f"{prefix}_end", f"{label} must use 30-minute increments.")
+                return None
+            return [(start_value, end_value)]
+
+        try:
+            start_value, end_value, hours_value = _legacy_hours_to_window(legacy_hours)
+        except ValueError:
+            self.add_error(f"{prefix}_start", f"{label} must use 30-minute increments.")
+            return None
+        if start_value and end_value:
+            return [(start_value, end_value)]
+        return []
+
+
+class WeeklyAvailabilityForm(BaseScheduleBlocksForm):
+    schedule_day_config = DAY_FIELD_CONFIG
+
+    monday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    monday_start = HalfHourTimeField(label="Monday start", widget=forms.HiddenInput())
+    monday_end = HalfHourTimeField(label="Monday end", widget=forms.HiddenInput())
+    monday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    tuesday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    tuesday_start = HalfHourTimeField(label="Tuesday start", widget=forms.HiddenInput())
+    tuesday_end = HalfHourTimeField(label="Tuesday end", widget=forms.HiddenInput())
+    tuesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    wednesday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    wednesday_start = HalfHourTimeField(label="Wednesday start", widget=forms.HiddenInput())
+    wednesday_end = HalfHourTimeField(label="Wednesday end", widget=forms.HiddenInput())
+    wednesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    thursday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    thursday_start = HalfHourTimeField(label="Thursday start", widget=forms.HiddenInput())
+    thursday_end = HalfHourTimeField(label="Thursday end", widget=forms.HiddenInput())
+    thursday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    friday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    friday_start = HalfHourTimeField(label="Friday start", widget=forms.HiddenInput())
+    friday_end = HalfHourTimeField(label="Friday end", widget=forms.HiddenInput())
+    friday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    saturday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    saturday_start = HalfHourTimeField(label="Saturday start", widget=forms.HiddenInput())
+    saturday_end = HalfHourTimeField(label="Saturday end", widget=forms.HiddenInput())
+    saturday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    sunday_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    sunday_start = HalfHourTimeField(label="Sunday start", widget=forms.HiddenInput())
+    sunday_end = HalfHourTimeField(label="Sunday end", widget=forms.HiddenInput())
+    sunday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.schedule_blocks = {}
+        self.schedule_windows = {}
+
     def clean(self):
         cleaned_data = super().clean()
+        schedule_blocks = {}
         schedule_windows = {}
-        for prefix, label, weekday in DAY_FIELD_CONFIG:
-            start_value = cleaned_data.get(f"{prefix}_start")
-            end_value = cleaned_data.get(f"{prefix}_end")
-            legacy_hours = cleaned_data.get(f"{prefix}_hours")
-
-            if start_value or end_value:
-                if not start_value:
-                    self.add_error(f"{prefix}_start", f"Choose a start time for {label}.")
-                    continue
-                if not end_value:
-                    self.add_error(f"{prefix}_end", f"Choose an end time for {label}.")
-                    continue
-                if end_value <= start_value:
-                    self.add_error(f"{prefix}_end", f"{label} end time must be after the start time.")
-                    continue
-                minutes = _window_minutes(start_value, end_value)
-                if minutes % 30 != 0:
-                    self.add_error(f"{prefix}_end", f"{label} must use 30-minute increments.")
-                    continue
-                hours_value = Decimal(minutes) / Decimal("60")
+        for prefix, label, weekday in self.schedule_day_config:
+            raw_segments = cleaned_data.get(f"{prefix}_segments")
+            if raw_segments:
+                blocks = self._parse_segments(raw_segments, field_name=f"{prefix}_segments", label=label)
             else:
-                try:
-                    start_value, end_value, hours_value = _legacy_hours_to_window(legacy_hours)
-                except ValueError:
-                    self.add_error(f"{prefix}_start", f"{label} must use 30-minute increments.")
-                    continue
+                blocks = self._legacy_blocks_for_day(cleaned_data, prefix=prefix, label=label)
+            if blocks is None:
+                continue
 
+            start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+            cleaned_data[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
+            cleaned_data[f"{prefix}_start"] = start_value
+            cleaned_data[f"{prefix}_end"] = end_value
+            cleaned_data[f"{prefix}_hours"] = hours_value
+            schedule_blocks[weekday] = [
+                {"start_time": start_block, "end_time": end_block}
+                for start_block, end_block in blocks
+            ]
             schedule_windows[weekday] = {
                 "start_time": start_value,
                 "end_time": end_value,
                 "hours_available": hours_value,
             }
-            cleaned_data[f"{prefix}_hours"] = hours_value
+
+        cleaned_data["schedule_blocks"] = schedule_blocks
         cleaned_data["schedule_windows"] = schedule_windows
+        self.schedule_blocks = schedule_blocks
         self.schedule_windows = schedule_windows
+        return cleaned_data
+
+
+class StudentScheduleOverrideForm(BaseScheduleBlocksForm, forms.ModelForm):
+    schedule_day_config = [("override", "Override schedule", None)]
+
+    override_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    override_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    override_start = HalfHourTimeField(label="Override start", widget=forms.HiddenInput())
+    override_end = HalfHourTimeField(label="Override end", widget=forms.HiddenInput())
+    override_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+
+    class Meta:
+        model = StudentScheduleOverride
+        fields = ["override_date", "note"]
+
+    def __init__(self, *args, profile=None, **kwargs):
+        self.profile = profile
+        super().__init__(*args, **kwargs)
+        self.fields["note"].help_text = "Optional note about why this date should use a different schedule."
+        if self.instance.pk and not self.initial.get("override_segments"):
+            blocks = [
+                (block.start_time, block.end_time)
+                for block in self.instance.blocks.order_by("position", "start_time", "end_time", "pk")
+            ]
+            self.initial["override_segments"] = _serialize_schedule_segments(blocks)
+            start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+            self.initial["override_start"] = start_value
+            self.initial["override_end"] = end_value
+            self.initial["override_hours"] = hours_value
+
+    def clean(self):
+        cleaned_data = super().clean()
+        blocks = self._parse_segments(cleaned_data.get("override_segments"), field_name="override_segments", label="Temporary schedule")
+        if blocks is None:
+            return cleaned_data
+        start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+        cleaned_data["override_segments"] = _serialize_schedule_segments(blocks)
+        cleaned_data["override_start"] = start_value
+        cleaned_data["override_end"] = end_value
+        cleaned_data["override_hours"] = hours_value
+        cleaned_data["schedule_blocks"] = [
+            {"start_time": start_block, "end_time": end_block}
+            for start_block, end_block in blocks
+        ]
+        cleaned_data["schedule_windows"] = {
+            "start_time": start_value,
+            "end_time": end_value,
+            "hours_available": hours_value,
+        }
         return cleaned_data
 
 

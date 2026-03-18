@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta
+import json
 from functools import wraps
 
 from django.contrib import messages
@@ -13,6 +14,7 @@ from .forms import (
     AppPasswordChangeForm,
     RecurringTaskTemplateForm,
     StudentAvailabilityOverrideForm,
+    StudentScheduleOverrideForm,
     StudentWorkerProfileForm,
     SupervisorForm,
     SupervisorStudentPasswordResetForm,
@@ -28,7 +30,10 @@ from .forms import (
 from .models import (
     RecurringTaskTemplate,
     StudentAvailability,
+    StudentAvailabilityBlock,
     StudentAvailabilityOverride,
+    StudentScheduleOverride,
+    StudentScheduleOverrideBlock,
     StudentWorkerProfile,
     Task,
     TaskAttachment,
@@ -361,13 +366,44 @@ def _backfill_orphan_recurring_tasks() -> None:
         _sync_task_recurring_template(task)
 
 
+def _fallback_blocks_from_hours(hours_value):
+    if not hours_value:
+        return []
+    total_minutes = int(float(hours_value) * 60)
+    if total_minutes <= 0 or total_minutes % 30 != 0:
+        return []
+    start_value = time(9, 0)
+    end_value = (datetime.combine(date.today(), start_value) + timedelta(minutes=total_minutes)).time()
+    return [(start_value, end_value)]
+
+
+def _serialize_blocks_for_initial(blocks):
+    return json.dumps([[start_time.strftime("%H:%M"), end_time.strftime("%H:%M")] for start_time, end_time in blocks])
+
+
+def _availability_blocks(availability: StudentAvailability | None) -> list[tuple[time, time]]:
+    if availability is None:
+        return []
+    blocks = [
+        (block.start_time, block.end_time)
+        for block in availability.blocks.order_by("position", "start_time", "end_time", "pk")
+    ]
+    if blocks:
+        return blocks
+    if availability.start_time and availability.end_time:
+        return [(availability.start_time, availability.end_time)]
+    return _fallback_blocks_from_hours(availability.hours_available)
+
+
 def _weekly_schedule_initial(profile: StudentWorkerProfile | None = None) -> dict:
-    weekly_map = {item.weekday: item for item in profile.weekly_availability.all()} if profile else {}
+    weekly_map = {item.weekday: item for item in profile.weekly_availability.prefetch_related("blocks").all()} if profile else {}
     initial = {}
     for prefix, weekday in WEEKLY_SCHEDULE_FIELDS:
         availability = weekly_map.get(weekday)
-        initial[f"{prefix}_start"] = availability.start_time if availability else None
-        initial[f"{prefix}_end"] = availability.end_time if availability else None
+        blocks = _availability_blocks(availability)
+        initial[f"{prefix}_segments"] = _serialize_blocks_for_initial(blocks)
+        initial[f"{prefix}_start"] = blocks[0][0] if blocks else (availability.start_time if availability else None)
+        initial[f"{prefix}_end"] = blocks[-1][1] if blocks else (availability.end_time if availability else None)
         initial[f"{prefix}_hours"] = availability.hours_available if availability else 0
     return initial
 
@@ -375,11 +411,39 @@ def _weekly_schedule_initial(profile: StudentWorkerProfile | None = None) -> dic
 def _save_weekly_schedule(profile: StudentWorkerProfile, weekly_form: WeeklyAvailabilityForm) -> None:
     for _, weekday in WEEKLY_SCHEDULE_FIELDS:
         defaults = weekly_form.cleaned_data["schedule_windows"][weekday]
-        StudentAvailability.objects.update_or_create(
+        availability, _ = StudentAvailability.objects.update_or_create(
             profile=profile,
             weekday=weekday,
             defaults=defaults,
         )
+        availability.blocks.all().delete()
+        for position, block in enumerate(weekly_form.cleaned_data["schedule_blocks"][weekday], start=1):
+            StudentAvailabilityBlock.objects.create(
+                availability=availability,
+                start_time=block["start_time"],
+                end_time=block["end_time"],
+                position=position,
+            )
+
+
+def _save_schedule_override(profile: StudentWorkerProfile, schedule_override_form: StudentScheduleOverrideForm, created_by: User) -> StudentScheduleOverride:
+    schedule_override, _ = StudentScheduleOverride.objects.update_or_create(
+        profile=profile,
+        override_date=schedule_override_form.cleaned_data["override_date"],
+        defaults={
+            "note": schedule_override_form.cleaned_data.get("note", ""),
+            "created_by": created_by,
+        },
+    )
+    schedule_override.blocks.all().delete()
+    for position, block in enumerate(schedule_override_form.cleaned_data["schedule_blocks"], start=1):
+        StudentScheduleOverrideBlock.objects.create(
+            schedule_override=schedule_override,
+            start_time=block["start_time"],
+            end_time=block["end_time"],
+            position=position,
+        )
+    return schedule_override
 
 
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
@@ -1016,12 +1080,15 @@ def worker_availability_view(request, pk):
     worker_form = StudentWorkerProfileForm(instance=profile)
     weekly_form = WeeklyAvailabilityForm(initial=initial)
     override_form = StudentAvailabilityOverrideForm(profile=profile)
+    schedule_override_form = StudentScheduleOverrideForm(profile=profile)
 
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "worker":
             worker_form = StudentWorkerProfileForm(request.POST, instance=profile)
             weekly_form = WeeklyAvailabilityForm(request.POST)
+            override_form = StudentAvailabilityOverrideForm(profile=profile)
+            schedule_override_form = StudentScheduleOverrideForm(profile=profile)
             if worker_form.is_valid() and weekly_form.is_valid():
                 profile = worker_form.save(commit=False)
                 user = profile.user
@@ -1040,6 +1107,7 @@ def worker_availability_view(request, pk):
             worker_form = StudentWorkerProfileForm(instance=profile)
             weekly_form = WeeklyAvailabilityForm(initial=initial)
             override_form = StudentAvailabilityOverrideForm(request.POST, profile=profile)
+            schedule_override_form = StudentScheduleOverrideForm(profile=profile)
             if override_form.is_valid():
                 override = override_form.save(commit=False)
                 override.profile = profile
@@ -1047,10 +1115,24 @@ def worker_availability_view(request, pk):
                 override.save()
                 messages.success(request, "Temporary hour override saved.")
                 return redirect("worker-availability", pk=profile.pk)
+        elif action == "schedule_override":
+            worker_form = StudentWorkerProfileForm(instance=profile)
+            weekly_form = WeeklyAvailabilityForm(initial=initial)
+            override_form = StudentAvailabilityOverrideForm(profile=profile)
+            schedule_override_form = StudentScheduleOverrideForm(request.POST, profile=profile)
+            if schedule_override_form.is_valid():
+                schedule_override = _save_schedule_override(profile, schedule_override_form, request.user)
+                messages.success(request, f"Temporary schedule saved for {schedule_override.override_date}.")
+                return redirect("worker-availability", pk=profile.pk)
         elif action == "delete_override":
             override = get_object_or_404(StudentAvailabilityOverride, pk=request.POST.get("override_id"), profile=profile)
             override.delete()
-            messages.success(request, "Temporary override removed.")
+            messages.success(request, "Temporary hour override removed.")
+            return redirect("worker-availability", pk=profile.pk)
+        elif action == "delete_schedule_override":
+            schedule_override = get_object_or_404(StudentScheduleOverride, pk=request.POST.get("schedule_override_id"), profile=profile)
+            schedule_override.delete()
+            messages.success(request, "Temporary schedule removed.")
             return redirect("worker-availability", pk=profile.pk)
 
     return render(
@@ -1061,7 +1143,9 @@ def worker_availability_view(request, pk):
             "worker_form": worker_form,
             "weekly_form": weekly_form,
             "override_form": override_form,
+            "schedule_override_form": schedule_override_form,
             "overrides": profile.availability_overrides.all(),
+            "schedule_overrides": profile.schedule_overrides.prefetch_related("blocks").all(),
         },
     )
 

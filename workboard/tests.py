@@ -1,4 +1,5 @@
 from datetime import date, datetime, time
+import json
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -7,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -758,12 +759,34 @@ class TaskScheduledWindowTests(TestCase):
             max_hours_per_day=4,
         )
         for weekday in Weekday.values:
-            StudentAvailability.objects.create(
+            availability = StudentAvailability.objects.create(
                 profile=profile,
                 weekday=weekday,
                 start_time=start_value if weekday < 5 else None,
                 end_time=end_value if weekday < 5 else None,
                 hours_available=3 if weekday < 5 else 0,
+            )
+            if weekday < 5 and start_value and end_value:
+                StudentAvailabilityBlock.objects.create(
+                    availability=availability,
+                    start_time=start_value,
+                    end_time=end_value,
+                    position=1,
+                )
+
+    def _replace_blocks(self, user, weekday, blocks):
+        availability = user.worker_profile.weekly_availability.get(weekday=weekday)
+        availability.blocks.all().delete()
+        availability.start_time = blocks[0][0] if blocks else None
+        availability.end_time = blocks[-1][1] if blocks else None
+        availability.hours_available = sum((datetime.combine(date.today(), end_value) - datetime.combine(date.today(), start_value)).total_seconds() // 60 for start_value, end_value in blocks) / 60 if blocks else 0
+        availability.save(update_fields=["start_time", "end_time", "hours_available"])
+        for position, (start_value, end_value) in enumerate(blocks, start=1):
+            StudentAvailabilityBlock.objects.create(
+                availability=availability,
+                start_time=start_value,
+                end_time=end_value,
+                position=position,
             )
 
     def test_task_create_auto_assigns_worker_available_in_scheduled_window(self):
@@ -826,6 +849,31 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "is not scheduled during that work window")
         self.assertFalse(Task.objects.filter(title="Scheduled phone shift").exists())
+
+    def test_split_shift_worker_is_available_inside_second_block_but_not_gap(self):
+        self._replace_blocks(
+            self.morning_worker,
+            Weekday.MONDAY,
+            [(time(9, 0), time(11, 0)), (time(13, 0), time(15, 0))],
+        )
+
+        self.assertFalse(
+            TaskAssignmentService.user_is_available_for_window(
+                self.morning_worker,
+                scheduled_date=date(2026, 3, 16),
+                scheduled_start_time=time(11, 30),
+                scheduled_end_time=time(12, 30),
+            )
+        )
+        self.assertTrue(
+            TaskAssignmentService.user_is_available_for_window(
+                self.morning_worker,
+                scheduled_date=date(2026, 3, 16),
+                scheduled_start_time=time(13, 30),
+                scheduled_end_time=time(14, 30),
+            )
+        )
+
 
     def test_worker_create_accepts_start_and_end_schedule_fields(self):
         response = self.client.post(
@@ -1567,6 +1615,48 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "This adjustment would reduce the day below 0 hours.")
         self.assertFalse(self.profile.availability_overrides.filter(override_date=date(2026, 3, 16)).exists())
+
+    def test_temporary_schedule_override_replaces_normal_blocks_for_specific_date(self):
+        monday, _ = StudentAvailability.objects.update_or_create(
+            profile=self.profile,
+            weekday=Weekday.MONDAY,
+            defaults={"start_time": time(9, 0), "end_time": time(12, 0), "hours_available": 3},
+        )
+        monday.blocks.all().delete()
+        StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
+
+        response = self.client.post(
+            reverse("worker-availability", args=[self.profile.pk]),
+            {
+                "action": "schedule_override",
+                "override_date": "2026-03-16",
+                "note": "Split lab schedule",
+                "override_segments": json.dumps([["14:00", "16:00"], ["18:00", "19:00"]]),
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
+        self.assertEqual(schedule_override.blocks.count(), 2)
+        self.assertEqual(schedule_override.block_summary, "2:00 PM - 4:00 PM, 6:00 PM - 7:00 PM")
+        self.assertFalse(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 16),
+                scheduled_start_time=time(9, 30),
+                scheduled_end_time=time(10, 30),
+            )
+        )
+        self.assertTrue(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 16),
+                scheduled_start_time=time(14, 30),
+                scheduled_end_time=time(15, 30),
+            )
+        )
+
     def test_add_student_form_uses_weekly_schedule_fields_and_hides_old_profile_fields(self):
         response = self.client.get(reverse("worker-create"))
 
@@ -1592,7 +1682,9 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'data-schedule-summary-card="monday"')
         self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
         self.assertContains(edit_response, 'data-weekly-schedule-picker')
-        self.assertContains(edit_response, 'Manual time fields')
+        self.assertContains(edit_response, 'Temporary schedule change')
+        self.assertContains(edit_response, 'name="monday_segments"')
+        self.assertContains(edit_response, 'name="override_segments"')
 
     def test_creating_student_uses_first_and_last_name_for_display_name_and_saves_weekly_hours(self):
         response = self.client.post(

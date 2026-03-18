@@ -7,7 +7,7 @@ from urllib import error, request
 from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
-from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskEstimateFeedback, TaskStatus, User, UserRole
+from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentScheduleOverride, StudentWorkerProfile, Task, TaskEstimateFeedback, TaskStatus, User, UserRole
 
 
 def _format_time_label(value):
@@ -136,6 +136,67 @@ class TaskAssignmentService:
         return None
 
     @staticmethod
+    def _block_minutes(start_time, end_time):
+        start_dt = datetime.combine(date.today(), start_time)
+        end_dt = datetime.combine(date.today(), end_time)
+        return int((end_dt - start_dt).total_seconds() // 60)
+
+    @staticmethod
+    def _block_tuples_from_availability(availability):
+        blocks = [
+            (block.start_time, block.end_time)
+            for block in availability.blocks.order_by("position", "start_time", "end_time", "pk")
+        ]
+        if blocks:
+            return blocks
+        if availability.start_time and availability.end_time:
+            return [(availability.start_time, availability.end_time)]
+        return []
+
+    @staticmethod
+    def _schedule_override_for_date(profile, target_date):
+        return (
+            StudentScheduleOverride.objects.filter(profile=profile, override_date=target_date)
+            .prefetch_related("blocks")
+            .first()
+        )
+
+    @staticmethod
+    def _schedule_blocks_for_date(profile, target_date):
+        schedule_override = TaskAssignmentService._schedule_override_for_date(profile, target_date)
+        if schedule_override is not None:
+            return [
+                (block.start_time, block.end_time)
+                for block in schedule_override.blocks.order_by("position", "start_time", "end_time", "pk")
+            ]
+
+        availability = (
+            StudentAvailability.objects.filter(profile=profile, weekday=target_date.weekday())
+            .prefetch_related("blocks")
+            .first()
+        )
+        if not availability:
+            return []
+        return TaskAssignmentService._block_tuples_from_availability(availability)
+
+    @staticmethod
+    def _scheduled_minutes_for_date(profile, target_date):
+        schedule_override = TaskAssignmentService._schedule_override_for_date(profile, target_date)
+        if schedule_override is not None:
+            return sum(
+                TaskAssignmentService._block_minutes(block.start_time, block.end_time)
+                for block in schedule_override.blocks.order_by("position", "start_time", "end_time", "pk")
+            )
+
+        availability = StudentAvailability.objects.filter(profile=profile, weekday=target_date.weekday()).prefetch_related("blocks").first()
+        if not availability:
+            return 0
+        blocks = TaskAssignmentService._block_tuples_from_availability(availability)
+        if blocks:
+            return sum(TaskAssignmentService._block_minutes(start_time, end_time) for start_time, end_time in blocks)
+        return int(float(availability.hours_available or 0) * 60)
+
+    @staticmethod
     def user_is_available_for_window(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
         if not user or user.role not in UserRole.worker_roles():
             return False
@@ -146,10 +207,8 @@ class TaskAssignmentService:
         if not profile.active_status:
             return False
 
-        availability = StudentAvailability.objects.filter(profile=profile, weekday=scheduled_date.weekday()).first()
-        if not availability or not availability.start_time or not availability.end_time:
-            return False
-        if availability.start_time > scheduled_start_time or availability.end_time < scheduled_end_time:
+        blocks = TaskAssignmentService._schedule_blocks_for_date(profile, scheduled_date)
+        if not any(start_time <= scheduled_start_time and end_time >= scheduled_end_time for start_time, end_time in blocks):
             return False
         return not TaskAssignmentService._scheduled_conflict_exists(
             user,
@@ -257,7 +316,6 @@ class TaskAssignmentService:
         if end_date < start_date:
             end_date = start_date
 
-        weekly = {item.weekday: float(item.hours_available) for item in StudentAvailability.objects.filter(profile=profile)}
         overrides = {
             item.override_date: float(item.hours_available)
             for item in StudentAvailabilityOverride.objects.filter(profile=profile, override_date__range=(start_date, end_date))
@@ -267,10 +325,9 @@ class TaskAssignmentService:
         total_minutes = 0
         cursor = start_date
         while cursor <= end_date:
-            baseline_hours = weekly.get(cursor.weekday(), 0.0)
-            adjustment_hours = overrides.get(cursor, 0.0)
-            hours = max(baseline_hours + adjustment_hours, 0.0)
-            available_minutes = int(hours * 60)
+            base_minutes = TaskAssignmentService._scheduled_minutes_for_date(profile, cursor)
+            adjustment_minutes = int(overrides.get(cursor, 0.0) * 60)
+            available_minutes = max(base_minutes + adjustment_minutes, 0)
             if cursor == start_date and remaining_workday_minutes is not None:
                 available_minutes = min(available_minutes, remaining_workday_minutes)
             total_minutes += available_minutes
