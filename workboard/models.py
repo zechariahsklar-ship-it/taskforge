@@ -216,6 +216,7 @@ class RecurringTaskTemplate(models.Model):
         related_name="additional_recurring_templates",
         limit_choices_to={"role__in": UserRole.worker_roles()},
     )
+    rotating_additional_assignee_count = models.PositiveSmallIntegerField(default=0)
     rotate_additional_assignee = models.BooleanField(default=False)
     requested_by = models.ForeignKey(
         User,
@@ -256,8 +257,10 @@ class RecurringTaskTemplate(models.Model):
     @property
     def additional_assignee_labels(self):
         labels = [user.display_label for user in self.additional_assignees.all()]
-        if self.rotate_additional_assignee:
-            labels.append("Rotation")
+        if self.rotating_additional_assignee_count:
+            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
+        elif self.rotate_additional_assignee:
+            labels.append("Rotation x1")
         return ", ".join(labels) if labels else "None"
 
     def advance_next_run_date(self):
@@ -299,6 +302,13 @@ class Task(models.Model):
         User,
         blank=True,
         related_name="collaborative_tasks",
+        limit_choices_to={"role__in": UserRole.worker_roles()},
+    )
+    rotating_additional_assignee_count = models.PositiveSmallIntegerField(default=0)
+    rotating_additional_assignees = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name="rotating_collaborative_task_memberships",
         limit_choices_to={"role__in": UserRole.worker_roles()},
     )
     rotate_additional_assignee = models.BooleanField(default=False)
@@ -368,17 +378,29 @@ class Task(models.Model):
             if user.pk not in seen_ids:
                 labels.append(user.display_label)
                 seen_ids.add(user.pk)
+        for user in self.rotating_additional_assignees.all():
+            if user.pk not in seen_ids:
+                labels.append(f"{user.display_label} (rotation)")
+                seen_ids.add(user.pk)
         if self.rotating_additional_assignee and self.rotating_additional_assignee_id not in seen_ids:
             labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
+            seen_ids.add(self.rotating_additional_assignee_id)
+        if not any(label.endswith("(rotation)") for label in labels) and self.rotating_additional_assignee_count:
+            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
         return ", ".join(labels) if labels else "Unassigned"
 
     @property
     def additional_assignee_labels(self):
         labels = [user.display_label for user in self.additional_assignees.all()]
-        if self.rotating_additional_assignee:
+        rotating_labels = [f"{user.display_label} (rotation)" for user in self.rotating_additional_assignees.all()]
+        if rotating_labels:
+            labels.extend(rotating_labels)
+        elif self.rotating_additional_assignee:
             labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
+        elif self.rotating_additional_assignee_count:
+            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
         elif self.rotate_additional_assignee:
-            labels.append("Rotation")
+            labels.append("Rotation x1")
         return ", ".join(labels) if labels else "None"
 
 

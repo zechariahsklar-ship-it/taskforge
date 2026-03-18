@@ -204,47 +204,38 @@ def _recurring_assignee_from_task(task: Task) -> User | None:
     return None
 
 
-def _choose_rotating_additional_assignee(
+def _current_rotating_additional_user_ids(task: Task) -> list[int]:
+    current_ids = list(task.rotating_additional_assignees.order_by("first_name", "last_name", "username").values_list("pk", flat=True))
+    if not current_ids and task.rotating_additional_assignee_id:
+        current_ids.append(task.rotating_additional_assignee_id)
+    return current_ids
+
+
+def _choose_rotating_additional_assignees(
     *,
     due_date,
     estimated_minutes,
+    count,
     assigned_to_id=None,
     fixed_additional_ids=None,
-    preserve_user_id=None,
-    previous_rotating_user_id=None,
+    preserve_user_ids=None,
+    avoid_user_ids=None,
     scheduled_date=None,
     scheduled_start_time=None,
     scheduled_end_time=None,
     exclude_task_id=None,
-) -> User | None:
+) -> list[User]:
     excluded_ids = {user_id for user_id in (fixed_additional_ids or []) if user_id}
     if assigned_to_id:
         excluded_ids.add(assigned_to_id)
 
-    for candidate_user_id in [preserve_user_id, previous_rotating_user_id]:
-        if not candidate_user_id or candidate_user_id in excluded_ids:
-            continue
-        candidate = User.objects.filter(
-            pk=candidate_user_id,
-            role__in=UserRole.worker_roles(),
-            worker_profile__active_status=True,
-        ).first()
-        if candidate and (
-            not (scheduled_date and scheduled_start_time and scheduled_end_time)
-            or TaskAssignmentService.user_is_available_for_window(
-                candidate,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
-                exclude_task_id=exclude_task_id,
-            )
-        ):
-            return candidate
-
-    return TaskAssignmentService.suggest_worker_assignee(
+    return TaskAssignmentService.suggest_worker_assignees(
         due_date=due_date,
         estimated_minutes=estimated_minutes,
+        count=count,
         exclude_user_ids=list(excluded_ids),
+        preferred_user_ids=preserve_user_ids,
+        avoid_user_ids=avoid_user_ids,
         scheduled_date=scheduled_date,
         scheduled_start_time=scheduled_start_time,
         scheduled_end_time=scheduled_end_time,
@@ -252,29 +243,29 @@ def _choose_rotating_additional_assignee(
     )
 
 
-def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_rotation: bool = True, previous_rotating_user_id: int | None = None) -> Task:
+def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_rotation: bool = True, previous_rotating_user_ids: list[int] | None = None) -> Task:
     if task.assigned_to_id:
         task.additional_assignees.remove(task.assigned_to_id)
 
     fixed_additional_ids = list(task.additional_assignees.values_list("pk", flat=True))
-    rotating_assignee = None
-    if task.rotate_additional_assignee:
-        rotating_assignee = _choose_rotating_additional_assignee(
-            due_date=task.due_date,
-            estimated_minutes=task.estimated_minutes,
-            assigned_to_id=task.assigned_to_id,
-            fixed_additional_ids=fixed_additional_ids,
-            preserve_user_id=task.rotating_additional_assignee_id if preserve_existing_rotation else None,
-            previous_rotating_user_id=previous_rotating_user_id,
-            scheduled_date=task.scheduled_date,
-            scheduled_start_time=task.scheduled_start_time,
-            scheduled_end_time=task.scheduled_end_time,
-            exclude_task_id=task.pk,
-        )
-
-    if task.rotating_additional_assignee_id != (rotating_assignee.pk if rotating_assignee else None):
-        task.rotating_additional_assignee = rotating_assignee
-        task.save(update_fields=["rotating_additional_assignee", "updated_at"])
+    rotation_count = task.rotating_additional_assignee_count or 0
+    rotating_assignees = _choose_rotating_additional_assignees(
+        due_date=task.due_date,
+        estimated_minutes=task.estimated_minutes,
+        count=rotation_count,
+        assigned_to_id=task.assigned_to_id,
+        fixed_additional_ids=fixed_additional_ids,
+        preserve_user_ids=_current_rotating_additional_user_ids(task) if preserve_existing_rotation else [],
+        avoid_user_ids=previous_rotating_user_ids,
+        scheduled_date=task.scheduled_date,
+        scheduled_start_time=task.scheduled_start_time,
+        scheduled_end_time=task.scheduled_end_time,
+        exclude_task_id=task.pk,
+    )
+    task.rotate_additional_assignee = rotation_count > 0
+    task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
+    task.save(update_fields=["rotate_additional_assignee", "rotating_additional_assignee", "updated_at"])
+    task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
     return task
 
 
@@ -311,7 +302,8 @@ def _sync_task_recurring_template(task: Task) -> Task:
             scheduled_start_time=task.scheduled_start_time,
             scheduled_end_time=task.scheduled_end_time,
             assign_to=assignee,
-            rotate_additional_assignee=task.rotate_additional_assignee,
+            rotating_additional_assignee_count=task.rotating_additional_assignee_count,
+            rotate_additional_assignee=(task.rotating_additional_assignee_count or 0) > 0,
             requested_by=task.requested_by or task.created_by,
             recurrence_pattern=task.recurrence_pattern,
             recurrence_interval=task.recurrence_interval or 1,
@@ -339,8 +331,9 @@ def _sync_task_recurring_template(task: Task) -> Task:
     template.scheduled_start_time = task.scheduled_start_time
     template.scheduled_end_time = task.scheduled_end_time
     template.assign_to = assignee
-    template.rotate_additional_assignee = task.rotate_additional_assignee
-    template.requested_by = task.requested_by or task.created_by
+    template.rotating_additional_assignee_count = task.rotating_additional_assignee_count
+    template.rotate_additional_assignee = (task.rotating_additional_assignee_count or 0) > 0
+    template.requested_by = task.requested_by or task.created_by or template.requested_by
     template.recurrence_pattern = task.recurrence_pattern
     template.recurrence_interval = task.recurrence_interval or 1
     template.day_of_week = task.recurrence_day_of_week
@@ -517,9 +510,14 @@ def dashboard(request):
 
 @app_login_required
 def board_view(request):
-    tasks = Task.objects.select_related("assigned_to", "requested_by", "rotating_additional_assignee").prefetch_related("additional_assignees")
+    tasks = Task.objects.select_related("assigned_to", "requested_by", "rotating_additional_assignee").prefetch_related("additional_assignees", "rotating_additional_assignees")
     if not request.user.can_view_full_board:
-        tasks = tasks.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user) | Q(rotating_additional_assignee=request.user)).distinct()
+        tasks = tasks.filter(
+            Q(assigned_to=request.user)
+            | Q(additional_assignees=request.user)
+            | Q(rotating_additional_assignees=request.user)
+            | Q(rotating_additional_assignee=request.user)
+        ).distinct()
     tasks = list(tasks.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
     for task in tasks:
         task.status_bucket = _board_bucket_status(task.status)
@@ -536,8 +534,8 @@ def board_task_move_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    task = get_object_or_404(Task.objects.select_related("rotating_additional_assignee").prefetch_related("additional_assignees"), pk=pk)
-    if not request.user.can_edit_tasks and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
+    task = get_object_or_404(Task.objects.select_related("rotating_additional_assignee").prefetch_related("additional_assignees", "rotating_additional_assignees"), pk=pk)
+    if not request.user.can_edit_tasks and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists() and not task.rotating_additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only move tasks assigned to you.")
 
     new_status = request.POST.get("status", "").strip()
@@ -578,12 +576,23 @@ def board_task_move_view(request, pk):
 @app_login_required
 def my_tasks_view(request):
     if request.user.role == UserRole.SUPERVISOR:
-        tasks = Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user) | Q(rotating_additional_assignee=request.user) | Q(status=TaskStatus.WAITING))
+        tasks = Task.objects.filter(
+            Q(assigned_to=request.user)
+            | Q(additional_assignees=request.user)
+            | Q(rotating_additional_assignees=request.user)
+            | Q(rotating_additional_assignee=request.user)
+            | Q(status=TaskStatus.WAITING)
+        )
     else:
-        tasks = Task.objects.filter(Q(assigned_to=request.user) | Q(additional_assignees=request.user) | Q(rotating_additional_assignee=request.user))
+        tasks = Task.objects.filter(
+            Q(assigned_to=request.user)
+            | Q(additional_assignees=request.user)
+            | Q(rotating_additional_assignees=request.user)
+            | Q(rotating_additional_assignee=request.user)
+        )
     tasks = (
         tasks.select_related("requested_by", "assigned_to", "rotating_additional_assignee")
-        .prefetch_related("additional_assignees")
+        .prefetch_related("additional_assignees", "rotating_additional_assignees")
         .distinct()
         .order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk")
     )
@@ -746,10 +755,10 @@ def task_create_view(request):
 def task_detail_view(request, pk):
     task = get_object_or_404(
         Task.objects.select_related("assigned_to", "requested_by", "created_by", "rotating_additional_assignee")
-        .prefetch_related("additional_assignees", "checklist_items", "attachments", "notes__author"),
+        .prefetch_related("additional_assignees", "rotating_additional_assignees", "checklist_items", "attachments", "notes__author"),
         pk=pk,
     )
-    if not request.user.can_view_full_board and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists():
+    if not request.user.can_view_full_board and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists() and not task.rotating_additional_assignees.filter(pk=request.user.id).exists():
         return HttpResponseForbidden("You can only view tasks assigned to you.")
 
     note_form = TaskNoteForm()
@@ -1297,6 +1306,7 @@ def worker_profile_delete_view(request, pk):
     Task.objects.filter(assigned_to=worker).update(assigned_to=request.user, updated_at=timezone.now())
     Task.objects.filter(rotating_additional_assignee=worker).update(rotating_additional_assignee=None, updated_at=timezone.now())
     Task.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
+    Task.rotating_additional_assignees.through.objects.filter(user_id=worker.pk).delete()
     RecurringTaskTemplate.objects.filter(assign_to=worker).update(assign_to=request.user, updated_at=timezone.now())
     RecurringTaskTemplate.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
     worker_name = worker.display_label

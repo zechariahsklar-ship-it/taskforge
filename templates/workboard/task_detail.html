@@ -83,7 +83,6 @@
             <p>{{ task.description|default:task.raw_message|linebreaksbr }}</p>
             <dl class="detail-list">
                 <dt>Assigned To</dt><dd>{{ task.assignee_labels }}</dd>
-                <dt>Requested By</dt><dd>{{ task.requested_by.username|default:"Unknown" }}</dd>
                 <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>
                 <dt>Scheduled Window</dt><dd>{{ task.scheduled_window_display|default:"-" }}</dd>
                 <dt>Notify When Done</dt><dd>{{ task.respond_to_text|default:"-" }}</dd>

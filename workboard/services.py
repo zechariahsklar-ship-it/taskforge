@@ -136,6 +136,119 @@ class TaskAssignmentService:
         return None
 
     @staticmethod
+    def worker_can_take_task(
+        user,
+        *,
+        due_date,
+        estimated_minutes,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+        exclude_task_id=None,
+    ):
+        if not user or user.role not in UserRole.worker_roles():
+            return False
+        try:
+            profile = user.worker_profile
+        except StudentWorkerProfile.DoesNotExist:
+            return False
+        if not profile.active_status:
+            return False
+        if scheduled_date and scheduled_start_time and scheduled_end_time:
+            return TaskAssignmentService.user_is_available_for_window(
+                user,
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            )
+        if estimated_minutes is None:
+            return True
+        return TaskAssignmentService._remaining_capacity_minutes(profile, due_date) >= estimated_minutes
+
+    @staticmethod
+    def suggest_worker_assignees(
+        *,
+        due_date,
+        estimated_minutes,
+        count,
+        exclude_user_ids=None,
+        preferred_user_ids=None,
+        avoid_user_ids=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+        exclude_task_id=None,
+    ):
+        if count <= 0:
+            return []
+
+        selected_users = []
+        excluded_ids = {user_id for user_id in (exclude_user_ids or []) if user_id}
+
+        def maybe_add(user_id):
+            if len(selected_users) >= count or not user_id or user_id in excluded_ids:
+                return
+            candidate = User.objects.filter(
+                pk=user_id,
+                role__in=UserRole.worker_roles(),
+                worker_profile__active_status=True,
+            ).first()
+            if not candidate:
+                return
+            if not TaskAssignmentService.worker_can_take_task(
+                candidate,
+                due_date=due_date,
+                estimated_minutes=estimated_minutes,
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            ):
+                return
+            selected_users.append(candidate)
+            excluded_ids.add(candidate.pk)
+
+        for user_id in preferred_user_ids or []:
+            maybe_add(user_id)
+
+        deferred_ids = [user_id for user_id in (avoid_user_ids or []) if user_id and user_id not in excluded_ids]
+        while len(selected_users) < count:
+            candidate = TaskAssignmentService.suggest_worker_assignee(
+                due_date=due_date,
+                estimated_minutes=estimated_minutes,
+                exclude_user_ids=list(excluded_ids.union(deferred_ids)),
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            )
+            if not candidate:
+                break
+            selected_users.append(candidate)
+            excluded_ids.add(candidate.pk)
+
+        for user_id in deferred_ids:
+            maybe_add(user_id)
+
+        while len(selected_users) < count:
+            candidate = TaskAssignmentService.suggest_worker_assignee(
+                due_date=due_date,
+                estimated_minutes=estimated_minutes,
+                exclude_user_ids=list(excluded_ids),
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            )
+            if not candidate:
+                break
+            selected_users.append(candidate)
+            excluded_ids.add(candidate.pk)
+
+        return selected_users
+
+    @staticmethod
     def _block_minutes(start_time, end_time):
         start_dt = datetime.combine(date.today(), start_time)
         end_dt = datetime.combine(date.today(), end_time)
@@ -219,6 +332,15 @@ class TaskAssignmentService:
         )
 
     @staticmethod
+    def _active_task_queryset_for_user(user):
+        return Task.objects.exclude(status=TaskStatus.DONE).filter(
+            Q(assigned_to=user)
+            | Q(additional_assignees=user)
+            | Q(rotating_additional_assignees=user)
+            | Q(rotating_additional_assignee=user)
+        ).distinct()
+
+    @staticmethod
     def _worker_candidates_for_window(
         *,
         scheduled_date,
@@ -242,10 +364,9 @@ class TaskAssignmentService:
                 exclude_task_id=exclude_task_id,
             ):
                 continue
-            open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
-            last_assigned_at = (
-                profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            )
+            active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
+            open_tasks = active_tasks.count()
+            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
             capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date or scheduled_date)
             viable.append((profile, capacity, open_tasks, last_assigned_at))
 
@@ -268,10 +389,9 @@ class TaskAssignmentService:
         viable = []
         for profile in workers:
             capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
-            open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
-            last_assigned_at = (
-                profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            )
+            active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
+            open_tasks = active_tasks.count()
+            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
             if estimated_minutes is None or capacity >= estimated_minutes:
                 viable.append((profile, capacity, open_tasks, last_assigned_at))
 
@@ -295,7 +415,10 @@ class TaskAssignmentService:
         if exclude_task_id:
             overlapping = overlapping.exclude(pk=exclude_task_id)
         overlapping = overlapping.filter(
-            Q(assigned_to=user) | Q(additional_assignees=user) | Q(rotating_additional_assignee=user)
+            Q(assigned_to=user)
+            | Q(additional_assignees=user)
+            | Q(rotating_additional_assignees=user)
+            | Q(rotating_additional_assignee=user)
         ).distinct()
         return overlapping.exists()
 
@@ -327,7 +450,7 @@ class TaskAssignmentService:
             total_minutes += max(available_minutes, 0)
             cursor += timedelta(days=1)
         reserved_minutes = (
-            profile.user.assigned_tasks.exclude(status=TaskStatus.DONE)
+            TaskAssignmentService._active_task_queryset_for_user(profile.user)
             .filter(Q(due_date__isnull=True) | Q(due_date__lte=end_date))
             .aggregate(total=Sum("estimated_minutes"))["total"]
             or 0

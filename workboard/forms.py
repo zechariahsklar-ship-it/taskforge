@@ -402,8 +402,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "estimated_minutes",
             "assigned_to",
             "additional_assignees",
-            "rotate_additional_assignee",
-            "requested_by",
+            "rotating_additional_assignee_count",
             "recurring_task",
             "recurrence_pattern",
             "recurrence_interval",
@@ -420,19 +419,23 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         worker_users = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("first_name", "last_name", "username")
+        self.fields["assigned_to"].label = "Assign to"
+        self.fields["assigned_to"].help_text = "Choose the main teammate for this task."
         self.fields["additional_assignees"].queryset = worker_users
         self.fields["additional_assignees"].required = False
         self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
         self.fields["additional_assignees"].label = "Fixed additional assignees"
         self.fields["additional_assignees"].help_text = "Pick any teammates who should always be added to this task."
-        self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
-        self.fields["rotate_additional_assignee"].help_text = "TaskForge will pick one more worker automatically based on availability and rotation."
+        self.fields["rotating_additional_assignee_count"].min_value = 0
+        self.fields["rotating_additional_assignee_count"].required = False
+        self.fields["rotating_additional_assignee_count"].initial = self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0)
+        self.fields["rotating_additional_assignee_count"].label = "Number of rotating teammates"
+        self.fields["rotating_additional_assignee_count"].help_text = "Enter how many extra teammates TaskForge should rotate onto this task."
+        self.fields["rotating_additional_assignee_count"].widget.attrs.update({"min": "0", "step": "1"})
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self.fields["requested_by"].queryset = User.objects.order_by("username")
         self.fields["assigned_to"].label_from_instance = _user_choice_label
         self.fields["additional_assignees"].label_from_instance = _user_choice_label
-        self.fields["requested_by"].label_from_instance = _user_choice_label
         self.fields["scheduled_date"].label = "Scheduled date"
         self.fields["scheduled_date"].help_text = "Optional. Use this when the task needs to happen during a specific work shift."
         self.fields["scheduled_start_time"].label = "Start time"
@@ -529,6 +532,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         additional_assignees = cleaned_data.get("additional_assignees")
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
+        cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
 
         cleaned_data = self._clean_schedule_window(cleaned_data)
         cleaned_data = self._validate_worker_schedule_assignments(cleaned_data)
@@ -580,8 +584,7 @@ class TaskManualForm(TaskForm):
             "estimated_minutes",
             "assigned_to",
             "additional_assignees",
-            "rotate_additional_assignee",
-            "requested_by",
+            "rotating_additional_assignee_count",
             "recurring_task",
             "recurrence_pattern",
             "recurrence_interval",
@@ -672,8 +675,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             "scheduled_end_time",
             "assign_to",
             "additional_assignees",
-            "rotate_additional_assignee",
-            "requested_by",
+            "rotating_additional_assignee_count",
             "recurrence_pattern",
             "recurrence_interval",
             "day_of_week",
@@ -693,20 +695,22 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["scheduled_start_time"].help_text = "Optional. Generated tasks will use this start time on each run."
         self.fields["scheduled_end_time"].label = "Scheduled end time"
         self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
-        self.fields["assign_to"].label = "Default assignee"
-        self.fields["assign_to"].help_text = "Choose the main teammate for the first run. Later runs can rotate based on workload."
+        self.fields["assign_to"].label = "Assign to"
+        self.fields["assign_to"].help_text = "Choose the main teammate for this recurring task. Leave blank to rotate the main assignee automatically."
         self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["additional_assignees"].required = False
         self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
         self.fields["additional_assignees"].label = "Fixed additional assignees"
         self.fields["additional_assignees"].help_text = "Pick any teammates who should always join each run of this recurring task."
-        self.fields["rotate_additional_assignee"].label = "Also add one rotating teammate"
-        self.fields["rotate_additional_assignee"].help_text = "Each generated task can add one more worker automatically based on availability and rotation."
-        self.fields["requested_by"].queryset = User.objects.order_by("first_name", "last_name", "username")
+        self.fields["rotating_additional_assignee_count"].min_value = 0
+        self.fields["rotating_additional_assignee_count"].required = False
+        self.fields["rotating_additional_assignee_count"].initial = self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0)
+        self.fields["rotating_additional_assignee_count"].label = "Number of rotating teammates"
+        self.fields["rotating_additional_assignee_count"].help_text = "Enter how many extra teammates TaskForge should rotate onto each run of this recurring task."
+        self.fields["rotating_additional_assignee_count"].widget.attrs.update({"min": "0", "step": "1"})
         self.fields["assign_to"].label_from_instance = _user_choice_label
         self.fields["additional_assignees"].label_from_instance = _user_choice_label
-        self.fields["requested_by"].label_from_instance = _user_choice_label
         self.fields["recurrence_pattern"].label = "Repeat cadence"
         self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."
         self.fields["recurrence_interval"].label = "Repeat every"
@@ -728,6 +732,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         additional_assignees = cleaned_data.get("additional_assignees")
         if assign_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
+        cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
 
         recurrence_pattern = cleaned_data.get("recurrence_pattern")
         day_of_week = cleaned_data.get("day_of_week")

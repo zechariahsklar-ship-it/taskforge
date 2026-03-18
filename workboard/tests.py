@@ -281,12 +281,13 @@ class RecurringTaskListViewTests(TestCase):
 
     def test_recurring_page_shows_additional_teammates_summary(self):
         self.first_template.additional_assignees.add(self.helper)
+        self.first_template.rotating_additional_assignee_count = 1
         self.first_template.rotate_additional_assignee = True
-        self.first_template.save(update_fields=["rotate_additional_assignee", "updated_at"])
+        self.first_template.save(update_fields=["rotating_additional_assignee_count", "rotate_additional_assignee", "updated_at"])
 
         response = self.client.get(reverse("recurring-list"))
 
-        self.assertContains(response, "Additional teammates: Casey Helper, Rotation")
+        self.assertContains(response, "Additional teammates: Casey Helper, Rotation x1")
 
     def test_recurring_detail_page_renders_template_details(self):
         response = self.client.get(reverse("recurring-detail", args=[self.first_template.pk]))
@@ -318,7 +319,7 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Weekday to repeat on")
         self.assertContains(response, "Day of month to repeat on")
         self.assertContains(response, "Fixed additional assignees")
-        self.assertContains(response, "Also add one rotating teammate")
+        self.assertContains(response, "Add rotating team members")
         self.assertContains(response, "Recurring task is active")
     def test_recurring_move_view_reorders_templates(self):
         response = self.client.post(
@@ -564,6 +565,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
             recurrence_pattern="weekly",
             recurrence_interval=1,
             next_run_date=date(2026, 3, 13),
+            rotating_additional_assignee_count=1,
             rotate_additional_assignee=True,
         )
         extra_template.additional_assignees.add(self.jordan)
@@ -574,7 +576,8 @@ class RecurringTaskGenerationRotationTests(TestCase):
         generated = Task.objects.filter(recurring_template=extra_template).latest("pk")
         self.assertEqual(generated.assigned_to, self.alex)
         self.assertEqual(list(generated.additional_assignees.values_list("id", flat=True)), [self.jordan.id])
-        self.assertEqual(generated.rotating_additional_assignee, self.sam)
+        self.assertEqual(generated.rotating_additional_assignee_count, 1)
+        self.assertEqual(list(generated.rotating_additional_assignees.values_list("id", flat=True)), [self.sam.id])
 
     def test_generate_recurring_tasks_does_not_duplicate_open_task(self):
         self.previous_task.status = TaskStatus.IN_PROGRESS
@@ -935,15 +938,18 @@ class TaskCreateLabelTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Alex Johnson")
         self.assertContains(response, "Avery Stone")
+        self.assertContains(response, "Assign to")
         self.assertContains(response, "Fixed additional assignees")
-        self.assertContains(response, "Also add one rotating teammate")
+        self.assertContains(response, "Add rotating team members")
         self.assertContains(response, "Scheduled work window")
         self.assertContains(response, "Scheduled date")
         self.assertContains(response, "Start time")
         self.assertContains(response, "End time")
         self.assertContains(response, 'name="additional_assignees"', count=1)
+        self.assertContains(response, 'name="rotating_additional_assignee_count"')
         self.assertContains(response, 'type="checkbox"', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
+        self.assertNotContains(response, "Requested by")
         self.assertNotContains(response, ">alex-worker<", html=False)
         self.assertNotContains(response, ">create-label-supervisor<", html=False)
 
@@ -970,9 +976,11 @@ class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
         self.assertContains(response, "Shared task")
 
     def test_rotating_additional_assignee_can_view_shared_task(self):
+        self.task.rotating_additional_assignee_count = 1
         self.task.rotate_additional_assignee = True
         self.task.rotating_additional_assignee = self.other_student
-        self.task.save(update_fields=["rotate_additional_assignee", "rotating_additional_assignee", "updated_at"])
+        self.task.save(update_fields=["rotating_additional_assignee_count", "rotate_additional_assignee", "rotating_additional_assignee", "updated_at"])
+        self.task.rotating_additional_assignees.add(self.other_student)
 
         self.client.force_login(self.other_student)
         response = self.client.get(reverse("my-tasks"))
@@ -1024,6 +1032,7 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         self.primary_student = self._create_worker("primary-helper", "Primary Helper")
         self.fixed_student = self._create_worker("fixed-helper", "Fixed Helper")
         self.rotating_student = self._create_worker("rotating-helper", "Rotating Helper")
+        self.second_rotating_student = self._create_worker("second-rotating-helper", "Taylor Helper")
         self.client.force_login(self.supervisor)
 
     def _create_worker(self, username, display_name):
@@ -1055,7 +1064,7 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
             reverse("task-create"),
             {
                 "title": "Collaborative task",
-                "description": "Needs a main worker, one fixed helper, and one rotating helper.",
+                "description": "Needs a main worker, one fixed helper, and rotating helpers.",
                 "priority": Priority.MEDIUM,
                 "status": TaskStatus.NEW,
                 "due_date": "2026-03-20",
@@ -1063,7 +1072,7 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
                 "estimated_minutes": "45",
                 "assigned_to": str(self.primary_student.pk),
                 "additional_assignees": [str(self.fixed_student.pk)],
-                "rotate_additional_assignee": "on",
+                "rotating_additional_assignee_count": "2",
                 "requested_by": "",
                 "recurring_task": "",
                 "recurrence_pattern": "",
@@ -1077,9 +1086,14 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         task = Task.objects.get(title="Collaborative task")
         self.assertEqual(list(task.additional_assignees.values_list("id", flat=True)), [self.fixed_student.id])
-        self.assertEqual(task.rotating_additional_assignee, self.rotating_student)
+        self.assertEqual(task.rotating_additional_assignee_count, 2)
+        self.assertSetEqual(
+            set(task.rotating_additional_assignees.values_list("id", flat=True)),
+            {self.rotating_student.id, self.second_rotating_student.id},
+        )
         self.assertContains(response, "Fixed Helper")
         self.assertContains(response, "Rotating Helper (rotation)")
+        self.assertContains(response, "Taylor Helper (rotation)")
 
 
 class MyTasksViewOrderingTests(TestCase):

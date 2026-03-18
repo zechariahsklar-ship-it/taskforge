@@ -19,7 +19,39 @@
         {% endfor %}
 
         {% for field in form %}
-            {% if field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "additional_assignees" and field.name != "rotate_additional_assignee" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
+            {% if field.name == "assign_to" %}
+                <p>
+                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<span class="meta">{{ field.help_text }}</span>{% endif %}
+                    {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                </p>
+                <section class="review-field assignee-panel">
+                    <div class="stack">
+                        <div>
+                            <label>{{ form.additional_assignees.label }}</label>
+                            {% if form.additional_assignees.help_text %}<p class="meta">{{ form.additional_assignees.help_text }}</p>{% endif %}
+                        </div>
+                        <div class="assignee-choice-grid">
+                            {% for checkbox in form.additional_assignees %}
+                                <label class="assignee-choice-card" for="{{ checkbox.id_for_label }}">
+                                    {{ checkbox.tag }}
+                                    <span>{{ checkbox.choice_label }}</span>
+                                </label>
+                            {% empty %}
+                                <p class="empty-state">No worker teammates are available yet.</p>
+                            {% endfor %}
+                        </div>
+                        {% if form.additional_assignees.errors %}<div class="meta">{{ form.additional_assignees.errors }}</div>{% endif %}
+                        <p>
+                            <label for="{{ form.rotating_additional_assignee_count.id_for_label }}">Add rotating team members</label>
+                            {{ form.rotating_additional_assignee_count }}
+                            {% if form.rotating_additional_assignee_count.help_text %}<span class="meta">{{ form.rotating_additional_assignee_count.help_text }}</span>{% endif %}
+                            {% if form.rotating_additional_assignee_count.errors %}<div class="meta">{{ form.rotating_additional_assignee_count.errors }}</div>{% endif %}
+                        </p>
+                    </div>
+                </section>
+            {% elif field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -47,32 +79,6 @@
                     {% if form.scheduled_end_time.help_text %}<span class="meta">{{ form.scheduled_end_time.help_text }}</span>{% endif %}
                     {% if form.scheduled_end_time.errors %}<div class="meta">{{ form.scheduled_end_time.errors }}</div>{% endif %}
                 </p>
-            </div>
-        </section>
-
-        <section class="review-field assignee-panel">
-            <div class="stack">
-                <div>
-                    <label>{{ form.additional_assignees.label }}</label>
-                    {% if form.additional_assignees.help_text %}<p class="meta">{{ form.additional_assignees.help_text }}</p>{% endif %}
-                </div>
-                <div class="assignee-choice-grid">
-                    {% for checkbox in form.additional_assignees %}
-                        <label class="assignee-choice-card" for="{{ checkbox.id_for_label }}">
-                            {{ checkbox.tag }}
-                            <span>{{ checkbox.choice_label }}</span>
-                        </label>
-                    {% empty %}
-                        <p class="empty-state">No worker teammates are available yet.</p>
-                    {% endfor %}
-                </div>
-                {% if form.additional_assignees.errors %}<div class="meta">{{ form.additional_assignees.errors }}</div>{% endif %}
-                <label class="inline-checkbox" for="{{ form.rotate_additional_assignee.id_for_label }}">
-                    {{ form.rotate_additional_assignee }}
-                    <span>{{ form.rotate_additional_assignee.label }}</span>
-                </label>
-                {% if form.rotate_additional_assignee.help_text %}<p class="meta">{{ form.rotate_additional_assignee.help_text }}</p>{% endif %}
-                {% if form.rotate_additional_assignee.errors %}<div class="meta">{{ form.rotate_additional_assignee.errors }}</div>{% endif %}
             </div>
         </section>
 

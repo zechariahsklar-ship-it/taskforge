@@ -50,23 +50,22 @@ class Command(BaseCommand):
             assigned_to = assigned_to or default_assignee or template.requested_by
 
             fixed_additional_ids = list(template.additional_assignees.exclude(pk=getattr(assigned_to, "pk", None)).values_list("pk", flat=True))
-            previous_rotating_user_id = last_generated_task.rotating_additional_assignee_id if last_generated_task else None
-            rotating_assignee = None
-            if template.rotate_additional_assignee:
-                rotating_exclude_ids = set(fixed_additional_ids)
-                if assigned_to:
-                    rotating_exclude_ids.add(assigned_to.pk)
-                if previous_rotating_user_id and User.objects.filter(role__in=UserRole.worker_roles(), worker_profile__active_status=True).exclude(pk__in=list(rotating_exclude_ids) + [previous_rotating_user_id]).exists():
-                    rotating_exclude_ids.add(previous_rotating_user_id)
-                rotating_assignee = TaskAssignmentService.suggest_worker_assignee(
-                    due_date=template.next_run_date,
-                    estimated_minutes=template.estimated_minutes,
-                    exclude_user_ids=list(rotating_exclude_ids),
-                    scheduled_date=template.next_run_date if template.scheduled_start_time and template.scheduled_end_time else None,
-                    scheduled_start_time=template.scheduled_start_time,
-                    scheduled_end_time=template.scheduled_end_time,
-                    exclude_task_id=last_generated_task.pk if last_generated_task else None,
-                )
+            previous_rotating_user_ids = []
+            if last_generated_task:
+                previous_rotating_user_ids = list(last_generated_task.rotating_additional_assignees.values_list("pk", flat=True))
+                if not previous_rotating_user_ids and last_generated_task.rotating_additional_assignee_id:
+                    previous_rotating_user_ids = [last_generated_task.rotating_additional_assignee_id]
+            rotating_assignees = TaskAssignmentService.suggest_worker_assignees(
+                due_date=template.next_run_date,
+                estimated_minutes=template.estimated_minutes,
+                count=template.rotating_additional_assignee_count,
+                exclude_user_ids=list(set(fixed_additional_ids + ([assigned_to.pk] if assigned_to else []))),
+                avoid_user_ids=previous_rotating_user_ids,
+                scheduled_date=template.next_run_date if template.scheduled_start_time and template.scheduled_end_time else None,
+                scheduled_start_time=template.scheduled_start_time,
+                scheduled_end_time=template.scheduled_end_time,
+                exclude_task_id=last_generated_task.pk if last_generated_task else None,
+            )
 
             if last_generated_task:
                 task = last_generated_task
@@ -87,12 +86,14 @@ class Command(BaseCommand):
                 task.recurrence_interval = template.recurrence_interval
                 task.recurrence_day_of_week = template.day_of_week
                 task.recurrence_day_of_month = template.day_of_month
-                task.rotate_additional_assignee = template.rotate_additional_assignee
-                task.rotating_additional_assignee = rotating_assignee
+                task.rotating_additional_assignee_count = template.rotating_additional_assignee_count
+                task.rotate_additional_assignee = template.rotating_additional_assignee_count > 0
+                task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
                 task.board_order = next_order
                 task.completed_at = None
                 task.save()
                 task.additional_assignees.set(fixed_additional_ids)
+                task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
                 task.checklist_items.update(is_completed=False)
                 reopened_count += 1
             else:
@@ -107,7 +108,8 @@ class Command(BaseCommand):
                     scheduled_end_time=template.scheduled_end_time,
                     estimated_minutes=template.estimated_minutes,
                     assigned_to=assigned_to,
-                    rotating_additional_assignee=rotating_assignee,
+                    rotating_additional_assignee_count=template.rotating_additional_assignee_count,
+                    rotating_additional_assignee=rotating_assignees[0] if rotating_assignees else None,
                     requested_by=template.requested_by,
                     recurring_task=True,
                     recurring_template=template,
@@ -115,11 +117,12 @@ class Command(BaseCommand):
                     recurrence_interval=template.recurrence_interval,
                     recurrence_day_of_week=template.day_of_week,
                     recurrence_day_of_month=template.day_of_month,
-                    rotate_additional_assignee=template.rotate_additional_assignee,
+                    rotate_additional_assignee=template.rotating_additional_assignee_count > 0,
                     board_order=next_order,
                 )
                 if fixed_additional_ids:
                     task.additional_assignees.set(fixed_additional_ids)
+                task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
                 created_count += 1
 
             template.advance_next_run_date()
