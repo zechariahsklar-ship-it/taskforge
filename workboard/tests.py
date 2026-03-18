@@ -1680,9 +1680,11 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'data-weekly-schedule-picker')
         self.assertContains(create_response, 'data-clear-week')
         self.assertContains(create_response, 'data-schedule-summary-card="monday"')
+        self.assertContains(create_response, 'class="weekly-schedule-hidden-fields"')
         self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
         self.assertContains(edit_response, 'data-weekly-schedule-picker')
         self.assertContains(edit_response, 'Temporary schedule change')
+        self.assertContains(edit_response, 'class="weekly-schedule-hidden-fields"', count=2)
         self.assertContains(edit_response, 'name="monday_segments"')
         self.assertContains(edit_response, 'name="override_segments"')
 

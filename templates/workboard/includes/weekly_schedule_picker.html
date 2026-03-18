@@ -1,10 +1,12 @@
 {% load static %}
 {% with picker_form=schedule_form|default:weekly_form %}
 {% with day_rows=picker_form.day_rows %}
-{% for hidden in picker_form.hidden_fields %}
-    {{ hidden }}
-{% endfor %}
 <div class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
+    <div class="weekly-schedule-hidden-fields" hidden aria-hidden="true">
+        {% for hidden in picker_form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+    </div>
     <div class="weekly-schedule-toolbar">
         <div>
             <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
