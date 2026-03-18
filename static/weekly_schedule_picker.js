@@ -231,6 +231,43 @@
             setSegments(day, contiguousSegmentsFromSelection(state, selected));
         }
 
+        function startPointerSelection(cell, event) {
+            event.preventDefault();
+            var day = cell.dataset.day;
+            var state = states[day];
+            if (!state) {
+                return;
+            }
+            var index = Number(cell.dataset.slotIndex);
+            dragging = {
+                day: day,
+                anchorIndex: index,
+                mode: state.selectedIndices.has(index) ? "remove" : "add",
+                baseSelected: new Set(state.selectedIndices),
+                pointerId: event.pointerId,
+            };
+            if (typeof cell.setPointerCapture === "function") {
+                try {
+                    cell.setPointerCapture(event.pointerId);
+                } catch (error) {
+                    // Ignore capture failures and continue with normal pointer handling.
+                }
+            }
+            root.classList.add("is-dragging");
+            applySelection(day, dragging.baseSelected, index, index, dragging.mode);
+        }
+
+        function stopPointerSelection(pointerId) {
+            if (!dragging) {
+                return;
+            }
+            if (pointerId !== undefined && dragging.pointerId !== undefined && dragging.pointerId !== pointerId) {
+                return;
+            }
+            dragging = null;
+            root.classList.remove("is-dragging");
+        }
+
         var clearWeekButton = root.querySelector("[data-clear-week]");
         if (clearWeekButton) {
             clearWeekButton.addEventListener("click", function () {
@@ -241,37 +278,33 @@
         }
 
         root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
-            cell.addEventListener("mousedown", function (event) {
-                event.preventDefault();
-                var day = cell.dataset.day;
-                var state = states[day];
-                if (!state) {
-                    return;
-                }
-                var index = Number(cell.dataset.slotIndex);
-                dragging = {
-                    day: day,
-                    anchorIndex: index,
-                    mode: state.selectedIndices.has(index) ? "remove" : "add",
-                    baseSelected: new Set(state.selectedIndices),
-                };
-                root.classList.add("is-dragging");
-                applySelection(day, dragging.baseSelected, index, index, dragging.mode);
+            cell.addEventListener("pointerdown", function (event) {
+                startPointerSelection(cell, event);
             });
-            cell.addEventListener("mouseenter", function () {
+            cell.addEventListener("pointerenter", function () {
                 if (!dragging || dragging.day !== cell.dataset.day) {
                     return;
                 }
                 applySelection(dragging.day, dragging.baseSelected, dragging.anchorIndex, Number(cell.dataset.slotIndex), dragging.mode);
             });
+            cell.addEventListener("pointerup", function (event) {
+                stopPointerSelection(event.pointerId);
+            });
+            cell.addEventListener("pointercancel", function (event) {
+                stopPointerSelection(event.pointerId);
+            });
+            cell.addEventListener("pointerleave", function () {
+                if (!dragging || dragging.day !== cell.dataset.day) {
+                    return;
+                }
+            });
         });
 
-        document.addEventListener("mouseup", function () {
-            if (!dragging) {
-                return;
-            }
-            dragging = null;
-            root.classList.remove("is-dragging");
+        document.addEventListener("pointerup", function (event) {
+            stopPointerSelection(event.pointerId);
+        });
+        document.addEventListener("pointercancel", function (event) {
+            stopPointerSelection(event.pointerId);
         });
 
         refreshAll();

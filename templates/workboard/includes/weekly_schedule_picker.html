@@ -8,7 +8,7 @@
     <div class="weekly-schedule-toolbar">
         <div>
             <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
-            <p>{{ picker_help_text|default:"Drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Drag across a blue block again to erase that range." }}</p>
+            <p>{{ picker_help_text|default:"Click or drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Click or drag across a blue block again to erase that range." }}</p>
         </div>
         <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>{{ clear_all_label|default:"Clear all" }}</button>
     </div>
@@ -54,4 +54,4 @@
 </div>
 {% endwith %}
 {% endwith %}
-{% if include_schedule_script|default:True %}<script src="{% static 'weekly_schedule_picker.js' %}?v=20260318b" defer></script>{% endif %}
+{% if include_schedule_script != False %}<script src="{% static 'weekly_schedule_picker.js' %}?v=20260318c" defer></script>{% endif %}
