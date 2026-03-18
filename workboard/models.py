@@ -84,7 +84,7 @@ class User(AbstractUser):
 class StudentWorkerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="worker_profile")
     display_name = models.CharField(max_length=150)
-    email = models.EmailField()
+    email = models.EmailField(blank=True)
     active_status = models.BooleanField(default=True)
     normal_shift_availability = models.TextField(blank=True)
     max_hours_per_day = models.DecimalField(max_digits=4, decimal_places=2, default=4)
@@ -98,6 +98,8 @@ class StudentWorkerProfile(models.Model):
 class StudentAvailability(models.Model):
     profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="weekly_availability")
     weekday = models.PositiveSmallIntegerField(choices=Weekday.choices)
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
     hours_available = models.DecimalField(max_digits=4, decimal_places=2, default=0)
 
     class Meta:
@@ -135,6 +137,8 @@ class RecurringTaskTemplate(models.Model):
     description = models.TextField(blank=True)
     priority = models.CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
     estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
+    scheduled_start_time = models.TimeField(null=True, blank=True)
+    scheduled_end_time = models.TimeField(null=True, blank=True)
     assign_to = models.ForeignKey(
         User,
         null=True,
@@ -181,6 +185,12 @@ class RecurringTaskTemplate(models.Model):
         return self.title
 
     @property
+    def scheduled_window_display(self):
+        if not self.scheduled_start_time or not self.scheduled_end_time:
+            return ""
+        return f"{self.scheduled_start_time.strftime('%I:%M %p').lstrip('0')} - {self.scheduled_end_time.strftime('%I:%M %p').lstrip('0')}"
+
+    @property
     def additional_assignee_labels(self):
         labels = [user.display_label for user in self.additional_assignees.all()]
         if self.rotate_additional_assignee:
@@ -208,6 +218,9 @@ class Task(models.Model):
     priority = models.CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
     status = models.CharField(max_length=16, choices=TaskStatus.choices, default=TaskStatus.NEW)
     due_date = models.DateField(null=True, blank=True)
+    scheduled_date = models.DateField(null=True, blank=True)
+    scheduled_start_time = models.TimeField(null=True, blank=True)
+    scheduled_end_time = models.TimeField(null=True, blank=True)
     raw_due_text = models.CharField(max_length=255, blank=True)
     waiting_person = models.CharField(max_length=255, blank=True)
     respond_to_text = models.CharField(max_length=255, blank=True)
@@ -270,6 +283,12 @@ class Task(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def scheduled_window_display(self):
+        if not self.scheduled_date or not self.scheduled_start_time or not self.scheduled_end_time:
+            return ""
+        return f"{self.scheduled_date.isoformat()} | {self.scheduled_start_time.strftime('%I:%M %p').lstrip('0')} - {self.scheduled_end_time.strftime('%I:%M %p').lstrip('0')}"
 
     def mark_complete(self):
         self.status = TaskStatus.DONE

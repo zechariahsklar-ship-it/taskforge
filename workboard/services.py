@@ -7,7 +7,11 @@ from urllib import error, request
 from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
-from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, TaskEstimateFeedback, TaskStatus, User, UserRole
+from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskEstimateFeedback, TaskStatus, User, UserRole
+
+
+def _format_time_label(value):
+    return value.strftime("%I:%M %p").lstrip("0")
 
 
 @dataclass
@@ -42,57 +46,159 @@ class ParsedTaskData:
 
 class TaskAssignmentService:
     @staticmethod
-    def suggest_assignee(*, due_date, estimated_minutes, fallback_supervisor=None, exclude_user_ids=None):
-        supervisors = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True).order_by("username")
-        viable = TaskAssignmentService._viable_worker_candidates(
-            due_date=due_date,
-            estimated_minutes=estimated_minutes,
-            exclude_user_ids=exclude_user_ids,
-        )
+    def suggest_assignee(
+        *,
+        due_date,
+        estimated_minutes,
+        fallback_supervisor=None,
+        exclude_user_ids=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+        exclude_task_id=None,
+    ):
+        if scheduled_date and scheduled_start_time and scheduled_end_time:
+            viable = TaskAssignmentService._worker_candidates_for_window(
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                due_date=due_date,
+                exclude_user_ids=exclude_user_ids,
+                exclude_task_id=exclude_task_id,
+            )
+        else:
+            viable = TaskAssignmentService._viable_worker_candidates(
+                due_date=due_date,
+                estimated_minutes=estimated_minutes,
+                exclude_user_ids=exclude_user_ids,
+            )
+
         if viable:
             profile, capacity, _, _ = viable[0]
-            summary = f"Suggested worker: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
-            rationale = [
-                f"Recommended assignee: {profile.display_name}",
-                f"Estimated open capacity before due date: {int(capacity)} minutes",
-                "Selection favors worker-level teammates with enough capacity and lighter recent assignment rotation.",
-            ]
+            if scheduled_date and scheduled_start_time and scheduled_end_time:
+                summary = (
+                    f"Suggested worker: {profile.display_name} based on schedule availability for "
+                    f"{scheduled_date.isoformat()} {_format_time_label(scheduled_start_time)} - {_format_time_label(scheduled_end_time)}."
+                )
+                rationale = [
+                    f"Recommended assignee: {profile.display_name}",
+                    f"Available during the scheduled window on {scheduled_date.isoformat()}",
+                    "Selection favors worker-level teammates who are scheduled at that time and do not have overlapping work.",
+                ]
+            else:
+                summary = f"Suggested worker: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
+                rationale = [
+                    f"Recommended assignee: {profile.display_name}",
+                    f"Estimated open capacity before due date: {int(capacity)} minutes",
+                    "Selection favors worker-level teammates with enough capacity and lighter recent assignment rotation.",
+                ]
             return profile.user, summary, rationale
 
-        supervisor_options = []
-        for supervisor in supervisors:
-            open_tasks = supervisor.assigned_tasks.exclude(status=TaskStatus.DONE).count()
-            last_assigned_at = supervisor.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            supervisor_options.append((supervisor, open_tasks, last_assigned_at))
-        supervisor_options.sort(
-            key=lambda item: (
-                item[2] is not None,
-                item[2] or timezone.make_aware(datetime(2000, 1, 1)),
-                item[1],
-                item[0].username,
-            )
-        )
-        supervisor = next((item[0] for item in supervisor_options if not fallback_supervisor or item[0].pk != fallback_supervisor.pk), None)
-        if supervisor is None and fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
-            supervisor = fallback_supervisor
-        if supervisor:
-            return supervisor, "No worker has enough available capacity before the due date, so this task should be assigned to the next available supervisor in rotation.", [
-                f"Recommended assignee: {supervisor.display_label}",
+        if fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
+            return fallback_supervisor, "No worker has enough available capacity before the due date, so this task should stay with the supervising user.", [
+                f"Recommended assignee: {fallback_supervisor.display_label}",
                 "No worker currently has enough available hours before the due date window.",
-                "Fallback rule assigned the task using supervisor rotation.",
+                "Fallback rule assigned the task to the supervising user instead of rotating among supervisors.",
             ]
-        return None, "No eligible assignee found.", ["No eligible assignee found."]
+        return None, "No eligible worker has enough available capacity before the due date, and no supervisor fallback is available.", [
+            "No worker currently has enough available hours before the due date window.",
+            "No supervising fallback is available for automatic assignment.",
+        ]
 
     @staticmethod
-    def suggest_worker_assignee(*, due_date, estimated_minutes, exclude_user_ids=None):
-        viable = TaskAssignmentService._viable_worker_candidates(
-            due_date=due_date,
-            estimated_minutes=estimated_minutes,
-            exclude_user_ids=exclude_user_ids,
-        )
+    def suggest_worker_assignee(
+        *,
+        due_date,
+        estimated_minutes,
+        exclude_user_ids=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+        exclude_task_id=None,
+    ):
+        if scheduled_date and scheduled_start_time and scheduled_end_time:
+            viable = TaskAssignmentService._worker_candidates_for_window(
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                due_date=due_date,
+                exclude_user_ids=exclude_user_ids,
+                exclude_task_id=exclude_task_id,
+            )
+        else:
+            viable = TaskAssignmentService._viable_worker_candidates(
+                due_date=due_date,
+                estimated_minutes=estimated_minutes,
+                exclude_user_ids=exclude_user_ids,
+            )
         if viable:
             return viable[0][0].user
         return None
+
+    @staticmethod
+    def user_is_available_for_window(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
+        if not user or user.role not in UserRole.worker_roles():
+            return False
+        try:
+            profile = user.worker_profile
+        except StudentWorkerProfile.DoesNotExist:
+            return False
+        if not profile.active_status:
+            return False
+
+        availability = StudentAvailability.objects.filter(profile=profile, weekday=scheduled_date.weekday()).first()
+        if not availability or not availability.start_time or not availability.end_time:
+            return False
+        if availability.start_time > scheduled_start_time or availability.end_time < scheduled_end_time:
+            return False
+        return not TaskAssignmentService._scheduled_conflict_exists(
+            user,
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+            exclude_task_id=exclude_task_id,
+        )
+
+    @staticmethod
+    def _worker_candidates_for_window(
+        *,
+        scheduled_date,
+        scheduled_start_time,
+        scheduled_end_time,
+        due_date=None,
+        exclude_user_ids=None,
+        exclude_task_id=None,
+    ):
+        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
+        if exclude_user_ids:
+            workers = workers.exclude(user_id__in=exclude_user_ids)
+
+        viable = []
+        for profile in workers:
+            if not TaskAssignmentService.user_is_available_for_window(
+                profile.user,
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            ):
+                continue
+            open_tasks = profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).count()
+            last_assigned_at = (
+                profile.user.assigned_tasks.exclude(status=TaskStatus.DONE).aggregate(last_assigned=Max("created_at"))["last_assigned"]
+            )
+            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date or scheduled_date)
+            viable.append((profile, capacity, open_tasks, last_assigned_at))
+
+        viable.sort(
+            key=lambda item: (
+                item[3] is not None,
+                item[3] or timezone.make_aware(datetime(2000, 1, 1)),
+                item[2],
+                -item[1],
+            )
+        )
+        return viable
 
     @staticmethod
     def _viable_worker_candidates(*, due_date, estimated_minutes, exclude_user_ids=None):
@@ -121,6 +227,30 @@ class TaskAssignmentService:
         return viable
 
     @staticmethod
+    def _scheduled_conflict_exists(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
+        overlapping = Task.objects.exclude(status=TaskStatus.DONE).filter(
+            scheduled_date=scheduled_date,
+            scheduled_start_time__lt=scheduled_end_time,
+            scheduled_end_time__gt=scheduled_start_time,
+        )
+        if exclude_task_id:
+            overlapping = overlapping.exclude(pk=exclude_task_id)
+        overlapping = overlapping.filter(
+            Q(assigned_to=user) | Q(additional_assignees=user) | Q(rotating_additional_assignee=user)
+        ).distinct()
+        return overlapping.exists()
+
+    @staticmethod
+    def _minutes_remaining_in_workday(start_date):
+        local_now = timezone.localtime()
+        if local_now.date() != start_date:
+            return None
+        cutoff = local_now.replace(hour=17, minute=0, second=0, microsecond=0)
+        if local_now >= cutoff:
+            return 0
+        return int((cutoff - local_now).total_seconds() // 60)
+
+    @staticmethod
     def _remaining_capacity_minutes(profile, due_date):
         start_date = timezone.localdate()
         end_date = due_date or (start_date + timedelta(days=7))
@@ -132,6 +262,7 @@ class TaskAssignmentService:
             item.override_date: float(item.hours_available)
             for item in StudentAvailabilityOverride.objects.filter(profile=profile, override_date__range=(start_date, end_date))
         }
+        remaining_workday_minutes = TaskAssignmentService._minutes_remaining_in_workday(start_date)
 
         total_minutes = 0
         cursor = start_date
@@ -139,7 +270,10 @@ class TaskAssignmentService:
             baseline_hours = weekly.get(cursor.weekday(), 0.0)
             adjustment_hours = overrides.get(cursor, 0.0)
             hours = max(baseline_hours + adjustment_hours, 0.0)
-            total_minutes += int(hours * 60)
+            available_minutes = int(hours * 60)
+            if cursor == start_date and remaining_workday_minutes is not None:
+                available_minutes = min(available_minutes, remaining_workday_minutes)
+            total_minutes += available_minutes
             cursor += timedelta(days=1)
         reserved_minutes = (
             profile.user.assigned_tasks.exclude(status=TaskStatus.DONE)

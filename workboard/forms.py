@@ -1,3 +1,4 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django import forms
@@ -14,10 +15,40 @@ from .models import (
     TaskChecklistItem,
     TaskIntakeDraft,
     TaskNote,
+    TaskStatus,
     User,
     UserRole,
-    TaskStatus,
+    Weekday,
 )
+from .services import TaskAssignmentService
+
+
+DAY_FIELD_CONFIG = [
+    ("monday", "Monday", Weekday.MONDAY),
+    ("tuesday", "Tuesday", Weekday.TUESDAY),
+    ("wednesday", "Wednesday", Weekday.WEDNESDAY),
+    ("thursday", "Thursday", Weekday.THURSDAY),
+    ("friday", "Friday", Weekday.FRIDAY),
+    ("saturday", "Saturday", Weekday.SATURDAY),
+    ("sunday", "Sunday", Weekday.SUNDAY),
+]
+
+
+def _format_time_label(value: time) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+HALF_HOUR_CHOICES = [("", "Not scheduled")]
+for hour in range(24):
+    for minute in (0, 30):
+        value = time(hour, minute)
+        HALF_HOUR_CHOICES.append((value.strftime("%H:%M"), _format_time_label(value)))
+
+
+class HalfHourSelect(forms.Select):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("choices", HALF_HOUR_CHOICES)
+        super().__init__(*args, **kwargs)
 
 
 class MultipleFileInput(forms.ClearableFileInput):
@@ -41,15 +72,42 @@ class StyledFormMixin:
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             widget = field.widget
+            if isinstance(widget, forms.HiddenInput):
+                continue
             if isinstance(widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple)):
                 widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-check-input".strip()
             else:
                 widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-control".strip()
 
 
+class HalfHourTimeField(forms.TimeField):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("input_formats", ["%H:%M"])
+        kwargs.setdefault("widget", HalfHourSelect())
+        super().__init__(*args, **kwargs)
+
+
 def _user_choice_label(user: User) -> str:
     full_name = user.get_full_name().strip()
     return full_name or user.display_label
+
+
+def _window_minutes(start_value: time, end_value: time) -> int:
+    start_dt = datetime.combine(datetime.today(), start_value)
+    end_dt = datetime.combine(datetime.today(), end_value)
+    return int((end_dt - start_dt).total_seconds() // 60)
+
+
+def _legacy_hours_to_window(hours_value: Decimal | None) -> tuple[time | None, time | None, Decimal]:
+    if not hours_value:
+        return None, None, Decimal("0")
+    total_minutes = int(hours_value * 60)
+    if total_minutes % 30 != 0:
+        raise ValueError("Legacy schedule hours must be in 30-minute increments.")
+    start_value = time(9, 0)
+    end_dt = datetime.combine(datetime.today(), start_value) + timedelta(minutes=total_minutes)
+    return start_value, end_dt.time(), hours_value
 
 
 class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
@@ -66,13 +124,16 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["email"].required = False
+        self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this person."
         self.fields["skill_notes"].label = "Notes"
         self.fields["skill_notes"].help_text = "Optional notes about strengths, training, or preferences."
+
 
 class StudentAvailabilityForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = StudentAvailability
-        fields = ["weekday", "hours_available"]
+        fields = ["weekday", "start_time", "end_time", "hours_available"]
 
 
 class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
@@ -106,14 +167,88 @@ class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
         if adjusted_total < 0:
             self.add_error("hours_available", "This adjustment would reduce the day below 0 hours.")
         return cleaned_data
+
+
 class WeeklyAvailabilityForm(StyledFormMixin, forms.Form):
-    monday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    tuesday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    wednesday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    thursday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    friday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    saturday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
-    sunday_hours = forms.DecimalField(min_value=Decimal("0"), max_digits=4, decimal_places=2)
+    monday_start = HalfHourTimeField(label="Monday start")
+    monday_end = HalfHourTimeField(label="Monday end")
+    monday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    tuesday_start = HalfHourTimeField(label="Tuesday start")
+    tuesday_end = HalfHourTimeField(label="Tuesday end")
+    tuesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    wednesday_start = HalfHourTimeField(label="Wednesday start")
+    wednesday_end = HalfHourTimeField(label="Wednesday end")
+    wednesday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    thursday_start = HalfHourTimeField(label="Thursday start")
+    thursday_end = HalfHourTimeField(label="Thursday end")
+    thursday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    friday_start = HalfHourTimeField(label="Friday start")
+    friday_end = HalfHourTimeField(label="Friday end")
+    friday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    saturday_start = HalfHourTimeField(label="Saturday start")
+    saturday_end = HalfHourTimeField(label="Saturday end")
+    saturday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    sunday_start = HalfHourTimeField(label="Sunday start")
+    sunday_end = HalfHourTimeField(label="Sunday end")
+    sunday_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for prefix, label, _ in DAY_FIELD_CONFIG:
+            self.fields[f"{prefix}_start"].label = f"{label} start"
+            self.fields[f"{prefix}_end"].label = f"{label} end"
+            self.fields[f"{prefix}_start"].help_text = "Leave both blank if this person is not scheduled that day."
+        self.schedule_windows = {}
+
+    def day_rows(self):
+        return [
+            {
+                "label": label,
+                "start": self[f"{prefix}_start"],
+                "end": self[f"{prefix}_end"],
+            }
+            for prefix, label, _ in DAY_FIELD_CONFIG
+        ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        schedule_windows = {}
+        for prefix, label, weekday in DAY_FIELD_CONFIG:
+            start_value = cleaned_data.get(f"{prefix}_start")
+            end_value = cleaned_data.get(f"{prefix}_end")
+            legacy_hours = cleaned_data.get(f"{prefix}_hours")
+
+            if start_value or end_value:
+                if not start_value:
+                    self.add_error(f"{prefix}_start", f"Choose a start time for {label}.")
+                    continue
+                if not end_value:
+                    self.add_error(f"{prefix}_end", f"Choose an end time for {label}.")
+                    continue
+                if end_value <= start_value:
+                    self.add_error(f"{prefix}_end", f"{label} end time must be after the start time.")
+                    continue
+                minutes = _window_minutes(start_value, end_value)
+                if minutes % 30 != 0:
+                    self.add_error(f"{prefix}_end", f"{label} must use 30-minute increments.")
+                    continue
+                hours_value = Decimal(minutes) / Decimal("60")
+            else:
+                try:
+                    start_value, end_value, hours_value = _legacy_hours_to_window(legacy_hours)
+                except ValueError:
+                    self.add_error(f"{prefix}_start", f"{label} must use 30-minute increments.")
+                    continue
+
+            schedule_windows[weekday] = {
+                "start_time": start_value,
+                "end_time": end_value,
+                "hours_available": hours_value,
+            }
+            cleaned_data[f"{prefix}_hours"] = hours_value
+        cleaned_data["schedule_windows"] = schedule_windows
+        self.schedule_windows = schedule_windows
+        return cleaned_data
 
 
 class TaskIntakeForm(StyledFormMixin, forms.Form):
@@ -123,6 +258,9 @@ class TaskIntakeForm(StyledFormMixin, forms.Form):
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
     due_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    scheduled_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    scheduled_start_time = HalfHourTimeField()
+    scheduled_end_time = HalfHourTimeField()
 
     class Meta:
         model = Task
@@ -133,6 +271,9 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "priority",
             "status",
             "due_date",
+            "scheduled_date",
+            "scheduled_start_time",
+            "scheduled_end_time",
             "raw_due_text",
             "respond_to_text",
             "estimated_minutes",
@@ -169,6 +310,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["assigned_to"].label_from_instance = _user_choice_label
         self.fields["additional_assignees"].label_from_instance = _user_choice_label
         self.fields["requested_by"].label_from_instance = _user_choice_label
+        self.fields["scheduled_date"].label = "Scheduled date"
+        self.fields["scheduled_date"].help_text = "Optional. Use this when the task needs to happen during a specific work shift."
+        self.fields["scheduled_start_time"].label = "Start time"
+        self.fields["scheduled_start_time"].help_text = "Choose a 30-minute start time for the work window."
+        self.fields["scheduled_end_time"].label = "End time"
+        self.fields["scheduled_end_time"].help_text = "Choose a 30-minute end time for the work window."
         self.fields["recurring_task"].label = "Repeats on a schedule"
         self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
         self.fields["recurrence_pattern"].label = "Repeat cadence"
@@ -180,12 +327,88 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].label = "Day of month to repeat on"
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
+    def _clean_schedule_window(self, cleaned_data):
+        due_date = cleaned_data.get("due_date")
+        scheduled_date = cleaned_data.get("scheduled_date")
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
+        has_schedule_value = bool(scheduled_date or start_value or end_value)
+
+        if (start_value or end_value) and not scheduled_date:
+            if due_date:
+                scheduled_date = due_date
+                cleaned_data["scheduled_date"] = scheduled_date
+            else:
+                self.add_error("scheduled_date", "Choose the date for this scheduled work window.")
+
+        if cleaned_data.get("scheduled_date") and not cleaned_data.get("due_date"):
+            cleaned_data["due_date"] = cleaned_data["scheduled_date"]
+
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
+        scheduled_date = cleaned_data.get("scheduled_date")
+        has_schedule_value = bool(scheduled_date or start_value or end_value)
+
+        if not has_schedule_value:
+            return cleaned_data
+
+        if not start_value:
+            self.add_error("scheduled_start_time", "Choose a start time for this scheduled task window.")
+        if not end_value:
+            self.add_error("scheduled_end_time", "Choose an end time for this scheduled task window.")
+        if start_value and end_value and end_value <= start_value:
+            self.add_error("scheduled_end_time", "End time must be after the start time.")
+
+        if start_value and end_value:
+            estimated_minutes = cleaned_data.get("estimated_minutes")
+            if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
+                self.add_error("estimated_minutes", "The time estimate is longer than the scheduled work window.")
+
+        return cleaned_data
+
+    def _validate_worker_schedule_assignments(self, cleaned_data):
+        scheduled_date = cleaned_data.get("scheduled_date")
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
+        if not (scheduled_date and start_value and end_value):
+            return cleaned_data
+
+        exclude_task_id = self.instance.pk if getattr(self.instance, "pk", None) else None
+        assigned_to = cleaned_data.get("assigned_to")
+        additional_assignees = cleaned_data.get("additional_assignees")
+
+        if assigned_to and assigned_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_is_available_for_window(
+            assigned_to,
+            scheduled_date=scheduled_date,
+            scheduled_start_time=start_value,
+            scheduled_end_time=end_value,
+            exclude_task_id=exclude_task_id,
+        ):
+            self.add_error("assigned_to", f"{assigned_to.display_label} is not scheduled during that work window or already has an overlapping task.")
+
+        unavailable_additional = []
+        for teammate in additional_assignees or []:
+            if not TaskAssignmentService.user_is_available_for_window(
+                teammate,
+                scheduled_date=scheduled_date,
+                scheduled_start_time=start_value,
+                scheduled_end_time=end_value,
+                exclude_task_id=exclude_task_id,
+            ):
+                unavailable_additional.append(teammate.display_label)
+        if unavailable_additional:
+            self.add_error("additional_assignees", "Unavailable for that work window: " + ", ".join(unavailable_additional))
+        return cleaned_data
+
     def clean(self):
         cleaned_data = super().clean()
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
+
+        cleaned_data = self._clean_schedule_window(cleaned_data)
+        cleaned_data = self._validate_worker_schedule_assignments(cleaned_data)
 
         recurring_task = cleaned_data.get("recurring_task")
         recurrence_pattern = cleaned_data.get("recurrence_pattern")
@@ -219,7 +442,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         return cleaned_data
 
 
-
 class TaskManualForm(TaskForm):
     class Meta(TaskForm.Meta):
         fields = [
@@ -228,6 +450,9 @@ class TaskManualForm(TaskForm):
             "priority",
             "status",
             "due_date",
+            "scheduled_date",
+            "scheduled_start_time",
+            "scheduled_end_time",
             "respond_to_text",
             "estimated_minutes",
             "assigned_to",
@@ -248,6 +473,7 @@ class TaskManualForm(TaskForm):
         self.fields["due_date"].label = "Due date"
         self.fields["due_date"].help_text = "Leave blank if this can be scheduled from priority."
 
+
 class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Task
@@ -265,8 +491,10 @@ class SupervisorForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["assignable_to_tasks"].label = "Allow tasks to be assigned to this supervisor"
-        self.fields["assignable_to_tasks"].help_text = "Turn this off if this supervisor should stay out of the assignment rotation."
+        self.fields["email"].required = False
+        self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this supervisor."
+        self.fields["assignable_to_tasks"].label = "Allow fallback tasks to be assigned to this supervisor"
+        self.fields["assignable_to_tasks"].help_text = "Turn this off if tasks should never fall back to this supervisor when no worker has enough time available."
 
 
 class TaskNoteForm(StyledFormMixin, forms.ModelForm):
@@ -307,6 +535,8 @@ class TaskAttachmentForm(StyledFormMixin, forms.ModelForm):
 class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
     start_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
     next_run_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    scheduled_start_time = HalfHourTimeField()
+    scheduled_end_time = HalfHourTimeField()
 
     class Meta:
         model = RecurringTaskTemplate
@@ -315,6 +545,8 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             "description",
             "priority",
             "estimated_minutes",
+            "scheduled_start_time",
+            "scheduled_end_time",
             "assign_to",
             "additional_assignees",
             "rotate_additional_assignee",
@@ -334,6 +566,10 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["description"].label = "Task details"
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
+        self.fields["scheduled_start_time"].label = "Scheduled start time"
+        self.fields["scheduled_start_time"].help_text = "Optional. Generated tasks will use this start time on each run."
+        self.fields["scheduled_end_time"].label = "Scheduled end time"
+        self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
         self.fields["assign_to"].label = "Default assignee"
         self.fields["assign_to"].help_text = "Choose the main teammate for the first run. Later runs can rotate based on workload."
         self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
@@ -374,6 +610,9 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         day_of_week = cleaned_data.get("day_of_week")
         day_of_month = cleaned_data.get("day_of_month")
         recurrence_interval = cleaned_data.get("recurrence_interval")
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
+        next_run_date = cleaned_data.get("next_run_date")
 
         if not recurrence_interval:
             cleaned_data["recurrence_interval"] = 1
@@ -390,8 +629,30 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             cleaned_data["day_of_week"] = None
             cleaned_data["day_of_month"] = None
 
+        if start_value or end_value:
+            if not start_value:
+                self.add_error("scheduled_start_time", "Choose a recurring start time.")
+            if not end_value:
+                self.add_error("scheduled_end_time", "Choose a recurring end time.")
+            if start_value and end_value and end_value <= start_value:
+                self.add_error("scheduled_end_time", "End time must be after the start time.")
+            if start_value and end_value:
+                estimated_minutes = cleaned_data.get("estimated_minutes")
+                if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
+                    self.add_error("estimated_minutes", "The time estimate is longer than the recurring work window.")
+                unavailable = []
+                for teammate in filter(None, [assign_to, *(additional_assignees or [])]):
+                    if not TaskAssignmentService.user_is_available_for_window(
+                        teammate,
+                        scheduled_date=next_run_date,
+                        scheduled_start_time=start_value,
+                        scheduled_end_time=end_value,
+                    ):
+                        unavailable.append(teammate.display_label)
+                if assign_to and assign_to.display_label in unavailable:
+                    self.add_error("assign_to", f"{assign_to.display_label} is not scheduled during the next recurring work window.")
+                    unavailable = [label for label in unavailable if label != assign_to.display_label]
+                if unavailable:
+                    self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
+
         return cleaned_data
-
-
-
-

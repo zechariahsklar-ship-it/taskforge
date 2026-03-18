@@ -12,9 +12,28 @@
         <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name"></p>
         <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name"></p>
         {{ form.as_p }}
-        <h2>Weekly hours</h2>
-        <p>Set how many hours this {{ worker_type_label|default:"student" }} usually works on each day.</p>
-        {{ weekly_form.as_p }}
+        {% for hidden in weekly_form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+        <h2>Weekly schedule</h2>
+        <p>Set the usual start and end time for each day in 30-minute increments. Leave both blank on days this {{ worker_type_label|default:"student" }} is not scheduled.</p>
+        <div class="stack">
+            {% for row in weekly_form.day_rows %}
+                <div class="detail-grid">
+                    <div>
+                        <label>{{ row.label }}</label>
+                    </div>
+                    <div>
+                        {{ row.start }}
+                        {% if row.start.errors %}<div class="meta">{{ row.start.errors }}</div>{% endif %}
+                    </div>
+                    <div>
+                        {{ row.end }}
+                        {% if row.end.errors %}<div class="meta">{{ row.end.errors }}</div>{% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
         <button type="submit">{{ submit_label|default:"Create student" }}</button>
     </form>
 </section>

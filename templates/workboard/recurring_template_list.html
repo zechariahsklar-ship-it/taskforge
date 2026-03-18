@@ -24,6 +24,9 @@
                         {% if template.additional_assignee_labels != "None" %}
                             <p class="meta">Additional teammates: {{ template.additional_assignee_labels }}</p>
                         {% endif %}
+                        {% if template.scheduled_window_display %}
+                            <p class="meta">Window: {{ template.scheduled_window_display }}</p>
+                        {% endif %}
                         <p class="meta board-task-estimate">Time: {% if template.estimated_minutes %}{{ template.estimated_minutes }} min{% else %}TBD{% endif %}</p>
                     </article>
                 </a>

@@ -51,6 +51,16 @@ BOARD_COLUMNS = [
     TaskStatus.DONE,
 ]
 
+WEEKLY_SCHEDULE_FIELDS = [
+    ("monday", Weekday.MONDAY),
+    ("tuesday", Weekday.TUESDAY),
+    ("wednesday", Weekday.WEDNESDAY),
+    ("thursday", Weekday.THURSDAY),
+    ("friday", Weekday.FRIDAY),
+    ("saturday", Weekday.SATURDAY),
+    ("sunday", Weekday.SUNDAY),
+]
+
 
 def _board_bucket_status(status: str) -> str:
     return TaskStatus.NEW if status == TaskStatus.ASSIGNED else status
@@ -121,6 +131,9 @@ def _build_checklist_editor_rows(values: list[str]) -> list[str]:
 def _ensure_task_due_date(task: Task) -> Task:
     if task.due_date:
         return task
+    if task.scheduled_date:
+        task.due_date = task.scheduled_date
+        return task
     _, fallback_due_date = TaskParsingService._priority_due_date(task.priority)
     task.due_date = fallback_due_date
     if not task.raw_due_text:
@@ -188,7 +201,19 @@ def _recurring_assignee_from_task(task: Task) -> User | None:
     return None
 
 
-def _choose_rotating_additional_assignee(*, due_date, estimated_minutes, assigned_to_id=None, fixed_additional_ids=None, preserve_user_id=None, previous_rotating_user_id=None) -> User | None:
+def _choose_rotating_additional_assignee(
+    *,
+    due_date,
+    estimated_minutes,
+    assigned_to_id=None,
+    fixed_additional_ids=None,
+    preserve_user_id=None,
+    previous_rotating_user_id=None,
+    scheduled_date=None,
+    scheduled_start_time=None,
+    scheduled_end_time=None,
+    exclude_task_id=None,
+) -> User | None:
     excluded_ids = {user_id for user_id in (fixed_additional_ids or []) if user_id}
     if assigned_to_id:
         excluded_ids.add(assigned_to_id)
@@ -201,13 +226,26 @@ def _choose_rotating_additional_assignee(*, due_date, estimated_minutes, assigne
             role__in=UserRole.worker_roles(),
             worker_profile__active_status=True,
         ).first()
-        if candidate:
+        if candidate and (
+            not (scheduled_date and scheduled_start_time and scheduled_end_time)
+            or TaskAssignmentService.user_is_available_for_window(
+                candidate,
+                scheduled_date=scheduled_date,
+                scheduled_start_time=scheduled_start_time,
+                scheduled_end_time=scheduled_end_time,
+                exclude_task_id=exclude_task_id,
+            )
+        ):
             return candidate
 
     return TaskAssignmentService.suggest_worker_assignee(
         due_date=due_date,
         estimated_minutes=estimated_minutes,
         exclude_user_ids=list(excluded_ids),
+        scheduled_date=scheduled_date,
+        scheduled_start_time=scheduled_start_time,
+        scheduled_end_time=scheduled_end_time,
+        exclude_task_id=exclude_task_id,
     )
 
 
@@ -225,6 +263,10 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
             fixed_additional_ids=fixed_additional_ids,
             preserve_user_id=task.rotating_additional_assignee_id if preserve_existing_rotation else None,
             previous_rotating_user_id=previous_rotating_user_id,
+            scheduled_date=task.scheduled_date,
+            scheduled_start_time=task.scheduled_start_time,
+            scheduled_end_time=task.scheduled_end_time,
+            exclude_task_id=task.pk,
         )
 
     if task.rotating_additional_assignee_id != (rotating_assignee.pk if rotating_assignee else None):
@@ -234,7 +276,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
 
 
 def _next_recurring_run_from_task(task: Task) -> date:
-    seed_date = task.due_date or timezone.localdate()
+    seed_date = task.scheduled_date or task.due_date or timezone.localdate()
     template = RecurringTaskTemplate(
         recurrence_pattern=task.recurrence_pattern,
         recurrence_interval=task.recurrence_interval or 1,
@@ -251,7 +293,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
     if not task.recurring_task or not task.recurrence_pattern:
         return task
 
-    seed_date = task.due_date or timezone.localdate()
+    seed_date = task.scheduled_date or task.due_date or timezone.localdate()
     desired_next_run = _next_recurring_run_from_task(task)
     assignee = _recurring_assignee_from_task(task)
     fixed_additional_assignee_ids = list(task.additional_assignees.exclude(pk=task.assigned_to_id).values_list("pk", flat=True))
@@ -263,6 +305,8 @@ def _sync_task_recurring_template(task: Task) -> Task:
             description=task.description or task.raw_message,
             priority=task.priority,
             estimated_minutes=task.estimated_minutes,
+            scheduled_start_time=task.scheduled_start_time,
+            scheduled_end_time=task.scheduled_end_time,
             assign_to=assignee,
             rotate_additional_assignee=task.rotate_additional_assignee,
             requested_by=task.requested_by or task.created_by,
@@ -289,6 +333,8 @@ def _sync_task_recurring_template(task: Task) -> Task:
     template.description = task.description or task.raw_message
     template.priority = task.priority
     template.estimated_minutes = task.estimated_minutes
+    template.scheduled_start_time = task.scheduled_start_time
+    template.scheduled_end_time = task.scheduled_end_time
     template.assign_to = assignee
     template.rotate_additional_assignee = task.rotate_additional_assignee
     template.requested_by = task.requested_by or task.created_by
@@ -313,6 +359,27 @@ def _backfill_orphan_recurring_tasks() -> None:
     )
     for task in orphan_tasks:
         _sync_task_recurring_template(task)
+
+
+def _weekly_schedule_initial(profile: StudentWorkerProfile | None = None) -> dict:
+    weekly_map = {item.weekday: item for item in profile.weekly_availability.all()} if profile else {}
+    initial = {}
+    for prefix, weekday in WEEKLY_SCHEDULE_FIELDS:
+        availability = weekly_map.get(weekday)
+        initial[f"{prefix}_start"] = availability.start_time if availability else None
+        initial[f"{prefix}_end"] = availability.end_time if availability else None
+        initial[f"{prefix}_hours"] = availability.hours_available if availability else 0
+    return initial
+
+
+def _save_weekly_schedule(profile: StudentWorkerProfile, weekly_form: WeeklyAvailabilityForm) -> None:
+    for _, weekday in WEEKLY_SCHEDULE_FIELDS:
+        defaults = weekly_form.cleaned_data["schedule_windows"][weekday]
+        StudentAvailability.objects.update_or_create(
+            profile=profile,
+            weekday=weekday,
+            defaults=defaults,
+        )
 
 
 def _build_due_date_review_context(initial: dict, due_date_value) -> dict:
@@ -528,6 +595,9 @@ def task_intake_review_view(request, pk):
                     due_date=task.due_date,
                     estimated_minutes=task.estimated_minutes,
                     fallback_supervisor=request.user,
+                    scheduled_date=task.scheduled_date,
+                    scheduled_start_time=task.scheduled_start_time,
+                    scheduled_end_time=task.scheduled_end_time,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -592,6 +662,9 @@ def task_create_view(request):
                     due_date=task.due_date,
                     estimated_minutes=task.estimated_minutes,
                     fallback_supervisor=request.user,
+                    scheduled_date=task.scheduled_date,
+                    scheduled_start_time=task.scheduled_start_time,
+                    scheduled_end_time=task.scheduled_end_time,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -939,16 +1012,7 @@ def worker_list_view(request):
 @supervisor_required
 def worker_availability_view(request, pk):
     profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
-    weekly_map = {item.weekday: item for item in profile.weekly_availability.all()}
-    initial = {
-        "monday_hours": weekly_map.get(Weekday.MONDAY).hours_available if weekly_map.get(Weekday.MONDAY) else 0,
-        "tuesday_hours": weekly_map.get(Weekday.TUESDAY).hours_available if weekly_map.get(Weekday.TUESDAY) else 0,
-        "wednesday_hours": weekly_map.get(Weekday.WEDNESDAY).hours_available if weekly_map.get(Weekday.WEDNESDAY) else 0,
-        "thursday_hours": weekly_map.get(Weekday.THURSDAY).hours_available if weekly_map.get(Weekday.THURSDAY) else 0,
-        "friday_hours": weekly_map.get(Weekday.FRIDAY).hours_available if weekly_map.get(Weekday.FRIDAY) else 0,
-        "saturday_hours": weekly_map.get(Weekday.SATURDAY).hours_available if weekly_map.get(Weekday.SATURDAY) else 0,
-        "sunday_hours": weekly_map.get(Weekday.SUNDAY).hours_available if weekly_map.get(Weekday.SUNDAY) else 0,
-    }
+    initial = _weekly_schedule_initial(profile)
     worker_form = StudentWorkerProfileForm(instance=profile)
     weekly_form = WeeklyAvailabilityForm(initial=initial)
     override_form = StudentAvailabilityOverrideForm(profile=profile)
@@ -969,21 +1033,7 @@ def worker_availability_view(request, pk):
                 profile.email = worker_form.cleaned_data["email"]
                 profile.display_name = user.get_full_name().strip() or user.username
                 profile.save()
-                field_map = {
-                    Weekday.MONDAY: "monday_hours",
-                    Weekday.TUESDAY: "tuesday_hours",
-                    Weekday.WEDNESDAY: "wednesday_hours",
-                    Weekday.THURSDAY: "thursday_hours",
-                    Weekday.FRIDAY: "friday_hours",
-                    Weekday.SATURDAY: "saturday_hours",
-                    Weekday.SUNDAY: "sunday_hours",
-                }
-                for weekday, field_name in field_map.items():
-                    StudentAvailability.objects.update_or_create(
-                        profile=profile,
-                        weekday=weekday,
-                        defaults={"hours_available": weekly_form.cleaned_data[field_name]},
-                    )
+                _save_weekly_schedule(profile, weekly_form)
                 messages.success(request, "Worker updated.")
                 return redirect("worker-availability", pk=profile.pk)
         elif action == "override":
@@ -1052,15 +1102,7 @@ def supervisor_create_view(request):
 @supervisor_required
 def student_supervisor_create_view(request):
     form = StudentWorkerProfileForm(request.POST or None)
-    weekly_form = WeeklyAvailabilityForm(request.POST or None, initial={
-        "monday_hours": 0,
-        "tuesday_hours": 0,
-        "wednesday_hours": 0,
-        "thursday_hours": 0,
-        "friday_hours": 0,
-        "saturday_hours": 0,
-        "sunday_hours": 0,
-    })
+    weekly_form = WeeklyAvailabilityForm(request.POST or None)
     context = {
         "form": form,
         "weekly_form": weekly_form,
@@ -1092,21 +1134,7 @@ def student_supervisor_create_view(request):
             profile.email = profile.email or email
             profile.display_name = user.get_full_name().strip() or user.username
             profile.save()
-            field_map = {
-                Weekday.MONDAY: "monday_hours",
-                Weekday.TUESDAY: "tuesday_hours",
-                Weekday.WEDNESDAY: "wednesday_hours",
-                Weekday.THURSDAY: "thursday_hours",
-                Weekday.FRIDAY: "friday_hours",
-                Weekday.SATURDAY: "saturday_hours",
-                Weekday.SUNDAY: "sunday_hours",
-            }
-            for weekday, field_name in field_map.items():
-                StudentAvailability.objects.update_or_create(
-                    profile=profile,
-                    weekday=weekday,
-                    defaults={"hours_available": weekly_form.cleaned_data[field_name]},
-                )
+            _save_weekly_schedule(profile, weekly_form)
             messages.success(request, "Student supervisor created.")
             return redirect("worker-list")
     return render(request, "workboard/worker_form.html", context)
@@ -1115,15 +1143,7 @@ def student_supervisor_create_view(request):
 @supervisor_required
 def worker_profile_create_view(request):
     form = StudentWorkerProfileForm(request.POST or None)
-    weekly_form = WeeklyAvailabilityForm(request.POST or None, initial={
-        "monday_hours": 0,
-        "tuesday_hours": 0,
-        "wednesday_hours": 0,
-        "thursday_hours": 0,
-        "friday_hours": 0,
-        "saturday_hours": 0,
-        "sunday_hours": 0,
-    })
+    weekly_form = WeeklyAvailabilityForm(request.POST or None)
     context = {"form": form, "weekly_form": weekly_form, "page_title": "Add student", "submit_label": "Create student"}
     if request.method == "POST":
         username = request.POST.get("username", "").strip()
@@ -1149,21 +1169,7 @@ def worker_profile_create_view(request):
             profile.email = profile.email or email
             profile.display_name = user.get_full_name().strip() or user.username
             profile.save()
-            field_map = {
-                Weekday.MONDAY: "monday_hours",
-                Weekday.TUESDAY: "tuesday_hours",
-                Weekday.WEDNESDAY: "wednesday_hours",
-                Weekday.THURSDAY: "thursday_hours",
-                Weekday.FRIDAY: "friday_hours",
-                Weekday.SATURDAY: "saturday_hours",
-                Weekday.SUNDAY: "sunday_hours",
-            }
-            for weekday, field_name in field_map.items():
-                StudentAvailability.objects.update_or_create(
-                    profile=profile,
-                    weekday=weekday,
-                    defaults={"hours_available": weekly_form.cleaned_data[field_name]},
-                )
+            _save_weekly_schedule(profile, weekly_form)
             messages.success(request, "Student worker created.")
             return redirect("worker-list")
     return render(request, "workboard/worker_form.html", context)

@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, datetime, time
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
@@ -340,11 +341,11 @@ class TaskAssignmentServiceTests(TestCase):
         self.alex = self._create_worker("alex", "Alex Carter")
         self.jordan = self._create_worker("jordan", "Jordan Lee")
 
-    def _create_worker(self, username, display_name, weekday_hours=4):
+    def _create_worker(self, username, display_name, weekday_hours=4, role=UserRole.STUDENT_WORKER):
         user = User.objects.create_user(
             username=username,
             password="password123",
-            role=UserRole.STUDENT_WORKER,
+            role=role,
         )
         profile = StudentWorkerProfile.objects.create(
             user=user,
@@ -380,10 +381,10 @@ class TaskAssignmentServiceTests(TestCase):
             )
 
         self.assertEqual(assignee, self.jordan)
-        self.assertIn("Suggested student", summary)
+        self.assertIn("Suggested worker", summary)
         self.assertIn("Jordan Lee", rationale[0])
 
-    def test_suggest_assignee_falls_back_to_supervisor_when_students_cannot_fit_work(self):
+    def test_suggest_assignee_falls_back_to_requesting_supervisor_when_students_cannot_fit_work(self):
         for profile in StudentWorkerProfile.objects.all():
             profile.weekly_availability.all().update(hours_available=0)
 
@@ -395,9 +396,67 @@ class TaskAssignmentServiceTests(TestCase):
             )
 
         self.assertEqual(assignee, self.supervisor)
-        self.assertIn("next available supervisor in rotation", summary)
-        self.assertIn("Fallback rule assigned the task using supervisor rotation.", rationale)
+        self.assertIn("stay with the supervising user", summary)
+        self.assertIn("Fallback rule assigned the task to the supervising user instead of rotating among supervisors.", rationale)
 
+    def test_student_supervisor_stays_in_worker_rotation(self):
+        lead = self._create_worker("lead-student-supervisor", "Morgan Lead", role=UserRole.STUDENT_SUPERVISOR)
+        StudentWorkerProfile.objects.exclude(user=lead).update(active_status=False)
+
+        with patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)):
+            assignee, summary, rationale = TaskAssignmentService.suggest_assignee(
+                due_date=date(2026, 3, 17),
+                estimated_minutes=30,
+                fallback_supervisor=self.supervisor,
+            )
+
+        self.assertEqual(assignee, lead)
+        self.assertIn("Suggested worker", summary)
+        self.assertIn("Morgan Lead", rationale[0])
+
+    def test_same_day_assignment_skips_worker_without_enough_time_left_and_uses_next_worker(self):
+        Task.objects.create(
+            title="Already booked",
+            description="Consumes Alex's remaining time today",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.alex,
+            estimated_minutes=30,
+            due_date=date(2026, 3, 13),
+        )
+
+        with (
+            patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)),
+            patch(
+                "workboard.services.timezone.localtime",
+                return_value=timezone.make_aware(datetime(2026, 3, 13, 16, 0)),
+            ),
+        ):
+            assignee, _, _ = TaskAssignmentService.suggest_assignee(
+                due_date=date(2026, 3, 13),
+                estimated_minutes=45,
+                fallback_supervisor=self.supervisor,
+            )
+
+        self.assertEqual(assignee, self.jordan)
+
+    def test_same_day_assignment_after_5pm_falls_back_to_supervisor(self):
+        with (
+            patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)),
+            patch(
+                "workboard.services.timezone.localtime",
+                return_value=timezone.make_aware(datetime(2026, 3, 13, 17, 5)),
+            ),
+        ):
+            assignee, summary, rationale = TaskAssignmentService.suggest_assignee(
+                due_date=date(2026, 3, 13),
+                estimated_minutes=30,
+                fallback_supervisor=self.supervisor,
+            )
+
+        self.assertEqual(assignee, self.supervisor)
+        self.assertIn("stay with the supervising user", summary)
+        self.assertIn("Fallback rule assigned the task to the supervising user instead of rotating among supervisors.", rationale)
 
     def test_remaining_capacity_minutes_applies_negative_override_as_hour_reduction(self):
         profile = self.jordan.worker_profile
@@ -412,8 +471,8 @@ class TaskAssignmentServiceTests(TestCase):
             capacity = TaskAssignmentService._remaining_capacity_minutes(profile, date(2026, 3, 16))
 
         self.assertEqual(capacity, 360)
-    def test_suggest_assignee_rotates_among_assignable_supervisors_when_students_cannot_fit_work(self):
-        backup_supervisor = User.objects.create_user(
+    def test_suggest_assignee_does_not_rotate_to_other_supervisors(self):
+        User.objects.create_user(
             username="backup-supervisor",
             password="password123",
             role=UserRole.SUPERVISOR,
@@ -429,9 +488,9 @@ class TaskAssignmentServiceTests(TestCase):
                 fallback_supervisor=self.supervisor,
             )
 
-        self.assertEqual(assignee, backup_supervisor)
-        self.assertIn("supervisor in rotation", summary)
-        self.assertIn("Fallback rule assigned the task using supervisor rotation.", rationale)
+        self.assertEqual(assignee, self.supervisor)
+        self.assertIn("stay with the supervising user", summary)
+        self.assertIn("Fallback rule assigned the task to the supervising user instead of rotating among supervisors.", rationale)
 
 
 class RecurringTaskGenerationRotationTests(TestCase):
@@ -479,7 +538,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
             recurrence_interval=1,
             next_run_date=date(2026, 3, 13),
         )
-        Task.objects.create(
+        self.previous_task = Task.objects.create(
             title="Rotating recurring task",
             description="Previous run",
             priority=Priority.MEDIUM,
@@ -489,14 +548,21 @@ class RecurringTaskGenerationRotationTests(TestCase):
             requested_by=self.supervisor,
             recurring_task=True,
             recurring_template=self.template,
+            completed_at=timezone.now(),
         )
+        TaskChecklistItem.objects.create(task=self.previous_task, title="Recurring step", is_completed=True, position=1)
 
-    def test_generate_recurring_tasks_rotates_to_different_student_when_available(self):
+    def test_generate_recurring_tasks_reopens_completed_task_and_rotates_assignment(self):
         with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
             call_command("generate_recurring_tasks")
 
-        generated = Task.objects.filter(recurring_template=self.template, status=TaskStatus.NEW).latest("pk")
-        self.assertEqual(generated.assigned_to, self.jordan)
+        self.previous_task.refresh_from_db()
+        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
+        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
+        self.assertIsNone(self.previous_task.completed_at)
+        self.assertEqual(self.previous_task.assigned_to, self.jordan)
+        self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
+        self.assertFalse(self.previous_task.checklist_items.get().is_completed)
 
     def test_generate_recurring_tasks_sets_fixed_and_rotating_additional_assignees(self):
         extra_template = RecurringTaskTemplate.objects.create(
@@ -516,10 +582,24 @@ class RecurringTaskGenerationRotationTests(TestCase):
         with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
             call_command("generate_recurring_tasks")
 
-        generated = Task.objects.filter(recurring_template=extra_template, status=TaskStatus.NEW).latest("pk")
+        generated = Task.objects.filter(recurring_template=extra_template).latest("pk")
         self.assertEqual(generated.assigned_to, self.alex)
         self.assertEqual(list(generated.additional_assignees.values_list("id", flat=True)), [self.jordan.id])
         self.assertEqual(generated.rotating_additional_assignee, self.sam)
+
+    def test_generate_recurring_tasks_does_not_duplicate_open_task(self):
+        self.previous_task.status = TaskStatus.IN_PROGRESS
+        self.previous_task.completed_at = None
+        self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+            call_command("generate_recurring_tasks")
+
+        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
+        self.previous_task.refresh_from_db()
+        self.assertEqual(self.previous_task.status, TaskStatus.IN_PROGRESS)
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 13))
 
 
 class TaskParsingFallbackTests(TestCase):
@@ -644,6 +724,150 @@ class TaskCreateDueDateFallbackTests(TestCase):
         self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
 
 
+class TaskScheduledWindowTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="scheduled-window-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.morning_worker = User.objects.create_user(
+            username="morning-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Morning",
+            last_name="Worker",
+        )
+        self.afternoon_worker = User.objects.create_user(
+            username="afternoon-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Afternoon",
+            last_name="Worker",
+        )
+        self._create_schedule(self.morning_worker, time(9, 0), time(12, 0))
+        self._create_schedule(self.afternoon_worker, time(13, 0), time(17, 0))
+        self.client.force_login(self.supervisor)
+
+    def _create_schedule(self, user, start_value, end_value):
+        profile = StudentWorkerProfile.objects.create(
+            user=user,
+            display_name=user.get_full_name(),
+            email=f"{user.username}@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(
+                profile=profile,
+                weekday=weekday,
+                start_time=start_value if weekday < 5 else None,
+                end_time=end_value if weekday < 5 else None,
+                hours_available=3 if weekday < 5 else 0,
+            )
+
+    def test_task_create_auto_assigns_worker_available_in_scheduled_window(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Scheduled front desk coverage",
+                "description": "Cover the front desk in the morning.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_date": "2026-03-16",
+                "scheduled_start_time": "09:30",
+                "scheduled_end_time": "10:30",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Scheduled front desk coverage")
+        self.assertEqual(task.assigned_to, self.morning_worker)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.scheduled_start_time, time(9, 30))
+        self.assertEqual(task.scheduled_end_time, time(10, 30))
+        self.assertEqual(task.due_date, date(2026, 3, 16))
+
+    def test_task_create_rejects_manual_assignee_outside_scheduled_window(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Scheduled phone shift",
+                "description": "Morning phone shift.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "scheduled_date": "2026-03-16",
+                "scheduled_start_time": "09:30",
+                "scheduled_end_time": "10:30",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": str(self.afternoon_worker.pk),
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "is not scheduled during that work window")
+        self.assertFalse(Task.objects.filter(title="Scheduled phone shift").exists())
+
+    def test_worker_create_accepts_start_and_end_schedule_fields(self):
+        response = self.client.post(
+            reverse("worker-create"),
+            {
+                "username": "schedule-student",
+                "password": "password123",
+                "first_name": "Taylor",
+                "last_name": "Schedule",
+                "email": "",
+                "active_status": "on",
+                "skill_notes": "",
+                "monday_start": "09:00",
+                "monday_end": "12:00",
+                "tuesday_start": "10:00",
+                "tuesday_end": "14:00",
+                "wednesday_start": "",
+                "wednesday_end": "",
+                "thursday_start": "",
+                "thursday_end": "",
+                "friday_start": "",
+                "friday_end": "",
+                "saturday_start": "",
+                "saturday_end": "",
+                "sunday_start": "",
+                "sunday_end": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile = User.objects.get(username="schedule-student").worker_profile
+        monday = profile.weekly_availability.get(weekday=Weekday.MONDAY)
+        tuesday = profile.weekly_availability.get(weekday=Weekday.TUESDAY)
+        self.assertEqual(monday.start_time, time(9, 0))
+        self.assertEqual(monday.end_time, time(12, 0))
+        self.assertEqual(float(monday.hours_available), 3.0)
+        self.assertEqual(tuesday.start_time, time(10, 0))
+        self.assertEqual(tuesday.end_time, time(14, 0))
+        self.assertEqual(float(tuesday.hours_available), 4.0)
+
+
 class TaskCreateLabelTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(
@@ -677,6 +901,10 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, "Avery Stone")
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Also add one rotating teammate")
+        self.assertContains(response, "Scheduled work window")
+        self.assertContains(response, "Scheduled date")
+        self.assertContains(response, "Start time")
+        self.assertContains(response, "End time")
         self.assertContains(response, 'name="additional_assignees"', count=1)
         self.assertContains(response, 'type="checkbox"', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
@@ -1339,13 +1567,15 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "This adjustment would reduce the day below 0 hours.")
         self.assertFalse(self.profile.availability_overrides.filter(override_date=date(2026, 3, 16)).exists())
-    def test_add_student_form_uses_weekly_hours_and_hides_old_fields(self):
+    def test_add_student_form_uses_weekly_schedule_fields_and_hides_old_profile_fields(self):
         response = self.client.get(reverse("worker-create"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Weekly hours")
-        self.assertContains(response, 'name="monday_hours"')
-        self.assertContains(response, 'name="sunday_hours"')
+        self.assertContains(response, "Weekly schedule")
+        self.assertContains(response, 'name="monday_start"')
+        self.assertContains(response, 'name="monday_end"')
+        self.assertContains(response, 'name="sunday_start"')
+        self.assertContains(response, 'name="sunday_end"')
         self.assertNotContains(response, "Typical schedule")
         self.assertNotContains(response, 'name="normal_shift_availability"')
         self.assertNotContains(response, 'name="max_hours_per_day"')
@@ -1384,6 +1614,61 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.WEDNESDAY).hours_available, 2)
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.THURSDAY).hours_available, 4)
         self.assertEqual(profile.weekly_availability.get(weekday=Weekday.FRIDAY).hours_available, 1)
+
+    def test_creating_student_allows_blank_email(self):
+        response = self.client.post(
+            reverse("worker-create"),
+            {
+                "username": "blank-email-student",
+                "password": "password123",
+                "first_name": "Taylor",
+                "last_name": "Blank",
+                "email": "",
+                "active_status": "on",
+                "skill_notes": "",
+                "monday_hours": "4",
+                "tuesday_hours": "3",
+                "wednesday_hours": "2",
+                "thursday_hours": "4",
+                "friday_hours": "1",
+                "saturday_hours": "0",
+                "sunday_hours": "0",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="blank-email-student")
+        self.assertEqual(user.email, "")
+        self.assertEqual(user.worker_profile.email, "")
+
+    def test_creating_student_supervisor_allows_blank_email(self):
+        response = self.client.post(
+            reverse("student-supervisor-create"),
+            {
+                "username": "blank-email-student-supervisor",
+                "password": "password123",
+                "first_name": "Morgan",
+                "last_name": "Blank",
+                "email": "",
+                "active_status": "on",
+                "skill_notes": "",
+                "monday_hours": "4",
+                "tuesday_hours": "3",
+                "wednesday_hours": "2",
+                "thursday_hours": "4",
+                "friday_hours": "1",
+                "saturday_hours": "0",
+                "sunday_hours": "0",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="blank-email-student-supervisor")
+        self.assertEqual(user.email, "")
+        self.assertEqual(user.worker_profile.email, "")
+
     def test_creating_student_supervisor_uses_worker_profile_and_saves_weekly_hours(self):
         response = self.client.post(
             reverse("student-supervisor-create"),
@@ -1452,6 +1737,25 @@ class PeopleManagementTests(TestCase):
         supervisor_template.refresh_from_db()
         self.assertEqual(supervisor_task.assigned_to, self.supervisor)
         self.assertEqual(supervisor_template.assign_to, self.supervisor)
+
+    def test_creating_supervisor_allows_blank_email(self):
+        response = self.client.post(
+            reverse("supervisor-create"),
+            {
+                "username": "blank-email-supervisor",
+                "password": "password123",
+                "first_name": "Avery",
+                "last_name": "Blank",
+                "email": "",
+                "assignable_to_tasks": "on",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="blank-email-supervisor")
+        self.assertEqual(user.role, UserRole.SUPERVISOR)
+        self.assertEqual(user.email, "")
 
     def test_supervisor_edit_updates_assignment_eligibility(self):
         response = self.client.post(

@@ -6,7 +6,7 @@
 <section class="page-heading">
     <div>
         <h1>Edit worker: {{ profile.display_name }}</h1>
-        <p>Update {{ profile.user.get_role_display|lower }} details and weekly hours in one place.</p>
+        <p>Update {{ profile.user.get_role_display|lower }} details and weekly schedule in one place.</p>
     </div>
     <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
 </section>
@@ -20,9 +20,28 @@
             <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name" value="{{ profile.user.first_name }}"></p>
             <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name" value="{{ profile.user.last_name }}"></p>
             {{ worker_form.as_p }}
-            <h2>Weekly hours</h2>
-            <p>Set how many hours this worker usually works on each day.</p>
-            {{ weekly_form.as_p }}
+            {% for hidden in weekly_form.hidden_fields %}
+                {{ hidden }}
+            {% endfor %}
+            <h2>Weekly schedule</h2>
+            <p>Set the usual start and end time for each day in 30-minute increments. Leave both blank when this worker is not scheduled.</p>
+            <div class="stack">
+                {% for row in weekly_form.day_rows %}
+                    <div class="detail-grid">
+                        <div>
+                            <label>{{ row.label }}</label>
+                        </div>
+                        <div>
+                            {{ row.start }}
+                            {% if row.start.errors %}<div class="meta">{{ row.start.errors }}</div>{% endif %}
+                        </div>
+                        <div>
+                            {{ row.end }}
+                            {% if row.end.errors %}<div class="meta">{{ row.end.errors }}</div>{% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
             <button type="submit">Save worker</button>
         </form>
     </article>

@@ -18,7 +18,7 @@
         {% endfor %}
 
         {% for field in form %}
-            {% if field.name != "additional_assignees" and field.name != "rotate_additional_assignee" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+            {% if field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "additional_assignees" and field.name != "rotate_additional_assignee" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -27,6 +27,33 @@
                 </p>
             {% endif %}
         {% endfor %}
+
+        <section class="review-field recurring-task-panel">
+            <div class="stack">
+                <div>
+                    <h2>Scheduled work window</h2>
+                    <p class="meta">Use this when the task needs to happen during a specific shift. Worker assignments will only stick if the teammate is scheduled during that window.</p>
+                </div>
+                <p>
+                    <label for="{{ form.scheduled_date.id_for_label }}">{{ form.scheduled_date.label }}</label>
+                    {{ form.scheduled_date }}
+                    {% if form.scheduled_date.help_text %}<span class="meta">{{ form.scheduled_date.help_text }}</span>{% endif %}
+                    {% if form.scheduled_date.errors %}<div class="meta">{{ form.scheduled_date.errors }}</div>{% endif %}
+                </p>
+                <p>
+                    <label for="{{ form.scheduled_start_time.id_for_label }}">{{ form.scheduled_start_time.label }}</label>
+                    {{ form.scheduled_start_time }}
+                    {% if form.scheduled_start_time.help_text %}<span class="meta">{{ form.scheduled_start_time.help_text }}</span>{% endif %}
+                    {% if form.scheduled_start_time.errors %}<div class="meta">{{ form.scheduled_start_time.errors }}</div>{% endif %}
+                </p>
+                <p>
+                    <label for="{{ form.scheduled_end_time.id_for_label }}">{{ form.scheduled_end_time.label }}</label>
+                    {{ form.scheduled_end_time }}
+                    {% if form.scheduled_end_time.help_text %}<span class="meta">{{ form.scheduled_end_time.help_text }}</span>{% endif %}
+                    {% if form.scheduled_end_time.errors %}<div class="meta">{{ form.scheduled_end_time.errors }}</div>{% endif %}
+                </p>
+            </div>
+        </section>
 
         <section class="review-field assignee-panel">
             <div class="stack">

@@ -26,6 +26,7 @@
                 <dt>Additional Teammates</dt><dd>{{ template.additional_assignee_labels }}</dd>
                 <dt>Requested By</dt><dd>{{ template.requested_by.display_label|default:"Unknown" }}</dd>
                 <dt>Estimate</dt><dd>{{ template.estimated_minutes|default:"-" }} minutes</dd>
+                <dt>Scheduled Window</dt><dd>{{ template.scheduled_window_display|default:"-" }}</dd>
                 <dt>Start Date</dt><dd>{{ template.start_date|date:"M j, Y" }}</dd>
                 <dt>Generated Tasks</dt><dd>{{ template.generated_tasks.count }}</dd>
                 {% if template.day_of_week is not None %}
