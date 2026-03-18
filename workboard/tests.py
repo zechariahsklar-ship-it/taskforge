@@ -1583,6 +1583,17 @@ class PeopleManagementTests(TestCase):
         self.assertNotContains(response, 'name="display_name"')
         self.assertContains(response, 'name="email"', count=1)
 
+    def test_worker_forms_render_calendar_style_schedule_picker(self):
+        create_response = self.client.get(reverse("worker-create"))
+        edit_response = self.client.get(reverse("worker-availability", args=[self.profile.pk]))
+
+        self.assertContains(create_response, 'data-weekly-schedule-picker')
+        self.assertContains(create_response, 'data-clear-week')
+        self.assertContains(create_response, 'data-schedule-summary-card="monday"')
+        self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
+        self.assertContains(edit_response, 'data-weekly-schedule-picker')
+        self.assertContains(edit_response, 'Manual time fields')
+
     def test_creating_student_uses_first_and_last_name_for_display_name_and_saves_weekly_hours(self):
         response = self.client.post(
             reverse("worker-create"),

@@ -44,6 +44,19 @@ for hour in range(24):
         value = time(hour, minute)
         HALF_HOUR_CHOICES.append((value.strftime("%H:%M"), _format_time_label(value)))
 
+WEEKLY_CALENDAR_SLOTS = []
+for index, choice in enumerate(HALF_HOUR_CHOICES[1:-1]):
+    value, full_label = choice
+    WEEKLY_CALENDAR_SLOTS.append(
+        {
+            "index": index,
+            "value": value,
+            "end_value": HALF_HOUR_CHOICES[index + 2][0],
+            "label": full_label if value.endswith(":00") else "",
+            "full_label": full_label,
+        }
+    )
+
 
 class HalfHourSelect(forms.Select):
     def __init__(self, *args, **kwargs):
@@ -203,12 +216,16 @@ class WeeklyAvailabilityForm(StyledFormMixin, forms.Form):
     def day_rows(self):
         return [
             {
+                "prefix": prefix,
                 "label": label,
                 "start": self[f"{prefix}_start"],
                 "end": self[f"{prefix}_end"],
             }
             for prefix, label, _ in DAY_FIELD_CONFIG
         ]
+
+    def calendar_slots(self):
+        return WEEKLY_CALENDAR_SLOTS
 
     def clean(self):
         cleaned_data = super().clean()
