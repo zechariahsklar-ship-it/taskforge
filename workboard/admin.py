@@ -4,7 +4,6 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from .models import (
     RecurringTaskTemplate,
     StudentAvailability,
-    StudentAvailabilityOverride,
     StudentWorkerProfile,
     Task,
     TaskAttachment,
@@ -34,10 +33,6 @@ class StudentAvailabilityAdmin(admin.ModelAdmin):
     list_filter = ("weekday",)
 
 
-@admin.register(StudentAvailabilityOverride)
-class StudentAvailabilityOverrideAdmin(admin.ModelAdmin):
-    list_display = ("profile", "override_date", "hours_available", "created_by")
-    list_filter = ("override_date",)
 
 
 class TaskNoteInline(admin.TabularInline):

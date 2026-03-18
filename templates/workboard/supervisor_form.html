@@ -11,5 +11,15 @@
         {{ form.as_p }}
         <button type="submit">{{ submit_label|default:"Save supervisor" }}</button>
     </form>
+    {% if supervisor %}
+        <div class="task-delete-form">
+            <h2>{{ remove_label|default:"Remove supervisor" }}</h2>
+            <p class="meta">Use this only when this supervisor account should be removed. Any assigned tasks will be reassigned to you.</p>
+            <form method="post" action="{% url 'supervisor-delete' supervisor.pk %}" onsubmit="return window.confirm('{{ remove_confirm|default:"Remove this supervisor? Assigned tasks will be reassigned to you." }}');">
+                {% csrf_token %}
+                <button type="submit" class="task-delete-button">{{ remove_label|default:"Remove supervisor" }}</button>
+            </form>
+        </div>
+    {% endif %}
 </section>
 {% endblock %}

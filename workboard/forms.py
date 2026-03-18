@@ -9,7 +9,6 @@ from django.db.models import Q
 from .models import (
     RecurringTaskTemplate,
     StudentAvailability,
-    StudentAvailabilityOverride,
     StudentScheduleOverride,
     StudentWorkerProfile,
     Task,
@@ -149,34 +148,6 @@ class StudentAvailabilityForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = StudentAvailability
         fields = ["weekday", "start_time", "end_time", "hours_available"]
-
-
-class StudentAvailabilityOverrideForm(StyledFormMixin, forms.ModelForm):
-    override_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
-
-    class Meta:
-        model = StudentAvailabilityOverride
-        fields = ["override_date", "hours_available", "note"]
-
-    def __init__(self, *args, profile=None, **kwargs):
-        self.profile = profile
-        super().__init__(*args, **kwargs)
-        self.fields["hours_available"].label = "Hour adjustment"
-        self.fields["hours_available"].help_text = "Use a positive number to add hours or a negative number to subtract hours for that date."
-
-    def clean(self):
-        cleaned_data = super().clean()
-        if not self.profile:
-            return cleaned_data
-        override_date = cleaned_data.get("override_date")
-        hour_adjustment = cleaned_data.get("hours_available")
-        if override_date is None or hour_adjustment is None:
-            return cleaned_data
-        baseline_minutes = TaskAssignmentService._scheduled_minutes_for_date(self.profile, override_date)
-        adjusted_total = Decimal(baseline_minutes) / Decimal("60") + hour_adjustment
-        if adjusted_total < 0:
-            self.add_error("hours_available", "This adjustment would reduce the day below 0 hours.")
-        return cleaned_data
 
 
 def _serialize_schedule_segments(blocks):

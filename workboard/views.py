@@ -13,7 +13,6 @@ from django.utils import timezone
 from .forms import (
     AppPasswordChangeForm,
     RecurringTaskTemplateForm,
-    StudentAvailabilityOverrideForm,
     StudentScheduleOverrideForm,
     StudentWorkerProfileForm,
     SupervisorForm,
@@ -31,7 +30,6 @@ from .models import (
     RecurringTaskTemplate,
     StudentAvailability,
     StudentAvailabilityBlock,
-    StudentAvailabilityOverride,
     StudentScheduleOverride,
     StudentScheduleOverrideBlock,
     StudentWorkerProfile,
@@ -1073,79 +1071,110 @@ def worker_list_view(request):
     )
 
 
+def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: StudentWorkerProfileForm, post_data) -> bool:
+    user = profile.user
+    username = post_data.get("username", "").strip()
+    if not username:
+        worker_form.add_error(None, "Username is required.")
+        return False
+    if User.objects.exclude(pk=user.pk).filter(username=username).exists():
+        worker_form.add_error(None, "That username is already in use.")
+        return False
+
+    user.username = username
+    user.first_name = post_data.get("first_name", "").strip()
+    user.last_name = post_data.get("last_name", "").strip()
+    user.email = worker_form.cleaned_data["email"]
+    user.save()
+
+    updated_profile = worker_form.save(commit=False)
+    updated_profile.user = user
+    updated_profile.email = worker_form.cleaned_data["email"]
+    updated_profile.display_name = user.get_full_name().strip() or user.username
+    updated_profile.save()
+    return True
+
+
+def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
+    if profile.user.role == UserRole.STUDENT_SUPERVISOR:
+        return {
+            "page_title": f"Edit student supervisor: {profile.display_name}",
+            "schedule_title": f"Edit schedule: {profile.display_name}",
+            "role_label": "student supervisor",
+            "remove_label": "Remove student supervisor",
+            "remove_confirm": "Remove this student supervisor? Assigned tasks will be reassigned to you.",
+            "success_label": "Student supervisor updated.",
+        }
+    return {
+        "page_title": f"Edit worker: {profile.display_name}",
+        "schedule_title": f"Edit schedule: {profile.display_name}",
+        "role_label": "worker",
+        "remove_label": "Remove student",
+        "remove_confirm": "Remove this student? Assigned tasks will be reassigned to you.",
+        "success_label": "Worker updated.",
+    }
+
+
 @supervisor_required
-def worker_availability_view(request, pk):
+def worker_edit_view(request, pk):
     profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
+    context_labels = _worker_role_page_context(profile)
+    worker_form = StudentWorkerProfileForm(request.POST or None, instance=profile)
+
+    if request.method == "POST" and worker_form.is_valid() and _save_worker_profile_details(profile, worker_form, request.POST):
+        messages.success(request, context_labels["success_label"])
+        return redirect("worker-edit", pk=profile.pk)
+
+    return render(
+        request,
+        "workboard/worker_edit.html",
+        {
+            "profile": profile,
+            "worker_form": worker_form,
+            **context_labels,
+        },
+    )
+
+
+@supervisor_required
+def worker_schedule_view(request, pk):
+    profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
+    context_labels = _worker_role_page_context(profile)
     initial = _weekly_schedule_initial(profile)
-    worker_form = StudentWorkerProfileForm(instance=profile)
     weekly_form = WeeklyAvailabilityForm(initial=initial)
-    override_form = StudentAvailabilityOverrideForm(profile=profile)
     schedule_override_form = StudentScheduleOverrideForm(profile=profile)
 
     if request.method == "POST":
         action = request.POST.get("action")
-        if action == "worker":
-            worker_form = StudentWorkerProfileForm(request.POST, instance=profile)
+        if action == "weekly":
             weekly_form = WeeklyAvailabilityForm(request.POST)
-            override_form = StudentAvailabilityOverrideForm(profile=profile)
             schedule_override_form = StudentScheduleOverrideForm(profile=profile)
-            if worker_form.is_valid() and weekly_form.is_valid():
-                profile = worker_form.save(commit=False)
-                user = profile.user
-                user.username = request.POST.get("username", "").strip() or user.username
-                user.first_name = request.POST.get("first_name", "").strip()
-                user.last_name = request.POST.get("last_name", "").strip()
-                user.email = worker_form.cleaned_data["email"]
-                user.save()
-                profile.email = worker_form.cleaned_data["email"]
-                profile.display_name = user.get_full_name().strip() or user.username
-                profile.save()
+            if weekly_form.is_valid():
                 _save_weekly_schedule(profile, weekly_form)
-                messages.success(request, "Worker updated.")
-                return redirect("worker-availability", pk=profile.pk)
-        elif action == "override":
-            worker_form = StudentWorkerProfileForm(instance=profile)
-            weekly_form = WeeklyAvailabilityForm(initial=initial)
-            override_form = StudentAvailabilityOverrideForm(request.POST, profile=profile)
-            schedule_override_form = StudentScheduleOverrideForm(profile=profile)
-            if override_form.is_valid():
-                override = override_form.save(commit=False)
-                override.profile = profile
-                override.created_by = request.user
-                override.save()
-                messages.success(request, "Temporary hour override saved.")
-                return redirect("worker-availability", pk=profile.pk)
+                messages.success(request, "Weekly schedule updated.")
+                return redirect("worker-schedule", pk=profile.pk)
         elif action == "schedule_override":
-            worker_form = StudentWorkerProfileForm(instance=profile)
             weekly_form = WeeklyAvailabilityForm(initial=initial)
-            override_form = StudentAvailabilityOverrideForm(profile=profile)
             schedule_override_form = StudentScheduleOverrideForm(request.POST, profile=profile)
             if schedule_override_form.is_valid():
                 schedule_override = _save_schedule_override(profile, schedule_override_form, request.user)
                 messages.success(request, f"Temporary schedule saved for {schedule_override.override_date}.")
-                return redirect("worker-availability", pk=profile.pk)
-        elif action == "delete_override":
-            override = get_object_or_404(StudentAvailabilityOverride, pk=request.POST.get("override_id"), profile=profile)
-            override.delete()
-            messages.success(request, "Temporary hour override removed.")
-            return redirect("worker-availability", pk=profile.pk)
+                return redirect("worker-schedule", pk=profile.pk)
         elif action == "delete_schedule_override":
             schedule_override = get_object_or_404(StudentScheduleOverride, pk=request.POST.get("schedule_override_id"), profile=profile)
             schedule_override.delete()
             messages.success(request, "Temporary schedule removed.")
-            return redirect("worker-availability", pk=profile.pk)
+            return redirect("worker-schedule", pk=profile.pk)
 
     return render(
         request,
         "workboard/worker_availability.html",
         {
             "profile": profile,
-            "worker_form": worker_form,
             "weekly_form": weekly_form,
-            "override_form": override_form,
             "schedule_override_form": schedule_override_form,
-            "overrides": profile.availability_overrides.all(),
             "schedule_overrides": profile.schedule_overrides.prefetch_related("blocks").all(),
+            **context_labels,
         },
     )
 
@@ -1301,11 +1330,18 @@ def supervisor_edit_view(request, pk):
     if request.method == "POST" and form.is_valid():
         form.save()
         messages.success(request, "Supervisor updated.")
-        return redirect("worker-list")
+        return redirect("supervisor-edit", pk=supervisor.pk)
     return render(
         request,
         "workboard/supervisor_form.html",
-        {"form": form, "page_title": f"Edit supervisor: {supervisor.display_label}", "supervisor": supervisor},
+        {
+            "form": form,
+            "page_title": f"Edit supervisor: {supervisor.display_label}",
+            "submit_label": "Save changes",
+            "supervisor": supervisor,
+            "remove_label": "Remove supervisor",
+            "remove_confirm": "Remove this supervisor? Assigned tasks will be reassigned to you.",
+        },
     )
 
 

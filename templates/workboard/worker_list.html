@@ -35,12 +35,9 @@
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
-                        <a href="{% url 'worker-availability' item.profile.pk %}">Edit worker</a><br>
-                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a><br>
-                        <form method="post" action="{% url 'worker-delete' item.profile.user.pk %}" onsubmit="return window.confirm('Remove this student? Assigned tasks will be reassigned to you.');">
-                            {% csrf_token %}
-                            <button type="submit" class="link-button">Remove student</button>
-                        </form>
+                        <a href="{% url 'worker-edit' item.profile.pk %}">Edit worker</a><br>
+                        <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a><br>
+                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
                     </td>
                 </tr>
             {% empty %}
@@ -73,12 +70,9 @@
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
-                        <a href="{% url 'worker-availability' item.profile.pk %}">Edit worker</a><br>
-                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a><br>
-                        <form method="post" action="{% url 'worker-delete' item.profile.user.pk %}" onsubmit="return window.confirm('Remove this student supervisor? Assigned tasks will be reassigned to you.');">
-                            {% csrf_token %}
-                            <button type="submit" class="link-button">Remove student supervisor</button>
-                        </form>
+                        <a href="{% url 'worker-edit' item.profile.pk %}">Edit student supervisor</a><br>
+                        <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a><br>
+                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
                     </td>
                 </tr>
             {% empty %}
@@ -110,11 +104,7 @@
                     <td>{{ supervisor.estimated_minutes|default:0 }}</td>
                     <td>
                         <a href="{% url 'supervisor-edit' supervisor.pk %}">Edit supervisor</a><br>
-                        <a href="{% url 'worker-password-reset' supervisor.pk %}">Reset password</a><br>
-                        <form method="post" action="{% url 'supervisor-delete' supervisor.pk %}" onsubmit="return window.confirm('Remove this supervisor? Assigned tasks will be reassigned to you.');">
-                            {% csrf_token %}
-                            <button type="submit" class="link-button">Remove supervisor</button>
-                        </form>
+                        <a href="{% url 'worker-password-reset' supervisor.pk %}">Reset password</a>
                     </td>
                 </tr>
             {% empty %}

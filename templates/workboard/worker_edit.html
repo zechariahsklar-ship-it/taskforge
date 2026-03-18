@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>{{ page_title }}</h1>
+        <p>Update {{ role_label }} details here, and use the separate schedule page for weekly and temporary scheduling.</p>
+    </div>
+    <div class="inline-form">
+        <a class="button-link" href="{% url 'worker-schedule' profile.pk %}">Edit schedule</a>
+        <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
+    </div>
+</section>
+<section class="card narrow">
+    <form method="post">
+        {% csrf_token %}
+        {% if worker_form.non_field_errors %}
+            <ul class="messages">
+                {% for error in worker_form.non_field_errors %}<li class="message">{{ error }}</li>{% endfor %}
+            </ul>
+        {% endif %}
+        <p><label for="id_username">Username</label><input class="form-control" type="text" name="username" id="id_username" value="{{ request.POST.username|default:profile.user.username }}" required></p>
+        <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name" value="{{ request.POST.first_name|default:profile.user.first_name }}"></p>
+        <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name" value="{{ request.POST.last_name|default:profile.user.last_name }}"></p>
+        {{ worker_form.as_p }}
+        <button type="submit">Save changes</button>
+    </form>
+    <div class="task-delete-form">
+        <h2>{{ remove_label }}</h2>
+        <p class="meta">Use this only when this person should be removed from the app. Any assigned tasks will be reassigned to you.</p>
+        <form method="post" action="{% url 'worker-delete' profile.user.pk %}" onsubmit="return window.confirm('{{ remove_confirm }}');">
+            {% csrf_token %}
+            <button type="submit" class="task-delete-button">{{ remove_label }}</button>
+        </form>
+    </div>
+</section>
+{% endblock %}

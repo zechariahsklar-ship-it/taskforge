@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentAvailabilityOverride, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -459,19 +459,7 @@ class TaskAssignmentServiceTests(TestCase):
         self.assertIn("stay with the supervising user", summary)
         self.assertIn("Fallback rule assigned the task to the supervising user instead of rotating among supervisors.", rationale)
 
-    def test_remaining_capacity_minutes_applies_negative_override_as_hour_reduction(self):
-        profile = self.jordan.worker_profile
-        StudentAvailabilityOverride.objects.create(
-            profile=profile,
-            override_date=date(2026, 3, 16),
-            hours_available=-2,
-            note="Short day",
-        )
 
-        with patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)):
-            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, date(2026, 3, 16))
-
-        self.assertEqual(capacity, 360)
     def test_suggest_assignee_does_not_rotate_to_other_supervisors(self):
         User.objects.create_user(
             username="backup-supervisor",
@@ -1505,6 +1493,14 @@ class PeopleManagementTests(TestCase):
             normal_shift_availability="Weekdays",
             max_hours_per_day=4,
         )
+        self.student_supervisor = User.objects.create_user(username="student-lead", password="password123", role=UserRole.STUDENT_SUPERVISOR)
+        self.student_supervisor_profile = StudentWorkerProfile.objects.create(
+            user=self.student_supervisor,
+            display_name="Student Lead",
+            email="student-lead@example.com",
+            normal_shift_availability="Weekdays",
+            max_hours_per_day=4,
+        )
         self.task = Task.objects.create(
             title="Assigned to removed student",
             description="Cleanup",
@@ -1525,7 +1521,7 @@ class PeopleManagementTests(TestCase):
         )
         self.client.force_login(self.supervisor)
 
-    def test_people_page_shows_supervisor_controls_without_old_helper_text(self):
+    def test_people_page_shows_cleaner_actions_for_workers_and_supervisors(self):
         response = self.client.get(reverse("worker-list"))
 
         self.assertEqual(response.status_code, 200)
@@ -1533,29 +1529,29 @@ class PeopleManagementTests(TestCase):
         self.assertContains(response, reverse("student-supervisor-create"))
         self.assertContains(response, reverse("supervisor-create"))
         self.assertContains(response, "Student supervisors")
-        self.assertContains(response, "Remove supervisor")
+        self.assertContains(response, reverse("worker-edit", args=[self.profile.pk]))
+        self.assertContains(response, reverse("worker-schedule", args=[self.profile.pk]))
+        self.assertContains(response, reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
+        self.assertContains(response, reverse("worker-schedule", args=[self.student_supervisor_profile.pk]))
+        self.assertContains(response, reverse("supervisor-edit", args=[self.other_supervisor.pk]))
         self.assertContains(response, "Edit worker")
+        self.assertContains(response, "Edit student supervisor")
+        self.assertContains(response, "Edit schedule")
+        self.assertNotContains(response, "Remove student")
+        self.assertNotContains(response, "Remove supervisor")
         self.assertNotContains(response, "Manage student workers, supervisors, and assignment availability.")
         self.assertNotContains(response, "<th>Availability</th>", html=False)
 
-    def test_edit_worker_updates_student_details_and_weekly_hours(self):
+    def test_edit_worker_updates_student_details(self):
         response = self.client.post(
-            reverse("worker-availability", args=[self.profile.pk]),
+            reverse("worker-edit", args=[self.profile.pk]),
             {
-                "action": "worker",
                 "username": "updated-student",
                 "first_name": "Jordan",
                 "last_name": "Parker",
                 "email": "jordan@example.com",
                 "active_status": "",
                 "skill_notes": "Prefers morning tasks",
-                "monday_hours": "5",
-                "tuesday_hours": "4",
-                "wednesday_hours": "3",
-                "thursday_hours": "2",
-                "friday_hours": "1",
-                "saturday_hours": "0",
-                "sunday_hours": "0",
             },
             follow=True,
         )
@@ -1570,51 +1566,22 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(self.profile.display_name, "Jordan Parker")
         self.assertFalse(self.profile.active_status)
         self.assertEqual(self.profile.skill_notes, "Prefers morning tasks")
-        self.assertEqual(self.profile.weekly_availability.get(weekday=Weekday.MONDAY).hours_available, 5)
-        self.assertEqual(self.profile.weekly_availability.get(weekday=Weekday.FRIDAY).hours_available, 1)
 
-    def test_temporary_override_can_subtract_hours_without_going_negative(self):
-        StudentAvailability.objects.update_or_create(
-            profile=self.profile,
-            weekday=Weekday.MONDAY,
-            defaults={"hours_available": 4},
-        )
-
+    def test_edit_schedule_updates_student_weekly_schedule(self):
         response = self.client.post(
-            reverse("worker-availability", args=[self.profile.pk]),
+            reverse("worker-schedule", args=[self.profile.pk]),
             {
-                "action": "override",
-                "override_date": "2026-03-16",
-                "hours_available": "-2",
-                "note": "Doctor appointment",
+                "action": "weekly",
+                "monday_segments": json.dumps([["09:00", "14:00"]]),
+                "friday_segments": json.dumps([["10:00", "11:00"]]),
             },
             follow=True,
         )
 
         self.assertEqual(response.status_code, 200)
-        override = self.profile.availability_overrides.get(override_date=date(2026, 3, 16))
-        self.assertEqual(override.hours_available, -2)
-
-    def test_temporary_override_cannot_reduce_day_below_zero(self):
-        StudentAvailability.objects.update_or_create(
-            profile=self.profile,
-            weekday=Weekday.MONDAY,
-            defaults={"hours_available": 3},
-        )
-
-        response = self.client.post(
-            reverse("worker-availability", args=[self.profile.pk]),
-            {
-                "action": "override",
-                "override_date": "2026-03-16",
-                "hours_available": "-5",
-                "note": "Too much time off",
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "This adjustment would reduce the day below 0 hours.")
-        self.assertFalse(self.profile.availability_overrides.filter(override_date=date(2026, 3, 16)).exists())
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.weekly_availability.get(weekday=Weekday.MONDAY).hours_available, 5)
+        self.assertEqual(self.profile.weekly_availability.get(weekday=Weekday.FRIDAY).hours_available, 1)
 
     def test_temporary_schedule_override_replaces_normal_blocks_for_specific_date(self):
         monday, _ = StudentAvailability.objects.update_or_create(
@@ -1626,7 +1593,7 @@ class PeopleManagementTests(TestCase):
         StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
 
         response = self.client.post(
-            reverse("worker-availability", args=[self.profile.pk]),
+            reverse("worker-schedule", args=[self.profile.pk]),
             {
                 "action": "schedule_override",
                 "override_date": "2026-03-16",
@@ -1675,18 +1642,30 @@ class PeopleManagementTests(TestCase):
 
     def test_worker_forms_render_calendar_style_schedule_picker(self):
         create_response = self.client.get(reverse("worker-create"))
-        edit_response = self.client.get(reverse("worker-availability", args=[self.profile.pk]))
+        details_response = self.client.get(reverse("worker-edit", args=[self.profile.pk]))
+        schedule_response = self.client.get(reverse("worker-schedule", args=[self.profile.pk]))
 
         self.assertContains(create_response, 'data-weekly-schedule-picker')
         self.assertContains(create_response, 'data-clear-week')
         self.assertContains(create_response, 'data-schedule-summary-card="monday"')
         self.assertContains(create_response, 'class="weekly-schedule-hidden-fields"')
         self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
-        self.assertContains(edit_response, 'data-weekly-schedule-picker')
-        self.assertContains(edit_response, 'Temporary schedule change')
-        self.assertContains(edit_response, 'class="weekly-schedule-hidden-fields"', count=2)
-        self.assertContains(edit_response, 'name="monday_segments"')
-        self.assertContains(edit_response, 'name="override_segments"')
+        self.assertNotContains(details_response, 'data-weekly-schedule-picker')
+        self.assertContains(details_response, 'Remove student')
+        self.assertContains(schedule_response, 'data-weekly-schedule-picker')
+        self.assertContains(schedule_response, 'Temporary schedule change')
+        self.assertNotContains(schedule_response, 'Temporary hour adjustment')
+        self.assertNotContains(schedule_response, 'Existing hour adjustments')
+        self.assertContains(schedule_response, 'class="weekly-schedule-hidden-fields"', count=2)
+        self.assertContains(schedule_response, 'name="monday_segments"')
+        self.assertContains(schedule_response, 'name="override_segments"')
+
+    def test_edit_pages_show_remove_actions_for_student_supervisors_and_supervisors(self):
+        student_supervisor_response = self.client.get(reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
+        supervisor_response = self.client.get(reverse("supervisor-edit", args=[self.other_supervisor.pk]))
+
+        self.assertContains(student_supervisor_response, "Remove student supervisor")
+        self.assertContains(supervisor_response, "Remove supervisor")
 
     def test_creating_student_uses_first_and_last_name_for_display_name_and_saves_weekly_hours(self):
         response = self.client.post(
@@ -1876,6 +1855,7 @@ class PeopleManagementTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Remove supervisor")
         self.other_supervisor.refresh_from_db()
         self.assertEqual(self.other_supervisor.first_name, "Avery")
         self.assertFalse(self.other_supervisor.assignable_to_tasks)

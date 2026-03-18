@@ -7,7 +7,7 @@ from urllib import error, request
 from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
-from .models import Priority, StudentAvailability, StudentAvailabilityOverride, StudentScheduleOverride, StudentWorkerProfile, Task, TaskEstimateFeedback, TaskStatus, User, UserRole
+from .models import Priority, StudentAvailability, StudentScheduleOverride, StudentWorkerProfile, Task, TaskEstimateFeedback, TaskStatus, User, UserRole
 
 
 def _format_time_label(value):
@@ -316,21 +316,15 @@ class TaskAssignmentService:
         if end_date < start_date:
             end_date = start_date
 
-        overrides = {
-            item.override_date: float(item.hours_available)
-            for item in StudentAvailabilityOverride.objects.filter(profile=profile, override_date__range=(start_date, end_date))
-        }
         remaining_workday_minutes = TaskAssignmentService._minutes_remaining_in_workday(start_date)
 
         total_minutes = 0
         cursor = start_date
         while cursor <= end_date:
-            base_minutes = TaskAssignmentService._scheduled_minutes_for_date(profile, cursor)
-            adjustment_minutes = int(overrides.get(cursor, 0.0) * 60)
-            available_minutes = max(base_minutes + adjustment_minutes, 0)
+            available_minutes = TaskAssignmentService._scheduled_minutes_for_date(profile, cursor)
             if cursor == start_date and remaining_workday_minutes is not None:
                 available_minutes = min(available_minutes, remaining_workday_minutes)
-            total_minutes += available_minutes
+            total_minutes += max(available_minutes, 0)
             cursor += timedelta(days=1)
         reserved_minutes = (
             profile.user.assigned_tasks.exclude(status=TaskStatus.DONE)

@@ -1,98 +1,67 @@
 {% extends "base.html" %}
 
-{% block title %}Edit Worker | TaskForge{% endblock %}
+{% block title %}{{ schedule_title }} | TaskForge{% endblock %}
 
 {% block content %}
 <section class="page-heading">
     <div>
-        <h1>Edit worker: {{ profile.display_name }}</h1>
-        <p>Update {{ profile.user.get_role_display|lower }} details and weekly schedule in one place.</p>
+        <h1>{{ schedule_title }}</h1>
+        <p>Manage the weekly schedule and one-date schedule changes for this {{ role_label }}.</p>
     </div>
-    <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
+    <div class="inline-form">
+        <a class="button-link" href="{% url 'worker-edit' profile.pk %}">Edit {{ role_label }}</a>
+        <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
+    </div>
 </section>
-<section class="detail-grid">
+<section class="stack">
     <article class="card">
-        <h2>Worker details</h2>
+        <h2>Weekly schedule</h2>
         <form method="post">
             {% csrf_token %}
-            <input type="hidden" name="action" value="worker">
-            <p><label for="id_username">Username</label><input class="form-control" type="text" name="username" id="id_username" value="{{ profile.user.username }}" required></p>
-            <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name" value="{{ profile.user.first_name }}"></p>
-            <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name" value="{{ profile.user.last_name }}"></p>
-            {{ worker_form.as_p }}
-            {% include "workboard/includes/weekly_schedule_picker.html" %}
-            <button type="submit">Save worker</button>
+            <input type="hidden" name="action" value="weekly">
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=weekly_form %}
+            <button type="submit">Save weekly schedule</button>
         </form>
     </article>
-    <aside class="stack">
-        <section class="card">
-            <h2>Temporary schedule change</h2>
-            <form method="post">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="schedule_override">
-                <p>
-                    <label for="{{ schedule_override_form.override_date.id_for_label }}">{{ schedule_override_form.override_date.label }}</label>
-                    {{ schedule_override_form.override_date }}
-                    {% if schedule_override_form.override_date.help_text %}<span class="meta">{{ schedule_override_form.override_date.help_text }}</span>{% endif %}
-                    {% if schedule_override_form.override_date.errors %}<span class="meta">{{ schedule_override_form.override_date.errors }}</span>{% endif %}
-                </p>
-                <p>
-                    <label for="{{ schedule_override_form.note.id_for_label }}">{{ schedule_override_form.note.label }}</label>
-                    {{ schedule_override_form.note }}
-                    {% if schedule_override_form.note.help_text %}<span class="meta">{{ schedule_override_form.note.help_text }}</span>{% endif %}
-                    {% if schedule_override_form.note.errors %}<span class="meta">{{ schedule_override_form.note.errors }}</span>{% endif %}
-                </p>
-                {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form picker_title="Temporary schedule for one date" picker_help_text="Use this when the person works a different set of time blocks on a specific date. Leave it empty and save to mark them unavailable that day." clear_all_label="Clear date" include_schedule_script=False %}
-                <button type="submit">Save temporary schedule</button>
-            </form>
-        </section>
-        <section class="card">
-            <h2>Temporary schedule changes</h2>
-            <div class="stack">
-                {% for schedule_override in schedule_overrides %}
-                    <article class="note">
-                        <p><strong>{{ schedule_override.override_date }}</strong> | {{ schedule_override.block_summary }}</p>
-                        <p>{{ schedule_override.note|default:"No note" }}</p>
-                        <form method="post">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="delete_schedule_override">
-                            <input type="hidden" name="schedule_override_id" value="{{ schedule_override.pk }}">
-                            <button type="submit">Remove temporary schedule</button>
-                        </form>
-                    </article>
-                {% empty %}
-                    <p class="empty-state">No temporary schedule changes.</p>
-                {% endfor %}
-            </div>
-        </section>
-        <section class="card">
-            <h2>Temporary hour adjustment</h2>
-            <form method="post">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="override">
-                {{ override_form.as_p }}
-                <button type="submit">Save adjustment</button>
-            </form>
-        </section>
-        <section class="card">
-            <h2>Existing hour adjustments</h2>
-            <div class="stack">
-                {% for override in overrides %}
-                    <article class="note">
-                        <p><strong>{{ override.override_date }}</strong> | {{ override.hours_delta_display }} hours</p>
-                        <p>{{ override.note|default:"No note" }}</p>
-                        <form method="post">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="delete_override">
-                            <input type="hidden" name="override_id" value="{{ override.pk }}">
-                            <button type="submit">Remove adjustment</button>
-                        </form>
-                    </article>
-                {% empty %}
-                    <p class="empty-state">No temporary hour adjustments.</p>
-                {% endfor %}
-            </div>
-        </section>
-    </aside>
+    <article class="card">
+        <h2>Temporary schedule change</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="schedule_override">
+            <p>
+                <label for="{{ schedule_override_form.override_date.id_for_label }}">{{ schedule_override_form.override_date.label }}</label>
+                {{ schedule_override_form.override_date }}
+                {% if schedule_override_form.override_date.help_text %}<span class="meta">{{ schedule_override_form.override_date.help_text }}</span>{% endif %}
+                {% if schedule_override_form.override_date.errors %}<span class="meta">{{ schedule_override_form.override_date.errors }}</span>{% endif %}
+            </p>
+            <p>
+                <label for="{{ schedule_override_form.note.id_for_label }}">{{ schedule_override_form.note.label }}</label>
+                {{ schedule_override_form.note }}
+                {% if schedule_override_form.note.help_text %}<span class="meta">{{ schedule_override_form.note.help_text }}</span>{% endif %}
+                {% if schedule_override_form.note.errors %}<span class="meta">{{ schedule_override_form.note.errors }}</span>{% endif %}
+            </p>
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form picker_title="Temporary schedule for one date" picker_help_text="Use this when the person works a different set of time blocks on a specific date. Leave it empty and save to mark them unavailable that day." clear_all_label="Clear date" include_schedule_script=False %}
+            <button type="submit">Save temporary schedule</button>
+        </form>
+    </article>
+    <article class="card">
+        <h2>Temporary schedule changes</h2>
+        <div class="stack">
+            {% for schedule_override in schedule_overrides %}
+                <article class="note">
+                    <p><strong>{{ schedule_override.override_date }}</strong> | {{ schedule_override.block_summary }}</p>
+                    <p>{{ schedule_override.note|default:"No note" }}</p>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete_schedule_override">
+                        <input type="hidden" name="schedule_override_id" value="{{ schedule_override.pk }}">
+                        <button type="submit">Remove temporary schedule</button>
+                    </form>
+                </article>
+            {% empty %}
+                <p class="empty-state">No temporary schedule changes.</p>
+            {% endfor %}
+        </div>
+    </article>
 </section>
 {% endblock %}
