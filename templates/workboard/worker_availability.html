@@ -19,7 +19,7 @@
         <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="weekly">
-            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=weekly_form %}
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=weekly_form hide_picker_header=True %}
             <button type="submit">Save weekly schedule</button>
         </form>
     </article>
@@ -40,7 +40,7 @@
                 {% if schedule_override_form.note.help_text %}<span class="meta">{{ schedule_override_form.note.help_text }}</span>{% endif %}
                 {% if schedule_override_form.note.errors %}<span class="meta">{{ schedule_override_form.note.errors }}</span>{% endif %}
             </p>
-            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form picker_title="Temporary schedule for one date" picker_help_text="Use this when the person works a different set of time blocks on a specific date. Leave it empty and save to mark them unavailable that day." clear_all_label="Clear date" include_schedule_script=False %}
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form clear_all_label="Clear date" include_schedule_script=False hide_picker_header=True %}
             <button type="submit">Save temporary schedule</button>
         </form>
     </article>

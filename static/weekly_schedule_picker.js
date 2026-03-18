@@ -231,6 +231,34 @@
             setSegments(day, contiguousSegmentsFromSelection(state, selected));
         }
 
+        function pointerCellFromEvent(event) {
+            var target = document.elementFromPoint(event.clientX, event.clientY);
+            if (!target || typeof target.closest !== "function") {
+                return null;
+            }
+            var cell = target.closest(".weekly-calendar-cell");
+            if (!cell || !root.contains(cell)) {
+                return null;
+            }
+            return cell;
+        }
+
+        function updatePointerSelection(event) {
+            if (!dragging) {
+                return;
+            }
+            var cell = pointerCellFromEvent(event);
+            if (!cell || dragging.day !== cell.dataset.day) {
+                return;
+            }
+            var index = Number(cell.dataset.slotIndex);
+            if (dragging.lastIndex === index) {
+                return;
+            }
+            dragging.lastIndex = index;
+            applySelection(dragging.day, dragging.baseSelected, dragging.anchorIndex, index, dragging.mode);
+        }
+
         function startPointerSelection(cell, event) {
             event.preventDefault();
             var day = cell.dataset.day;
@@ -242,17 +270,11 @@
             dragging = {
                 day: day,
                 anchorIndex: index,
+                lastIndex: index,
                 mode: state.selectedIndices.has(index) ? "remove" : "add",
                 baseSelected: new Set(state.selectedIndices),
                 pointerId: event.pointerId,
             };
-            if (typeof cell.setPointerCapture === "function") {
-                try {
-                    cell.setPointerCapture(event.pointerId);
-                } catch (error) {
-                    // Ignore capture failures and continue with normal pointer handling.
-                }
-            }
             root.classList.add("is-dragging");
             applySelection(day, dragging.baseSelected, index, index, dragging.mode);
         }
@@ -281,11 +303,8 @@
             cell.addEventListener("pointerdown", function (event) {
                 startPointerSelection(cell, event);
             });
-            cell.addEventListener("pointerenter", function () {
-                if (!dragging || dragging.day !== cell.dataset.day) {
-                    return;
-                }
-                applySelection(dragging.day, dragging.baseSelected, dragging.anchorIndex, Number(cell.dataset.slotIndex), dragging.mode);
+            cell.addEventListener("pointerenter", function (event) {
+                updatePointerSelection(event);
             });
             cell.addEventListener("pointerup", function (event) {
                 stopPointerSelection(event.pointerId);
@@ -293,13 +312,18 @@
             cell.addEventListener("pointercancel", function (event) {
                 stopPointerSelection(event.pointerId);
             });
-            cell.addEventListener("pointerleave", function () {
-                if (!dragging || dragging.day !== cell.dataset.day) {
-                    return;
-                }
-            });
         });
 
+        document.addEventListener("pointermove", function (event) {
+            if (!dragging) {
+                return;
+            }
+            if (event.buttons === 0) {
+                stopPointerSelection(event.pointerId);
+                return;
+            }
+            updatePointerSelection(event);
+        });
         document.addEventListener("pointerup", function (event) {
             stopPointerSelection(event.pointerId);
         });

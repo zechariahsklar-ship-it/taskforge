@@ -1623,6 +1623,63 @@ class PeopleManagementTests(TestCase):
                 scheduled_end_time=time(15, 30),
             )
         )
+        self.assertTrue(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 23),
+                scheduled_start_time=time(9, 30),
+                scheduled_end_time=time(10, 30),
+            )
+        )
+        self.assertFalse(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 23),
+                scheduled_start_time=time(14, 30),
+                scheduled_end_time=time(15, 30),
+            )
+        )
+
+
+    def test_empty_temporary_schedule_override_marks_day_unavailable_only_for_that_date(self):
+        monday, _ = StudentAvailability.objects.update_or_create(
+            profile=self.profile,
+            weekday=Weekday.MONDAY,
+            defaults={"start_time": time(9, 0), "end_time": time(12, 0), "hours_available": 3},
+        )
+        monday.blocks.all().delete()
+        StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
+
+        response = self.client.post(
+            reverse("worker-schedule", args=[self.profile.pk]),
+            {
+                "action": "schedule_override",
+                "override_date": "2026-03-16",
+                "note": "Out for the day",
+                "override_segments": "[]",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
+        self.assertEqual(schedule_override.blocks.count(), 0)
+        self.assertFalse(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 16),
+                scheduled_start_time=time(9, 30),
+                scheduled_end_time=time(10, 30),
+            )
+        )
+        self.assertTrue(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 23),
+                scheduled_start_time=time(9, 30),
+                scheduled_end_time=time(10, 30),
+            )
+        )
 
     def test_add_student_form_uses_weekly_schedule_fields_and_hides_old_profile_fields(self):
         response = self.client.get(reverse("worker-create"))
@@ -1653,7 +1710,9 @@ class PeopleManagementTests(TestCase):
         self.assertNotContains(details_response, 'data-weekly-schedule-picker')
         self.assertContains(details_response, 'Remove student')
         self.assertContains(schedule_response, 'data-weekly-schedule-picker')
+        self.assertContains(schedule_response, 'Weekly schedule', count=1)
         self.assertContains(schedule_response, 'Temporary schedule change')
+        self.assertNotContains(schedule_response, 'Click or drag across the calendar')
         self.assertNotContains(schedule_response, 'Temporary hour adjustment')
         self.assertNotContains(schedule_response, 'Existing hour adjustments')
         self.assertContains(schedule_response, 'class="weekly-schedule-hidden-fields"', count=2)
