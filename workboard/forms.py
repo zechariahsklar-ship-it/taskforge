@@ -8,13 +8,11 @@ from django.db.models import Q
 
 from .models import (
     RecurringTaskTemplate,
-    StudentAvailability,
     StudentScheduleOverride,
     StudentWorkerProfile,
     Task,
     TaskAttachment,
     TaskChecklistItem,
-    TaskIntakeDraft,
     TaskNote,
     TaskStatus,
     User,
@@ -124,6 +122,31 @@ def _legacy_hours_to_window(hours_value: Decimal | None) -> tuple[time | None, t
     return start_value, end_dt.time(), hours_value
 
 
+def _worker_user_queryset(*, include_assignable_supervisors: bool = False):
+    worker_filter = Q(role__in=UserRole.worker_roles())
+    if include_assignable_supervisors:
+        worker_filter |= Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)
+    return User.objects.filter(worker_filter).order_by("first_name", "last_name", "username")
+
+
+def _configure_additional_assignees_field(field, *, help_text: str) -> None:
+    field.queryset = _worker_user_queryset()
+    field.required = False
+    field.widget = forms.CheckboxSelectMultiple(choices=field.choices)
+    field.label = "Fixed additional assignees"
+    field.help_text = help_text
+    field.label_from_instance = _user_choice_label
+
+
+def _configure_rotation_count_field(field, *, count: int, help_text: str) -> None:
+    field.min_value = 0
+    field.required = False
+    field.initial = count
+    field.label = "Number of rotating teammates"
+    field.help_text = help_text
+    field.widget.attrs.update({"min": "0", "step": "1"})
+
+
 class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = StudentWorkerProfile
@@ -142,12 +165,6 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
         self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this person."
         self.fields["skill_notes"].label = "Notes"
         self.fields["skill_notes"].help_text = "Optional notes about strengths, training, or preferences."
-
-
-class StudentAvailabilityForm(StyledFormMixin, forms.ModelForm):
-    class Meta:
-        model = StudentAvailability
-        fields = ["weekday", "start_time", "end_time", "hours_available"]
 
 
 def _serialize_schedule_segments(blocks):
@@ -416,26 +433,22 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        worker_users = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
-        self.fields["assigned_to"].queryset = User.objects.filter(Q(role__in=UserRole.worker_roles()) | Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)).order_by("first_name", "last_name", "username")
+        self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True)
         self.fields["assigned_to"].label = "Assign to"
         self.fields["assigned_to"].help_text = "Choose the main teammate for this task."
-        self.fields["additional_assignees"].queryset = worker_users
-        self.fields["additional_assignees"].required = False
-        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
-        self.fields["additional_assignees"].label = "Fixed additional assignees"
-        self.fields["additional_assignees"].help_text = "Pick any teammates who should always be added to this task."
-        self.fields["rotating_additional_assignee_count"].min_value = 0
-        self.fields["rotating_additional_assignee_count"].required = False
-        self.fields["rotating_additional_assignee_count"].initial = self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0)
-        self.fields["rotating_additional_assignee_count"].label = "Number of rotating teammates"
-        self.fields["rotating_additional_assignee_count"].help_text = "Enter how many extra teammates TaskForge should rotate onto this task."
-        self.fields["rotating_additional_assignee_count"].widget.attrs.update({"min": "0", "step": "1"})
+        self.fields["assigned_to"].label_from_instance = _user_choice_label
+        _configure_additional_assignees_field(
+            self.fields["additional_assignees"],
+            help_text="Pick any teammates who should always be added to this task.",
+        )
+        _configure_rotation_count_field(
+            self.fields["rotating_additional_assignee_count"],
+            count=self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0),
+            help_text="Enter how many extra teammates TaskForge should rotate onto this task.",
+        )
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self.fields["assigned_to"].label_from_instance = _user_choice_label
-        self.fields["additional_assignees"].label_from_instance = _user_choice_label
         self.fields["scheduled_date"].label = "Scheduled date"
         self.fields["scheduled_date"].help_text = "Optional. Use this when the task needs to happen during a specific work shift."
         self.fields["scheduled_start_time"].label = "Start time"
@@ -453,6 +466,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].label = "Day of month to repeat on"
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
+    # Treat partial schedule input as a request for a full work window.
     def _clean_schedule_window(self, cleaned_data):
         due_date = cleaned_data.get("due_date")
         scheduled_date = cleaned_data.get("scheduled_date")
@@ -646,12 +660,6 @@ class SupervisorStudentPasswordResetForm(StyledFormMixin, SetPasswordForm):
     pass
 
 
-class TaskIntakeDraftForm(StyledFormMixin, forms.ModelForm):
-    class Meta:
-        model = TaskIntakeDraft
-        fields = ["raw_message"]
-
-
 class TaskAttachmentForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = TaskAttachment
@@ -697,20 +705,17 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
         self.fields["assign_to"].label = "Assign to"
         self.fields["assign_to"].help_text = "Choose the main teammate for this recurring task. Leave blank to rotate the main assignee automatically."
-        self.fields["assign_to"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
-        self.fields["additional_assignees"].queryset = User.objects.filter(role__in=UserRole.worker_roles()).order_by("first_name", "last_name", "username")
-        self.fields["additional_assignees"].required = False
-        self.fields["additional_assignees"].widget = forms.CheckboxSelectMultiple(choices=self.fields["additional_assignees"].choices)
-        self.fields["additional_assignees"].label = "Fixed additional assignees"
-        self.fields["additional_assignees"].help_text = "Pick any teammates who should always join each run of this recurring task."
-        self.fields["rotating_additional_assignee_count"].min_value = 0
-        self.fields["rotating_additional_assignee_count"].required = False
-        self.fields["rotating_additional_assignee_count"].initial = self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0)
-        self.fields["rotating_additional_assignee_count"].label = "Number of rotating teammates"
-        self.fields["rotating_additional_assignee_count"].help_text = "Enter how many extra teammates TaskForge should rotate onto each run of this recurring task."
-        self.fields["rotating_additional_assignee_count"].widget.attrs.update({"min": "0", "step": "1"})
+        self.fields["assign_to"].queryset = _worker_user_queryset()
         self.fields["assign_to"].label_from_instance = _user_choice_label
-        self.fields["additional_assignees"].label_from_instance = _user_choice_label
+        _configure_additional_assignees_field(
+            self.fields["additional_assignees"],
+            help_text="Pick any teammates who should always join each run of this recurring task.",
+        )
+        _configure_rotation_count_field(
+            self.fields["rotating_additional_assignee_count"],
+            count=self.instance.rotating_additional_assignee_count or (1 if getattr(self.instance, "rotate_additional_assignee", False) else 0),
+            help_text="Enter how many extra teammates TaskForge should rotate onto each run of this recurring task.",
+        )
         self.fields["recurrence_pattern"].label = "Repeat cadence"
         self.fields["recurrence_pattern"].help_text = "Choose how often this recurring task should happen."
         self.fields["recurrence_interval"].label = "Repeat every"

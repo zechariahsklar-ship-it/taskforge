@@ -5,6 +5,21 @@ from django.db import models
 from django.utils import timezone
 
 
+def _format_clock_time(value):
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _format_time_window(start_time, end_time):
+    return f"{_format_clock_time(start_time)} - {_format_clock_time(end_time)}"
+
+
+def _ordered_block_summary(block_manager):
+    blocks = list(block_manager.order_by("position", "start_time", "end_time", "pk"))
+    if not blocks:
+        return "Not scheduled"
+    return ", ".join(_format_time_window(block.start_time, block.end_time) for block in blocks)
+
+
 class UserRole(models.TextChoices):
     SUPERVISOR = "supervisor", "Supervisor"
     STUDENT_SUPERVISOR = "student_supervisor", "Student Supervisor"
@@ -111,10 +126,7 @@ class StudentAvailability(models.Model):
 
     @property
     def block_summary(self):
-        blocks = list(self.blocks.order_by("position", "start_time", "end_time", "pk"))
-        if not blocks:
-            return "Not scheduled"
-        return ", ".join(block.display_label for block in blocks)
+        return _ordered_block_summary(self.blocks)
 
 
 class StudentAvailabilityBlock(models.Model):
@@ -131,7 +143,7 @@ class StudentAvailabilityBlock(models.Model):
 
     @property
     def display_label(self):
-        return f"{self.start_time.strftime('%I:%M %p').lstrip('0')} - {self.end_time.strftime('%I:%M %p').lstrip('0')}"
+        return _format_time_window(self.start_time, self.end_time)
 
 
 class StudentAvailabilityOverride(models.Model):
@@ -172,10 +184,7 @@ class StudentScheduleOverride(models.Model):
 
     @property
     def block_summary(self):
-        blocks = list(self.blocks.order_by("position", "start_time", "end_time", "pk"))
-        if not blocks:
-            return "Not scheduled"
-        return ", ".join(block.display_label for block in blocks)
+        return _ordered_block_summary(self.blocks)
 
 
 class StudentScheduleOverrideBlock(models.Model):
@@ -192,7 +201,7 @@ class StudentScheduleOverrideBlock(models.Model):
 
     @property
     def display_label(self):
-        return f"{self.start_time.strftime('%I:%M %p').lstrip('0')} - {self.end_time.strftime('%I:%M %p').lstrip('0')}"
+        return _format_time_window(self.start_time, self.end_time)
 
 
 class RecurringTaskTemplate(models.Model):
@@ -252,7 +261,7 @@ class RecurringTaskTemplate(models.Model):
     def scheduled_window_display(self):
         if not self.scheduled_start_time or not self.scheduled_end_time:
             return ""
-        return f"{self.scheduled_start_time.strftime('%I:%M %p').lstrip('0')} - {self.scheduled_end_time.strftime('%I:%M %p').lstrip('0')}"
+        return _format_time_window(self.scheduled_start_time, self.scheduled_end_time)
 
     @property
     def additional_assignee_labels(self):
@@ -311,6 +320,7 @@ class Task(models.Model):
         related_name="rotating_collaborative_task_memberships",
         limit_choices_to={"role__in": UserRole.worker_roles()},
     )
+    # Keep the legacy single-rotation fields so older rows can migrate forward safely.
     rotate_additional_assignee = models.BooleanField(default=False)
     rotating_additional_assignee = models.ForeignKey(
         User,
@@ -361,7 +371,7 @@ class Task(models.Model):
     def scheduled_window_display(self):
         if not self.scheduled_date or not self.scheduled_start_time or not self.scheduled_end_time:
             return ""
-        return f"{self.scheduled_date.isoformat()} | {self.scheduled_start_time.strftime('%I:%M %p').lstrip('0')} - {self.scheduled_end_time.strftime('%I:%M %p').lstrip('0')}"
+        return f"{self.scheduled_date.isoformat()} | {_format_time_window(self.scheduled_start_time, self.scheduled_end_time)}"
 
     def mark_complete(self):
         self.status = TaskStatus.DONE

@@ -5,7 +5,7 @@ from functools import wraps
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, F, Max, Prefetch, Q, Sum
+from django.db.models import Count, F, Max, Q, Sum
 from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -165,6 +165,49 @@ def _append_task_to_status(task: Task, previous_status: str | None = None) -> Ta
     return task
 
 
+def _task_membership_filter(user: User) -> Q:
+    return (
+        Q(assigned_to=user)
+        | Q(additional_assignees=user)
+        | Q(rotating_additional_assignees=user)
+        | Q(rotating_additional_assignee=user)
+    )
+
+
+def _task_board_queryset():
+    return Task.objects.select_related(
+        "assigned_to",
+        "requested_by",
+        "created_by",
+        "rotating_additional_assignee",
+    ).prefetch_related("additional_assignees", "rotating_additional_assignees")
+
+
+def _ordered_board_tasks(queryset):
+    return list(queryset.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
+
+
+def _group_tasks_for_board(tasks: list[Task]) -> list[dict]:
+    for task in tasks:
+        task.status_bucket = _board_bucket_status(task.status)
+        task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
+    return [
+        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
+        for status in BOARD_COLUMNS
+    ]
+
+
+def _user_can_access_task(user: User, task: Task) -> bool:
+    if user.can_view_full_board:
+        return True
+    return (
+        task.assigned_to_id == user.id
+        or task.rotating_additional_assignee_id == user.id
+        or task.additional_assignees.filter(pk=user.id).exists()
+        or task.rotating_additional_assignees.filter(pk=user.id).exists()
+    )
+
+
 def _resequence_status_tasks(tasks: list[Task], status: str) -> None:
     for index, item in enumerate(tasks, start=1):
         update_fields = []
@@ -211,6 +254,8 @@ def _current_rotating_additional_user_ids(task: Task) -> list[int]:
     return current_ids
 
 
+# Keep the fixed and rotating teammate rules in one place so task create, edit,
+# and recurring generation all stay aligned.
 def _choose_rotating_additional_assignees(
     *,
     due_date,
@@ -510,22 +555,10 @@ def dashboard(request):
 
 @app_login_required
 def board_view(request):
-    tasks = Task.objects.select_related("assigned_to", "requested_by", "rotating_additional_assignee").prefetch_related("additional_assignees", "rotating_additional_assignees")
+    tasks = _task_board_queryset()
     if not request.user.can_view_full_board:
-        tasks = tasks.filter(
-            Q(assigned_to=request.user)
-            | Q(additional_assignees=request.user)
-            | Q(rotating_additional_assignees=request.user)
-            | Q(rotating_additional_assignee=request.user)
-        ).distinct()
-    tasks = list(tasks.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
-    for task in tasks:
-        task.status_bucket = _board_bucket_status(task.status)
-        task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
-    grouped_tasks = [
-        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
-        for status in BOARD_COLUMNS
-    ]
+        tasks = tasks.filter(_task_membership_filter(request.user)).distinct()
+    grouped_tasks = _group_tasks_for_board(_ordered_board_tasks(tasks))
     return render(request, "workboard/board.html", {"grouped_tasks": grouped_tasks})
 
 
@@ -534,8 +567,8 @@ def board_task_move_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    task = get_object_or_404(Task.objects.select_related("rotating_additional_assignee").prefetch_related("additional_assignees", "rotating_additional_assignees"), pk=pk)
-    if not request.user.can_edit_tasks and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists() and not task.rotating_additional_assignees.filter(pk=request.user.id).exists():
+    task = get_object_or_404(_task_board_queryset(), pk=pk)
+    if not request.user.can_edit_tasks and not _user_can_access_task(request.user, task):
         return HttpResponseForbidden("You can only move tasks assigned to you.")
 
     new_status = request.POST.get("status", "").strip()
@@ -575,35 +608,11 @@ def board_task_move_view(request, pk):
 
 @app_login_required
 def my_tasks_view(request):
+    visibility_filter = _task_membership_filter(request.user)
     if request.user.role == UserRole.SUPERVISOR:
-        tasks = Task.objects.filter(
-            Q(assigned_to=request.user)
-            | Q(additional_assignees=request.user)
-            | Q(rotating_additional_assignees=request.user)
-            | Q(rotating_additional_assignee=request.user)
-            | Q(status=TaskStatus.WAITING)
-        )
-    else:
-        tasks = Task.objects.filter(
-            Q(assigned_to=request.user)
-            | Q(additional_assignees=request.user)
-            | Q(rotating_additional_assignees=request.user)
-            | Q(rotating_additional_assignee=request.user)
-        )
-    tasks = (
-        tasks.select_related("requested_by", "assigned_to", "rotating_additional_assignee")
-        .prefetch_related("additional_assignees", "rotating_additional_assignees")
-        .distinct()
-        .order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk")
-    )
-    tasks = list(tasks)
-    for task in tasks:
-        task.status_bucket = _board_bucket_status(task.status)
-        task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
-    grouped_tasks = [
-        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
-        for status in BOARD_COLUMNS
-    ]
+        visibility_filter |= Q(status=TaskStatus.WAITING)
+    tasks = _task_board_queryset().filter(visibility_filter).distinct()
+    grouped_tasks = _group_tasks_for_board(_ordered_board_tasks(tasks))
     return render(request, "workboard/my_tasks.html", {"grouped_tasks": grouped_tasks})
 
 
@@ -754,11 +763,10 @@ def task_create_view(request):
 @app_login_required
 def task_detail_view(request, pk):
     task = get_object_or_404(
-        Task.objects.select_related("assigned_to", "requested_by", "created_by", "rotating_additional_assignee")
-        .prefetch_related("additional_assignees", "rotating_additional_assignees", "checklist_items", "attachments", "notes__author"),
+        _task_board_queryset().prefetch_related("checklist_items", "attachments", "notes__author"),
         pk=pk,
     )
-    if not request.user.can_view_full_board and task.assigned_to_id != request.user.id and task.rotating_additional_assignee_id != request.user.id and not task.additional_assignees.filter(pk=request.user.id).exists() and not task.rotating_additional_assignees.filter(pk=request.user.id).exists():
+    if not _user_can_access_task(request.user, task):
         return HttpResponseForbidden("You can only view tasks assigned to you.")
 
     note_form = TaskNoteForm()
@@ -1022,7 +1030,6 @@ def recurring_template_move_view(request, pk):
     return JsonResponse({"ok": True})
 
 
-
 @supervisor_required
 def recurring_template_edit_view(request, pk):
     template = get_object_or_404(RecurringTaskTemplate, pk=pk)
@@ -1039,6 +1046,7 @@ def recurring_template_edit_view(request, pk):
         "workboard/recurring_template_form.html",
         {"form": form, "page_title": "Edit recurring task", "submit_label": "Save changes"},
     )
+
 
 @supervisor_required
 def worker_list_view(request):
@@ -1080,6 +1088,16 @@ def worker_list_view(request):
     )
 
 
+def _posted_account_details(post_data) -> dict:
+    return {
+        "username": post_data.get("username", "").strip(),
+        "password": post_data.get("password", "").strip() or "changeme123",
+        "first_name": post_data.get("first_name", "").strip(),
+        "last_name": post_data.get("last_name", "").strip(),
+        "email": post_data.get("email", "").strip(),
+    }
+
+
 def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: StudentWorkerProfileForm, post_data) -> bool:
     user = profile.user
     username = post_data.get("username", "").strip()
@@ -1102,6 +1120,50 @@ def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: Stu
     updated_profile.display_name = user.get_full_name().strip() or user.username
     updated_profile.save()
     return True
+
+
+def _create_worker_profile_account(
+    request,
+    *,
+    role: str,
+    page_title: str,
+    submit_label: str,
+    success_message: str,
+    worker_type_label: str,
+):
+    form = StudentWorkerProfileForm(request.POST or None)
+    weekly_form = WeeklyAvailabilityForm(request.POST or None)
+    context = {
+        "form": form,
+        "weekly_form": weekly_form,
+        "page_title": page_title,
+        "submit_label": submit_label,
+        "worker_type_label": worker_type_label,
+    }
+    if request.method == "POST":
+        account = _posted_account_details(request.POST)
+        if not account["username"]:
+            messages.error(request, "Username is required.")
+            return render(request, "workboard/worker_form.html", context)
+        if form.is_valid() and weekly_form.is_valid():
+            user = User.objects.create_user(
+                username=account["username"],
+                password=account["password"],
+                first_name=account["first_name"],
+                last_name=account["last_name"],
+                email=account["email"],
+                role=role,
+                must_change_password=True,
+            )
+            profile = form.save(commit=False)
+            profile.user = user
+            profile.email = profile.email or account["email"]
+            profile.display_name = user.get_full_name().strip() or user.username
+            profile.save()
+            _save_weekly_schedule(profile, weekly_form)
+            messages.success(request, success_message)
+            return redirect("worker-list")
+    return render(request, "workboard/worker_form.html", context)
 
 
 def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
@@ -1193,20 +1255,16 @@ def supervisor_create_view(request):
     form = SupervisorForm(request.POST or None)
     context = {"form": form, "page_title": "Add supervisor", "submit_label": "Create supervisor"}
     if request.method == "POST":
-        username = request.POST.get("username", "").strip()
-        password = request.POST.get("password", "").strip() or "changeme123"
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
-        email = request.POST.get("email", "").strip()
-        if not username:
+        account = _posted_account_details(request.POST)
+        if not account["username"]:
             messages.error(request, "Username is required.")
             return render(request, "workboard/supervisor_form.html", context)
         user = User.objects.create_user(
-            username=username,
-            password=password,
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
+            username=account["username"],
+            password=account["password"],
+            first_name=account["first_name"],
+            last_name=account["last_name"],
+            email=account["email"],
             role=UserRole.SUPERVISOR,
             must_change_password=True,
             assignable_to_tasks=True,
@@ -1223,78 +1281,26 @@ def supervisor_create_view(request):
 
 @supervisor_required
 def student_supervisor_create_view(request):
-    form = StudentWorkerProfileForm(request.POST or None)
-    weekly_form = WeeklyAvailabilityForm(request.POST or None)
-    context = {
-        "form": form,
-        "weekly_form": weekly_form,
-        "page_title": "Add student supervisor",
-        "submit_label": "Create student supervisor",
-        "worker_type_label": "student supervisor",
-    }
-    if request.method == "POST":
-        username = request.POST.get("username", "").strip()
-        password = request.POST.get("password", "").strip() or "changeme123"
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
-        email = request.POST.get("email", "").strip()
-        if not username:
-            messages.error(request, "Username is required.")
-            return render(request, "workboard/worker_form.html", context)
-        if form.is_valid() and weekly_form.is_valid():
-            user = User.objects.create_user(
-                username=username,
-                password=password,
-                first_name=first_name,
-                last_name=last_name,
-                email=email,
-                role=UserRole.STUDENT_SUPERVISOR,
-                must_change_password=True,
-            )
-            profile = form.save(commit=False)
-            profile.user = user
-            profile.email = profile.email or email
-            profile.display_name = user.get_full_name().strip() or user.username
-            profile.save()
-            _save_weekly_schedule(profile, weekly_form)
-            messages.success(request, "Student supervisor created.")
-            return redirect("worker-list")
-    return render(request, "workboard/worker_form.html", context)
+    return _create_worker_profile_account(
+        request,
+        role=UserRole.STUDENT_SUPERVISOR,
+        page_title="Add student supervisor",
+        submit_label="Create student supervisor",
+        success_message="Student supervisor created.",
+        worker_type_label="student supervisor",
+    )
 
 
 @supervisor_required
 def worker_profile_create_view(request):
-    form = StudentWorkerProfileForm(request.POST or None)
-    weekly_form = WeeklyAvailabilityForm(request.POST or None)
-    context = {"form": form, "weekly_form": weekly_form, "page_title": "Add student", "submit_label": "Create student"}
-    if request.method == "POST":
-        username = request.POST.get("username", "").strip()
-        password = request.POST.get("password", "").strip() or "changeme123"
-        first_name = request.POST.get("first_name", "").strip()
-        last_name = request.POST.get("last_name", "").strip()
-        email = request.POST.get("email", "").strip()
-        if not username:
-            messages.error(request, "Username is required.")
-            return render(request, "workboard/worker_form.html", context)
-        if form.is_valid() and weekly_form.is_valid():
-            user = User.objects.create_user(
-                username=username,
-                password=password,
-                first_name=first_name,
-                last_name=last_name,
-                email=email,
-                role=UserRole.STUDENT_WORKER,
-                must_change_password=True,
-            )
-            profile = form.save(commit=False)
-            profile.user = user
-            profile.email = profile.email or email
-            profile.display_name = user.get_full_name().strip() or user.username
-            profile.save()
-            _save_weekly_schedule(profile, weekly_form)
-            messages.success(request, "Student worker created.")
-            return redirect("worker-list")
-    return render(request, "workboard/worker_form.html", context)
+    return _create_worker_profile_account(
+        request,
+        role=UserRole.STUDENT_WORKER,
+        page_title="Add student",
+        submit_label="Create student",
+        success_message="Student worker created.",
+        worker_type_label="student",
+    )
 
 
 @supervisor_required
@@ -1373,10 +1379,3 @@ def worker_password_reset_view(request, pk):
         "workboard/worker_password_reset_form.html",
         {"form": form, "person": person},
     )
-
-
-
-
-
-
-

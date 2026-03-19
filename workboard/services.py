@@ -46,6 +46,74 @@ class ParsedTaskData:
 
 class TaskAssignmentService:
     @staticmethod
+    def _worker_profiles(*, exclude_user_ids=None):
+        workers = StudentWorkerProfile.objects.filter(
+            active_status=True,
+            user__role__in=UserRole.worker_roles(),
+        ).select_related("user")
+        if exclude_user_ids:
+            workers = workers.exclude(user_id__in=exclude_user_ids)
+        return workers
+
+    @staticmethod
+    def _worker_task_membership_filter(user):
+        return (
+            Q(assigned_to=user)
+            | Q(additional_assignees=user)
+            | Q(rotating_additional_assignees=user)
+            | Q(rotating_additional_assignee=user)
+        )
+
+    @staticmethod
+    def _candidate_sort_key(candidate):
+        _, capacity, open_tasks, last_assigned_at = candidate
+        return (
+            last_assigned_at is not None,
+            last_assigned_at or timezone.make_aware(datetime(2000, 1, 1)),
+            open_tasks,
+            -capacity,
+        )
+
+    @staticmethod
+    def _candidate_metrics(profile, *, due_date):
+        active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
+        return (
+            TaskAssignmentService._remaining_capacity_minutes(profile, due_date),
+            active_tasks.count(),
+            active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"],
+        )
+
+    @staticmethod
+    def _candidate_pool(
+        *,
+        due_date,
+        exclude_user_ids=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+        exclude_task_id=None,
+    ):
+        workers = TaskAssignmentService._worker_profiles(exclude_user_ids=exclude_user_ids)
+        candidates = []
+        for profile in workers:
+            if scheduled_date and scheduled_start_time and scheduled_end_time:
+                if not TaskAssignmentService.user_is_available_for_window(
+                    profile.user,
+                    scheduled_date=scheduled_date,
+                    scheduled_start_time=scheduled_start_time,
+                    scheduled_end_time=scheduled_end_time,
+                    exclude_task_id=exclude_task_id,
+                ):
+                    continue
+            capacity, open_tasks, last_assigned_at = TaskAssignmentService._candidate_metrics(
+                profile,
+                due_date=due_date,
+            )
+            candidates.append((profile, capacity, open_tasks, last_assigned_at))
+        candidates.sort(key=TaskAssignmentService._candidate_sort_key)
+        return candidates
+
+    @staticmethod
     def suggest_assignee(
         *,
         due_date,
@@ -57,21 +125,15 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         exclude_task_id=None,
     ):
-        if scheduled_date and scheduled_start_time and scheduled_end_time:
-            viable = TaskAssignmentService._worker_candidates_for_window(
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
-                due_date=due_date,
-                exclude_user_ids=exclude_user_ids,
-                exclude_task_id=exclude_task_id,
-            )
-        else:
-            viable = TaskAssignmentService._viable_worker_candidates(
-                due_date=due_date,
-                estimated_minutes=estimated_minutes,
-                exclude_user_ids=exclude_user_ids,
-            )
+        viable = TaskAssignmentService._matching_worker_candidates(
+            due_date=due_date,
+            estimated_minutes=estimated_minutes,
+            exclude_user_ids=exclude_user_ids,
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+            exclude_task_id=exclude_task_id,
+        )
 
         if viable:
             profile, capacity, _, _ = viable[0]
@@ -116,21 +178,15 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         exclude_task_id=None,
     ):
-        if scheduled_date and scheduled_start_time and scheduled_end_time:
-            viable = TaskAssignmentService._worker_candidates_for_window(
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
-                due_date=due_date,
-                exclude_user_ids=exclude_user_ids,
-                exclude_task_id=exclude_task_id,
-            )
-        else:
-            viable = TaskAssignmentService._viable_worker_candidates(
-                due_date=due_date,
-                estimated_minutes=estimated_minutes,
-                exclude_user_ids=exclude_user_ids,
-            )
+        viable = TaskAssignmentService._matching_worker_candidates(
+            due_date=due_date,
+            estimated_minutes=estimated_minutes,
+            exclude_user_ids=exclude_user_ids,
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+            exclude_task_id=exclude_task_id,
+        )
         if viable:
             return viable[0][0].user
         return None
@@ -209,6 +265,8 @@ class TaskAssignmentService:
             selected_users.append(candidate)
             excluded_ids.add(candidate.pk)
 
+        # Keep preferred teammates when possible, then fill from fresh rotation choices,
+        # and only fall back to previously deferred teammates if more coverage is needed.
         for user_id in preferred_user_ids or []:
             maybe_add(user_id)
 
@@ -334,76 +392,31 @@ class TaskAssignmentService:
     @staticmethod
     def _active_task_queryset_for_user(user):
         return Task.objects.exclude(status=TaskStatus.DONE).filter(
-            Q(assigned_to=user)
-            | Q(additional_assignees=user)
-            | Q(rotating_additional_assignees=user)
-            | Q(rotating_additional_assignee=user)
+            TaskAssignmentService._worker_task_membership_filter(user)
         ).distinct()
 
     @staticmethod
-    def _worker_candidates_for_window(
+    def _matching_worker_candidates(
         *,
-        scheduled_date,
-        scheduled_start_time,
-        scheduled_end_time,
-        due_date=None,
+        due_date,
+        estimated_minutes,
         exclude_user_ids=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
         exclude_task_id=None,
     ):
-        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
-        if exclude_user_ids:
-            workers = workers.exclude(user_id__in=exclude_user_ids)
-
-        viable = []
-        for profile in workers:
-            if not TaskAssignmentService.user_is_available_for_window(
-                profile.user,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
-                exclude_task_id=exclude_task_id,
-            ):
-                continue
-            active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
-            open_tasks = active_tasks.count()
-            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date or scheduled_date)
-            viable.append((profile, capacity, open_tasks, last_assigned_at))
-
-        viable.sort(
-            key=lambda item: (
-                item[3] is not None,
-                item[3] or timezone.make_aware(datetime(2000, 1, 1)),
-                item[2],
-                -item[1],
-            )
+        pool = TaskAssignmentService._candidate_pool(
+            due_date=due_date or scheduled_date,
+            exclude_user_ids=exclude_user_ids,
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+            exclude_task_id=exclude_task_id,
         )
-        return viable
-
-    @staticmethod
-    def _viable_worker_candidates(*, due_date, estimated_minutes, exclude_user_ids=None):
-        workers = StudentWorkerProfile.objects.filter(active_status=True, user__role__in=UserRole.worker_roles()).select_related("user")
-        if exclude_user_ids:
-            workers = workers.exclude(user_id__in=exclude_user_ids)
-
-        viable = []
-        for profile in workers:
-            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
-            active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
-            open_tasks = active_tasks.count()
-            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
-            if estimated_minutes is None or capacity >= estimated_minutes:
-                viable.append((profile, capacity, open_tasks, last_assigned_at))
-
-        viable.sort(
-            key=lambda item: (
-                item[3] is not None,
-                item[3] or timezone.make_aware(datetime(2000, 1, 1)),
-                item[2],
-                -item[1],
-            )
-        )
-        return viable
+        if estimated_minutes is None:
+            return pool
+        return [candidate for candidate in pool if candidate[1] >= estimated_minutes]
 
     @staticmethod
     def _scheduled_conflict_exists(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
@@ -415,10 +428,7 @@ class TaskAssignmentService:
         if exclude_task_id:
             overlapping = overlapping.exclude(pk=exclude_task_id)
         overlapping = overlapping.filter(
-            Q(assigned_to=user)
-            | Q(additional_assignees=user)
-            | Q(rotating_additional_assignees=user)
-            | Q(rotating_additional_assignee=user)
+            TaskAssignmentService._worker_task_membership_filter(user)
         ).distinct()
         return overlapping.exists()
 
