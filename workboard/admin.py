@@ -7,6 +7,7 @@ from .models import (
     StudentWorkerProfile,
     Task,
     TaskAttachment,
+    TaskAuditEvent,
     TaskChecklistItem,
     TaskIntakeDraft,
     TaskIntakeDraftAttachment,
@@ -52,13 +53,22 @@ class TaskAttachmentInline(admin.TabularInline):
     extra = 0
 
 
+class TaskAuditEventInline(admin.TabularInline):
+    model = TaskAuditEvent
+    extra = 0
+    can_delete = False
+    readonly_fields = ("created_at", "actor", "action", "summary", "details")
+    fields = ("created_at", "actor", "action", "summary", "details")
+    ordering = ("-created_at", "-id")
+
+
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
     list_display = ("title", "priority", "status", "assigned_to", "due_date", "recurring_task")
     list_filter = ("priority", "status", "recurring_task")
     search_fields = ("title", "description", "raw_message")
     filter_horizontal = ("additional_assignees",)
-    inlines = [TaskChecklistItemInline, TaskAttachmentInline, TaskNoteInline]
+    inlines = [TaskChecklistItemInline, TaskAttachmentInline, TaskAuditEventInline, TaskNoteInline]
 
 
 @admin.register(RecurringTaskTemplate)

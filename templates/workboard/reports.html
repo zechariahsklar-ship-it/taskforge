@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Reports | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Reports</h1>
+        <p>Week of {{ week_start|date:"M j, Y" }} through {{ week_end|date:"M j, Y" }}.</p>
+    </div>
+</section>
+<section class="report-metric-grid">
+    {% for card in summary_cards %}
+        <article class="card report-metric-card">
+            <p class="meta">{{ card.label }}</p>
+            <h2>{{ card.value }}</h2>
+        </article>
+    {% endfor %}
+</section>
+<section class="detail-grid report-grid">
+    <article class="table-card">
+        <div class="split-heading">
+            <h2>Worker workload</h2>
+            <p class="meta">Open assigned work compared to scheduled hours this week.</p>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Teammate</th>
+                    <th>Role</th>
+                    <th>Open Tasks</th>
+                    <th>Open Hours</th>
+                    <th>Scheduled Hours</th>
+                    <th>Load</th>
+                    <th>Completed This Week</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in workload_rows %}
+                    <tr>
+                        <td>{{ row.profile.display_name }}</td>
+                        <td>{{ row.profile.user.get_role_display }}</td>
+                        <td>{{ row.open_tasks }}</td>
+                        <td>{{ row.open_estimated_hours }}</td>
+                        <td>{{ row.scheduled_hours }}</td>
+                        <td>{% if row.load_percent is not None %}{{ row.load_percent }}%{% else %}-{% endif %}</td>
+                        <td>{{ row.completed_this_week }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="7" class="empty-state">No active workers to report on.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </article>
+    <article class="card report-summary-card">
+        <h2>Recurring snapshot</h2>
+        <dl class="detail-list">
+            <dt>Recurring due soon</dt><dd>{{ recurring_due_soon }}</dd>
+            <dt>Total open assigned hours</dt><dd>{{ total_assigned_hours }}</dd>
+            <dt>Report generated</dt><dd>{{ today|date:"M j, Y" }}</dd>
+        </dl>
+    </article>
+</section>
+{% endblock %}

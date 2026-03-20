@@ -7,6 +7,54 @@
 <section class="page-heading">
     <h1>My tasks</h1>
 </section>
+{% if board_alerts %}
+    <section class="board-alert-grid">
+        {% for alert in board_alerts %}
+            <article class="card board-alert-card">
+                <h2>{{ alert.title }}</h2>
+                <p class="meta">{{ alert.detail }}</p>
+                <a class="button-link button-link-secondary" href="{{ alert.href }}">{{ alert.cta }}</a>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+<section class="card board-filter-card">
+    <form method="get" class="stack">
+        <div class="board-filter-grid board-filter-grid-compact">
+            <p>
+                <label for="{{ filter_form.saved_view.id_for_label }}">{{ filter_form.saved_view.label }}</label>
+                {{ filter_form.saved_view }}
+            </p>
+            <p>
+                <label for="{{ filter_form.q.id_for_label }}">{{ filter_form.q.label }}</label>
+                {{ filter_form.q }}
+            </p>
+            <p>
+                <label for="{{ filter_form.priority.id_for_label }}">{{ filter_form.priority.label }}</label>
+                {{ filter_form.priority }}
+            </p>
+            <p>
+                <label for="{{ filter_form.due_scope.id_for_label }}">{{ filter_form.due_scope.label }}</label>
+                {{ filter_form.due_scope }}
+            </p>
+            <p>
+                <label for="{{ filter_form.schedule_scope.id_for_label }}">{{ filter_form.schedule_scope.label }}</label>
+                {{ filter_form.schedule_scope }}
+            </p>
+            <p>
+                <label for="{{ filter_form.completion_scope.id_for_label }}">{{ filter_form.completion_scope.label }}</label>
+                {{ filter_form.completion_scope }}
+            </p>
+        </div>
+        <div class="inline-form board-filter-actions">
+            <button type="submit">Apply filters</button>
+            <a class="button-link button-link-secondary" href="{% url 'my-tasks' %}">Clear</a>
+            <p class="meta board-filter-summary">
+                Showing {{ task_count }} task{{ task_count|pluralize }}{% if active_filters %} | {{ active_filters|join:", " }}{% endif %}
+            </p>
+        </div>
+    </form>
+</section>
 <section class="my-tasks-groups" data-my-tasks-groups>
     {% for column in grouped_tasks %}
         <section class="task-bucket" data-column-status="{{ column.value }}">

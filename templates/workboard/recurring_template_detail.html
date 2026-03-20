@@ -15,7 +15,13 @@
                     <span class="meta">{% if template.active %}Active{% else %}Paused{% endif %}</span>
                 </div>
             </div>
-            <a href="{% url 'recurring-edit' template.pk %}" class="button-link">Edit task</a>
+            <div class="inline-form">
+                <a href="{% url 'recurring-edit' template.pk %}" class="button-link">Edit task</a>
+                <form method="post" action="{% url 'recurring-run-now' template.pk %}">
+                    {% csrf_token %}
+                    <button type="submit"{% if next_run_preview.current_task_open %} disabled{% endif %}>Run now</button>
+                </form>
+            </div>
         </div>
 
         <section class="task-detail-section">
@@ -39,6 +45,31 @@
         </section>
 
         <section class="task-detail-section">
+            <div class="split-heading">
+                <h2>Next run preview</h2>
+                <p class="meta">Previewing {{ next_run_preview.run_date|date:"M j, Y" }}</p>
+            </div>
+            <dl class="detail-list">
+                <dt>Main Assignee</dt><dd>{{ next_run_preview.assignee.display_label|default:"Supervisor fallback" }}</dd>
+                <dt>Fixed Teammates</dt><dd>{% if fixed_additional_users %}{% for teammate in fixed_additional_users %}{% if not forloop.first %}, {% endif %}{{ teammate.display_label }}{% endfor %}{% else %}None{% endif %}</dd>
+                <dt>Rotating Teammates</dt><dd>{% if next_run_preview.rotating_assignees %}{% for teammate in next_run_preview.rotating_assignees %}{% if not forloop.first %}, {% endif %}{{ teammate.display_label }}{% endfor %}{% else %}None{% endif %}</dd>
+                <dt>How TaskForge Chose It</dt><dd>{{ next_run_preview.assignee_summary }}</dd>
+            </dl>
+            {% if next_run_preview.current_task_open %}
+                <p class="warning-note">The current recurring task is still open, so TaskForge will not run this one again until that task is finished.</p>
+            {% endif %}
+        </section>
+
+        <section class="task-detail-section">
+            <h2>Upcoming run dates</h2>
+            <div class="board-task-meta-row recurring-upcoming-list">
+                {% for run_date in upcoming_run_dates %}
+                    <span class="meta recurring-upcoming-pill">{{ run_date|date:"M j, Y" }}</span>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="task-detail-section">
             <h2>Recent generated tasks</h2>
             <div class="stack">
                 {% for task in recent_tasks %}
@@ -48,6 +79,7 @@
                             <div class="board-task-meta-row">
                                 <span class="meta">Status: {{ task.get_status_display }}</span>
                                 <span class="meta">Due: {{ task.due_date|date:"M j, Y" }}</span>
+                                <span class="meta">Assigned to: {{ task.assigned_to.display_label|default:"Unassigned" }}</span>
                             </div>
                         </article>
                     </a>
@@ -59,4 +91,3 @@
     </article>
 </section>
 {% endblock %}
-

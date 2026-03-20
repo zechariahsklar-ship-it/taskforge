@@ -46,6 +46,17 @@ class TaskStatus(models.TextChoices):
     DONE = "done", "Done"
 
 
+class TaskAuditAction(models.TextChoices):
+    CREATED = "created", "Created"
+    UPDATED = "updated", "Updated"
+    STATUS_CHANGED = "status_changed", "Status Changed"
+    NOTE_ADDED = "note_added", "Note Added"
+    ATTACHMENT_ADDED = "attachment_added", "Attachment Added"
+    CHECKLIST_UPDATED = "checklist_updated", "Checklist Updated"
+    DELETED = "deleted", "Deleted"
+    RECURRING_RUN = "recurring_run", "Recurring Run"
+
+
 class RecurrencePattern(models.TextChoices):
     DAILY = "daily", "Daily"
     WEEKLY = "weekly", "Weekly"
@@ -468,6 +479,28 @@ class TaskAttachment(models.Model):
 
     def __str__(self):
         return self.original_name
+
+
+class TaskAuditEvent(models.Model):
+    task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL, related_name="audit_events")
+    task_title = models.CharField(max_length=255)
+    actor = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="task_audit_events")
+    action = models.CharField(max_length=32, choices=TaskAuditAction.choices)
+    summary = models.CharField(max_length=255)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+    def __str__(self):
+        return f"{self.task_title} | {self.get_action_display()}"
+
+    @property
+    def actor_label(self):
+        if self.actor:
+            return self.actor.display_label
+        return "System"
 
 
 class TaskIntakeDraft(models.Model):

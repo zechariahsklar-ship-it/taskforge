@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -295,7 +295,10 @@ class RecurringTaskListViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Weekly mail run")
         self.assertContains(response, "Recurring details")
-        self.assertContains(response, "Edit task")
+        self.assertContains(response, "Next run preview")
+        self.assertContains(response, "Upcoming run dates")
+        self.assertContains(response, "Run now")
+        self.assertContains(response, "Jamie Worker is the fixed assignee for the next run.")
 
     def test_recurring_detail_links_to_edit_page(self):
         detail_response = self.client.get(reverse("recurring-detail", args=[self.first_template.pk]))
@@ -307,6 +310,37 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(edit_response, "Edit recurring task")
         self.assertContains(edit_response, "Save changes")
 
+
+    def test_recurring_run_now_creates_task_and_advances_next_date(self):
+        self.first_template.next_run_date = date(2026, 3, 27)
+        self.first_template.save(update_fields=["next_run_date", "updated_at"])
+
+        with patch("workboard.recurring_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        generated = Task.objects.filter(recurring_template=self.first_template).latest("pk")
+        self.first_template.refresh_from_db()
+        self.assertEqual(generated.due_date, date(2026, 3, 20))
+        self.assertEqual(generated.assigned_to, self.worker)
+        self.assertEqual(self.first_template.next_run_date, date(2026, 3, 27))
+
+    def test_recurring_run_now_warns_when_current_run_is_still_open(self):
+        Task.objects.create(
+            title="Open recurring run",
+            description="Still in progress",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=self.worker,
+            recurring_task=True,
+            recurring_template=self.first_template,
+        )
+
+        response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "already has an open run on the board")
+        self.assertEqual(Task.objects.filter(recurring_template=self.first_template).count(), 1)
 
     def test_recurring_edit_page_uses_clear_schedule_labels(self):
         response = self.client.get(reverse("recurring-edit", args=[self.first_template.pk]))
@@ -522,7 +556,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
             description="Rotate me",
             priority=Priority.MEDIUM,
             estimated_minutes=30,
-            assign_to=self.alex,
+            assign_to=None,
             requested_by=self.supervisor,
             recurrence_pattern="weekly",
             recurrence_interval=1,
@@ -1094,6 +1128,94 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         self.assertContains(response, "Fixed Helper")
         self.assertContains(response, "Rotating Helper (rotation)")
         self.assertContains(response, "Taylor Helper (rotation)")
+
+
+class BoardFilterAndAlertTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="board-filter-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.worker_one = User.objects.create_user(username="board-filter-worker-1", password="password123", role=UserRole.STUDENT_WORKER)
+        self.worker_two = User.objects.create_user(username="board-filter-worker-2", password="password123", role=UserRole.STUDENT_WORKER)
+        StudentWorkerProfile.objects.create(user=self.worker_one, display_name="Alex Worker", email="alex@example.com")
+        StudentWorkerProfile.objects.create(user=self.worker_two, display_name="Jamie Worker", email="jamie@example.com")
+        self.overdue_task = Task.objects.create(
+            title="Overdue archive cleanup",
+            description="Needs attention",
+            priority=Priority.HIGH,
+            status=TaskStatus.NEW,
+            assigned_to=self.worker_one,
+            due_date=date(2026, 3, 19),
+            board_order=1,
+        )
+        self.waiting_task = Task.objects.create(
+            title="Waiting on vendor reply",
+            description="Blocked",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.WAITING,
+            assigned_to=self.worker_two,
+            due_date=date(2026, 3, 24),
+            board_order=1,
+        )
+        self.scheduled_task = Task.objects.create(
+            title="Front desk shift prep",
+            description="Prep for the day",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=self.worker_one,
+            due_date=date(2026, 3, 20),
+            scheduled_date=date(2026, 3, 20),
+            scheduled_start_time=time(9, 0),
+            scheduled_end_time=time(10, 0),
+            board_order=1,
+        )
+        self.recurring_task = Task.objects.create(
+            title="Weekly recurring mail sweep",
+            description="Recurring work",
+            priority=Priority.LOW,
+            status=TaskStatus.NEW,
+            assigned_to=self.worker_two,
+            due_date=date(2026, 3, 25),
+            recurring_task=True,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            board_order=2,
+        )
+        RecurringTaskTemplate.objects.create(
+            title="Due soon recurring template",
+            description="Heads up",
+            priority=Priority.MEDIUM,
+            estimated_minutes=30,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 21),
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_board_shows_alert_cards_for_overdue_and_recurring_work(self):
+        with patch("workboard.task_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "1 overdue task")
+        self.assertContains(response, "1 recurring task due soon")
+        self.assertContains(response, reverse("recurring-list"))
+        self.assertContains(response, "Saved view")
+        self.assertContains(response, "Search tasks")
+
+    def test_board_saved_view_filters_waiting_tasks(self):
+        response = self.client.get(reverse("board"), {"saved_view": "waiting"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Waiting on vendor reply")
+        self.assertNotContains(response, "Overdue archive cleanup")
+        self.assertContains(response, "View: Waiting / blocked")
+
+    def test_board_assignee_filter_matches_selected_teammate(self):
+        response = self.client.get(reverse("board"), {"assigned_to": str(self.worker_one.pk)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Overdue archive cleanup")
+        self.assertContains(response, "Front desk shift prep")
+        self.assertNotContains(response, "Waiting on vendor reply")
 
 
 class MyTasksViewOrderingTests(TestCase):
@@ -1721,17 +1843,46 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'data-schedule-summary-card="monday"')
         self.assertContains(create_response, 'class="weekly-schedule-hidden-fields"')
         self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
+        self.assertContains(create_response, 'data-copy-day="monday"')
         self.assertNotContains(details_response, 'data-weekly-schedule-picker')
         self.assertContains(details_response, 'Remove student')
         self.assertContains(schedule_response, 'data-weekly-schedule-picker')
         self.assertContains(schedule_response, 'Weekly schedule', count=1)
         self.assertContains(schedule_response, 'Temporary schedule change')
+        self.assertContains(schedule_response, 'data-load-normal-schedule')
         self.assertNotContains(schedule_response, 'Click or drag across the calendar')
         self.assertNotContains(schedule_response, 'Temporary hour adjustment')
         self.assertNotContains(schedule_response, 'Existing hour adjustments')
         self.assertContains(schedule_response, 'class="weekly-schedule-hidden-fields"', count=2)
         self.assertContains(schedule_response, 'name="monday_segments"')
         self.assertContains(schedule_response, 'name="override_segments"')
+
+    def test_schedule_page_prefills_selected_date_from_weekly_schedule(self):
+        monday, _ = StudentAvailability.objects.update_or_create(
+            profile=self.profile,
+            weekday=Weekday.MONDAY,
+            defaults={"start_time": time(9, 0), "end_time": time(12, 0), "hours_available": 3},
+        )
+        monday.blocks.all().delete()
+        StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
+
+        response = self.client.get(reverse("worker-schedule", args=[self.profile.pk]), {"override_date": "2026-03-23"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_override_date"], date(2026, 3, 23))
+        self.assertEqual(response.context["schedule_override_form"].initial["override_segments"], json.dumps([["09:00", "12:00"]]))
+        self.assertContains(response, "Loaded March 23, 2026 into the editor")
+
+    def test_schedule_page_loads_existing_override_into_editor(self):
+        override = self.profile.schedule_overrides.create(override_date=date(2026, 3, 16), note="Existing override")
+        override.blocks.create(start_time=time(14, 0), end_time=time(16, 0), position=1)
+
+        response = self.client.get(reverse("worker-schedule", args=[self.profile.pk]), {"override_date": "2026-03-16"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_override_date"], date(2026, 3, 16))
+        self.assertEqual(response.context["schedule_override_form"].instance.pk, override.pk)
+        self.assertContains(response, '?override_date=2026-03-16')
 
     def test_edit_pages_show_remove_actions_for_student_supervisors_and_supervisors(self):
         student_supervisor_response = self.client.get(reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
@@ -1955,18 +2106,234 @@ class AssignedBucketRemovalTests(TestCase):
         new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
         self.assertIn(self.task, new_column["tasks"])
 
+class SupervisorRoutePermissionTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="perm-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.student_worker = User.objects.create_user(username="perm-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.student_supervisor = User.objects.create_user(username="perm-student-supervisor", password="password123", role=UserRole.STUDENT_SUPERVISOR)
+        StudentWorkerProfile.objects.create(user=self.student_worker, display_name="Perm Worker", email="perm-worker@example.com")
+        StudentWorkerProfile.objects.create(user=self.student_supervisor, display_name="Perm Lead", email="perm-lead@example.com")
+        self.template = RecurringTaskTemplate.objects.create(
+            title="Permission recurring",
+            description="Permission check",
+            priority=Priority.MEDIUM,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 20),
+            requested_by=self.supervisor,
+        )
+
+    def test_reports_requires_full_supervisor_role(self):
+        self.client.force_login(self.student_worker)
+        worker_response = self.client.get(reverse("reports"))
+        self.assertEqual(worker_response.status_code, 403)
+
+        self.client.force_login(self.student_supervisor)
+        lead_response = self.client.get(reverse("reports"))
+        self.assertEqual(lead_response.status_code, 403)
+
+    def test_admin_guide_requires_full_supervisor_role(self):
+        self.client.force_login(self.student_worker)
+        worker_response = self.client.get(reverse("admin-guide"))
+        self.assertEqual(worker_response.status_code, 403)
+
+        self.client.force_login(self.student_supervisor)
+        lead_response = self.client.get(reverse("admin-guide"))
+        self.assertEqual(lead_response.status_code, 403)
+
+    def test_recurring_run_now_requires_full_supervisor_role(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.post(reverse("recurring-run-now", args=[self.template.pk]))
+        self.assertEqual(response.status_code, 403)
 
 
 
+class ReportsViewTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="reports-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="reports-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Taylor Reports", email="reports@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=4 if weekday < 5 else 0)
+        Task.objects.create(
+            title="Completed task",
+            description="Done this week",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker,
+            completed_at=timezone.make_aware(datetime(2026, 3, 18, 10, 0)),
+        )
+        Task.objects.create(
+            title="Overdue task",
+            description="Overdue",
+            priority=Priority.HIGH,
+            status=TaskStatus.NEW,
+            assigned_to=self.worker,
+            due_date=date(2026, 3, 19),
+            estimated_minutes=120,
+        )
+        Task.objects.create(
+            title="Waiting task",
+            description="Waiting",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.WAITING,
+            assigned_to=self.worker,
+            due_date=date(2026, 3, 21),
+            estimated_minutes=60,
+        )
+        RecurringTaskTemplate.objects.create(
+            title="Report recurring",
+            description="Recurring report",
+            priority=Priority.MEDIUM,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 21),
+            active=True,
+        )
+        TaskAuditEvent.objects.create(
+            task_title="Recurring report",
+            action=TaskAuditAction.RECURRING_RUN,
+            summary="Generated recurring task",
+            created_at=timezone.make_aware(datetime(2026, 3, 19, 9, 0)),
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_reports_view_renders_summary_metrics_and_worker_table(self):
+        with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("reports"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Reports")
+        self.assertContains(response, "Completed this week")
+        self.assertContains(response, "Open overdue tasks")
+        self.assertContains(response, "Worker workload")
+        self.assertContains(response, "Taylor Reports")
+        self.assertContains(response, "Recurring snapshot")
+
+
+class AdminGuideViewTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="guide-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.client.force_login(self.supervisor)
+
+    def test_admin_guide_renders_key_sections(self):
+        response = self.client.get(reverse("admin-guide"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Supervisor guide")
+        self.assertContains(response, "Daily workflow")
+        self.assertContains(response, "Recurring tasks")
+        self.assertContains(response, "Schedules and temporary changes")
+        self.assertContains(response, "Testing and checks")
+        self.assertContains(response, reverse("reports"))
 
 
 
+class SecurityHardeningTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="sec-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.client.force_login(self.supervisor)
+
+    def test_worker_create_generates_non_default_password_when_blank(self):
+        response = self.client.post(
+            reverse("worker-create"),
+            {
+                "username": "newworker",
+                "password": "",
+                "first_name": "New",
+                "last_name": "Worker",
+                "email": "",
+                "active_status": "on",
+                "skill_notes": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        worker = User.objects.get(username="newworker")
+        self.assertTrue(worker.must_change_password)
+        self.assertFalse(worker.check_password("changeme123"))
+
+    def test_task_intake_form_rejects_unsupported_attachment_type(self):
+        attachment = SimpleUploadedFile("dangerous.exe", b"boom", content_type="application/octet-stream")
+        response = self.client.post(
+            reverse("task-intake"),
+            {"raw_message": "Please review this file.", "attachments": attachment},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Unsupported file type")
 
 
+class TaskAuditHistoryTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="audit-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.client.force_login(self.supervisor)
+        self.task = Task.objects.create(
+            title="Audit task",
+            description="Track me",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            created_by=self.supervisor,
+        )
 
+    def test_task_create_records_audit_event(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Created with audit",
+                "description": "Fresh task",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "respond_to_text": "",
+                "estimated_minutes": "",
+                "recurring_task": "",
+                "rotating_additional_assignee_count": 0,
+            },
+            follow=True,
+        )
 
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Created with audit")
+        self.assertTrue(task.audit_events.filter(action=TaskAuditAction.CREATED).exists())
 
+    def test_status_change_records_audit_event(self):
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "status", "status": TaskStatus.IN_PROGRESS},
+            follow=True,
+        )
 
+        self.assertEqual(response.status_code, 200)
+        event = self.task.audit_events.first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.action, TaskAuditAction.STATUS_CHANGED)
+        self.assertIn("Changed status", event.summary)
 
+    def test_note_add_records_audit_event(self):
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "note", "body": "Audit note"},
+            follow=True,
+        )
 
+        self.assertEqual(response.status_code, 200)
+        event = self.task.audit_events.first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.action, TaskAuditAction.NOTE_ADDED)
+
+    def test_deleted_task_keeps_audit_record(self):
+        response = self.client.post(reverse("task-delete", args=[self.task.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Task.objects.filter(pk=self.task.pk).exists())
+        self.assertTrue(TaskAuditEvent.objects.filter(task_title="Audit task", action=TaskAuditAction.DELETED).exists())
 

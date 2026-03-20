@@ -54,6 +54,12 @@
         }
     }
 
+    function cloneSegments(segments) {
+        return segments.map(function (segment) {
+            return [segment[0], segment[1]];
+        });
+    }
+
     function contiguousSegmentsFromSelection(state, selectedSet) {
         var sorted = Array.from(selectedSet).sort(function (left, right) {
             return left - right;
@@ -128,6 +134,17 @@
         }
     }
 
+    function weekdayIndexFromDate(value) {
+        if (!value) {
+            return null;
+        }
+        var parsed = new Date(value + "T00:00:00");
+        if (Number.isNaN(parsed.getTime())) {
+            return null;
+        }
+        return (parsed.getDay() + 6) % 7;
+    }
+
     function initPicker(root) {
         if (root.dataset.pickerBound === "true") {
             return;
@@ -143,6 +160,7 @@
             var segmentsInput = root.querySelector("#id_" + day + "_segments");
             states[day] = {
                 card: card,
+                weekday: card.dataset.weekday,
                 segmentsInput: segmentsInput,
                 startInput: root.querySelector("#id_" + day + "_start"),
                 endInput: root.querySelector("#id_" + day + "_end"),
@@ -290,6 +308,19 @@
             root.classList.remove("is-dragging");
         }
 
+        function weekdayTargetDays(sourceDay, scope) {
+            return Object.keys(states).filter(function (day) {
+                if (day === sourceDay) {
+                    return false;
+                }
+                if (scope === "all") {
+                    return true;
+                }
+                var weekdayValue = Number(states[day].weekday);
+                return !Number.isNaN(weekdayValue) && weekdayValue < 5;
+            });
+        }
+
         var clearWeekButton = root.querySelector("[data-clear-week]");
         if (clearWeekButton) {
             clearWeekButton.addEventListener("click", function () {
@@ -298,6 +329,17 @@
                 });
             });
         }
+
+        root.querySelectorAll("[data-copy-day]").forEach(function (button) {
+            button.addEventListener("click", function () {
+                var sourceDay = button.dataset.copyDay;
+                var scope = button.dataset.copyScope;
+                var segments = cloneSegments(readSegments(sourceDay));
+                weekdayTargetDays(sourceDay, scope).forEach(function (targetDay) {
+                    setSegments(targetDay, cloneSegments(segments));
+                });
+            });
+        });
 
         root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
             cell.addEventListener("pointerdown", function (event) {
@@ -331,6 +373,20 @@
             stopPointerSelection(event.pointerId);
         });
 
+        root.taskforgeSchedulePicker = {
+            getSegments: function (day) {
+                return cloneSegments(readSegments(day));
+            },
+            setSegments: function (day, segments) {
+                setSegments(day, cloneSegments(segments || []));
+            },
+            getDayForWeekday: function (weekday) {
+                return Object.keys(states).find(function (day) {
+                    return String(states[day].weekday) === String(weekday);
+                }) || null;
+            },
+        };
+
         refreshAll();
 
         if (frame) {
@@ -341,10 +397,54 @@
         }
     }
 
+    function initOverrideTools() {
+        document.querySelectorAll("[data-load-normal-schedule]").forEach(function (button) {
+            if (button.dataset.overrideBound === "true") {
+                return;
+            }
+            button.dataset.overrideBound = "true";
+            var sourceRoot = document.getElementById(button.dataset.sourcePicker);
+            var targetRoot = document.getElementById(button.dataset.targetPicker);
+            var dateInput = document.getElementById(button.dataset.dateInput);
+            if (!sourceRoot || !targetRoot || !dateInput) {
+                return;
+            }
+
+            function loadSchedule(force) {
+                var sourcePicker = sourceRoot.taskforgeSchedulePicker;
+                var targetPicker = targetRoot.taskforgeSchedulePicker;
+                if (!sourcePicker || !targetPicker) {
+                    return;
+                }
+                var weekday = weekdayIndexFromDate(dateInput.value);
+                if (weekday === null) {
+                    return;
+                }
+                var sourceDay = sourcePicker.getDayForWeekday(weekday);
+                if (!sourceDay) {
+                    return;
+                }
+                var currentSegments = targetPicker.getSegments("override");
+                if (!force && currentSegments.length) {
+                    return;
+                }
+                targetPicker.setSegments("override", sourcePicker.getSegments(sourceDay));
+            }
+
+            button.addEventListener("click", function () {
+                loadSchedule(true);
+            });
+            dateInput.addEventListener("change", function () {
+                loadSchedule(false);
+            });
+        });
+    }
+
     function initAllPickers() {
         document.querySelectorAll("[data-weekly-schedule-picker]").forEach(function (root) {
             initPicker(root);
         });
+        initOverrideTools();
     }
 
     if (document.readyState === "loading") {

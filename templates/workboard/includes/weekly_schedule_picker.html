@@ -1,7 +1,7 @@
 {% load static %}
 {% with picker_form=schedule_form|default:weekly_form %}
 {% with day_rows=picker_form.day_rows %}
-<div class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
+<div{% if picker_id %} id="{{ picker_id }}"{% endif %} class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
     <div class="weekly-schedule-hidden-fields" hidden aria-hidden="true">
         {% for hidden in picker_form.hidden_fields %}
             {{ hidden }}
@@ -18,10 +18,16 @@
     </div>
     <div class="weekly-schedule-summary-grid">
         {% for row in day_rows %}
-            <article class="weekly-schedule-summary-card" data-schedule-summary-card="{{ row.prefix }}">
+            <article class="weekly-schedule-summary-card" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
                 <div class="weekly-schedule-summary-head">
                     <h3>{{ row.label }}</h3>
-                    <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
+                    <div class="weekly-schedule-day-actions">
+                        {% if day_rows|length > 1 %}
+                            <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="weekdays">Weekdays</button>
+                            <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="all">All</button>
+                        {% endif %}
+                        <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
+                    </div>
                 </div>
                 <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
                 {% if row.segments.errors %}
@@ -58,4 +64,4 @@
 </div>
 {% endwith %}
 {% endwith %}
-{% if include_schedule_script != False %}<script src="{% static 'weekly_schedule_picker.js' %}?v=20260318d" defer></script>{% endif %}
+{% if include_schedule_script != False %}<script src="{% static 'weekly_schedule_picker.js' %}?v=20260320a" defer></script>{% endif %}

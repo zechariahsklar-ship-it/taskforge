@@ -19,12 +19,32 @@
         <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="weekly">
-            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=weekly_form hide_picker_header=True %}
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=weekly_form hide_picker_header=True picker_id="weekly-schedule-picker" %}
             <button type="submit">Save weekly schedule</button>
         </form>
     </article>
     <article class="card">
-        <h2>Temporary schedule change</h2>
+        <div class="split-heading schedule-override-heading">
+            <div>
+                <h2>Temporary schedule change</h2>
+                {% if selected_override_date %}
+                    <p class="meta">Loaded {{ selected_override_date }} into the editor so you can update that date directly.</p>
+                {% endif %}
+            </div>
+            <div class="inline-form">
+                <button
+                    type="button"
+                    class="button-link button-link-secondary"
+                    data-load-normal-schedule
+                    data-source-picker="weekly-schedule-picker"
+                    data-target-picker="override-schedule-picker"
+                    data-date-input="{{ schedule_override_form.override_date.id_for_label }}"
+                >Load normal schedule</button>
+                {% if selected_override_date %}
+                    <a class="button-link button-link-secondary" href="{% url 'worker-schedule' profile.pk %}">Start new date</a>
+                {% endif %}
+            </div>
+        </div>
         <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="schedule_override">
@@ -40,7 +60,7 @@
                 {% if schedule_override_form.note.help_text %}<span class="meta">{{ schedule_override_form.note.help_text }}</span>{% endif %}
                 {% if schedule_override_form.note.errors %}<span class="meta">{{ schedule_override_form.note.errors }}</span>{% endif %}
             </p>
-            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form clear_all_label="Clear date" include_schedule_script=False hide_picker_header=True %}
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=schedule_override_form clear_all_label="Clear date" include_schedule_script=False hide_picker_header=True picker_id="override-schedule-picker" %}
             <button type="submit">Save temporary schedule</button>
         </form>
     </article>
@@ -48,8 +68,11 @@
         <h2>Temporary schedule changes</h2>
         <div class="stack">
             {% for schedule_override in schedule_overrides %}
-                <article class="note">
-                    <p><strong>{{ schedule_override.override_date }}</strong> | {{ schedule_override.block_summary }}</p>
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ schedule_override.override_date }}</strong> | {{ schedule_override.block_summary }}</p>
+                        <a class="button-link button-link-secondary" href="{% url 'worker-schedule' profile.pk %}?override_date={{ schedule_override.override_date|date:'Y-m-d' }}">Edit</a>
+                    </div>
                     <p>{{ schedule_override.note|default:"No note" }}</p>
                     <form method="post">
                         {% csrf_token %}

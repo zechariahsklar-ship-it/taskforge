@@ -1,4 +1,5 @@
 from datetime import datetime, time, timedelta
+from pathlib import Path
 import json
 from decimal import Decimal
 
@@ -7,6 +8,7 @@ from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 from django.db.models import Q
 
 from .models import (
+    Priority,
     RecurringTaskTemplate,
     StudentScheduleOverride,
     StudentWorkerProfile,
@@ -30,6 +32,36 @@ DAY_FIELD_CONFIG = [
     ("friday", "Friday", Weekday.FRIDAY),
     ("saturday", "Saturday", Weekday.SATURDAY),
     ("sunday", "Sunday", Weekday.SUNDAY),
+]
+
+TASK_SAVED_VIEW_CHOICES = [
+    ("", "All visible tasks"),
+    ("today", "Today's focus"),
+    ("overdue", "Overdue"),
+    ("waiting", "Waiting / blocked"),
+    ("recurring", "Recurring work"),
+    ("scheduled", "Scheduled work"),
+]
+
+TASK_DUE_SCOPE_CHOICES = [
+    ("", "Any due date"),
+    ("overdue", "Overdue"),
+    ("today", "Due today"),
+    ("week", "Due in the next 7 days"),
+    ("none", "No due date"),
+]
+
+TASK_SCHEDULE_SCOPE_CHOICES = [
+    ("", "Any schedule"),
+    ("today", "Scheduled today"),
+    ("scheduled", "Has a schedule"),
+    ("unscheduled", "No schedule"),
+]
+
+TASK_COMPLETION_SCOPE_CHOICES = [
+    ("", "All statuses"),
+    ("open", "Open work"),
+    ("done", "Done"),
 ]
 
 
@@ -56,6 +88,33 @@ for index, choice in enumerate(HALF_HOUR_CHOICES[1:-1]):
         }
     )
 
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {
+    ".csv",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".txt",
+    ".webp",
+    ".xls",
+    ".xlsx",
+}
+
+
+def _validate_uploaded_file(uploaded_file):
+    extension = Path(getattr(uploaded_file, "name", "")).suffix.lower()
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise forms.ValidationError(
+            "Unsupported file type. Upload a PDF, image, spreadsheet, text file, or Office document."
+        )
+    if getattr(uploaded_file, "size", 0) > MAX_UPLOAD_SIZE_BYTES:
+        raise forms.ValidationError("Each attachment must be 10 MB or smaller.")
+    return uploaded_file
+
 
 class HalfHourSelect(forms.Select):
     def __init__(self, *args, **kwargs):
@@ -75,8 +134,8 @@ class MultipleFileField(forms.FileField):
         if not data:
             return []
         if isinstance(data, (list, tuple)):
-            return [single_file_clean(item, initial) for item in data]
-        return [single_file_clean(data, initial)]
+            return [_validate_uploaded_file(single_file_clean(item, initial)) for item in data]
+        return [_validate_uploaded_file(single_file_clean(data, initial))]
 
 
 class StyledFormMixin:
@@ -182,14 +241,17 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
     schedule_day_config = []
 
     def day_rows(self):
-        return [
-            {
-                "prefix": prefix,
-                "label": label,
-                "segments": self[f"{prefix}_segments"],
-            }
-            for prefix, label, *_ in self.schedule_day_config
-        ]
+        rows = []
+        for prefix, label, *rest in self.schedule_day_config:
+            rows.append(
+                {
+                    "prefix": prefix,
+                    "label": label,
+                    "segments": self[f"{prefix}_segments"],
+                    "weekday": rest[0] if rest else "",
+                }
+            )
+        return rows
 
     def calendar_slots(self):
         return WEEKLY_CALENDAR_SLOTS
@@ -393,7 +455,39 @@ class StudentScheduleOverrideForm(BaseScheduleBlocksForm, forms.ModelForm):
 
 class TaskIntakeForm(StyledFormMixin, forms.Form):
     raw_message = forms.CharField(widget=forms.Textarea(attrs={"rows": 12}), label="Paste email or request")
-    attachments = MultipleFileField(required=False, label="Optional screenshots or images")
+    attachments = MultipleFileField(
+        required=False,
+        label="Optional screenshots or images",
+        help_text="Allowed file types: PDF, images, spreadsheets, text files, and Office documents. Each file must be 10 MB or smaller.",
+    )
+
+
+class TaskBoardFilterForm(StyledFormMixin, forms.Form):
+    saved_view = forms.ChoiceField(required=False, choices=TASK_SAVED_VIEW_CHOICES)
+    q = forms.CharField(required=False, label="Search")
+    priority = forms.ChoiceField(required=False, choices=[("", "Any priority"), *Priority.choices])
+    due_scope = forms.ChoiceField(required=False, choices=TASK_DUE_SCOPE_CHOICES)
+    schedule_scope = forms.ChoiceField(required=False, choices=TASK_SCHEDULE_SCOPE_CHOICES)
+    completion_scope = forms.ChoiceField(required=False, choices=TASK_COMPLETION_SCOPE_CHOICES)
+    assigned_to = forms.ModelChoiceField(required=False, queryset=User.objects.none())
+
+    def __init__(self, *args, user=None, include_assignee=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["saved_view"].label = "Saved view"
+        self.fields["saved_view"].help_text = "Start from a common board view, then narrow it further if needed."
+        self.fields["q"].label = "Search tasks"
+        self.fields["q"].widget.attrs.setdefault("placeholder", "Search by title or task details")
+        self.fields["priority"].label = "Priority"
+        self.fields["due_scope"].label = "Due date"
+        self.fields["schedule_scope"].label = "Schedule"
+        self.fields["completion_scope"].label = "Status"
+
+        if include_assignee:
+            self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True)
+            self.fields["assigned_to"].label = "Teammate"
+            self.fields["assigned_to"].label_from_instance = _user_choice_label
+        else:
+            self.fields.pop("assigned_to")
 
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
@@ -664,6 +758,13 @@ class TaskAttachmentForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = TaskAttachment
         fields = ["file"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["file"].help_text = "Allowed file types: PDF, images, spreadsheets, text files, and Office documents. Each file must be 10 MB or smaller."
+
+    def clean_file(self):
+        return _validate_uploaded_file(self.cleaned_data["file"])
 
 
 class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):

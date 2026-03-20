@@ -126,6 +126,27 @@
                     <p class="empty-state">No notes yet.</p>
                 {% endfor %}
             </div>
+        </section>
+
+        <section class="task-detail-section">
+            <h2>Activity</h2>
+            <div class="stack task-notes-list">
+                {% for event in audit_events %}
+                    <article class="note">
+                        <p>{{ event.summary }}</p>
+                        <p class="meta">{{ event.actor_label }} | {{ event.created_at }}</p>
+                        {% if event.details.changes %}
+                            <ul class="attachment-list">
+                                {% for change in event.details.changes %}
+                                    <li>{{ change.field }}: {{ change.before }} -> {{ change.after }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </article>
+                {% empty %}
+                    <p class="empty-state">No activity yet.</p>
+                {% endfor %}
+            </div>
             {% if request.user.is_supervisor %}
                 <form method="post" action="{% url 'task-delete' task.pk %}" class="task-delete-form" onsubmit="return window.confirm('Delete this task permanently?');">
                     {% csrf_token %}

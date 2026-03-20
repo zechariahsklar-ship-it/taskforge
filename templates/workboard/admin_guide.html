@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Guide | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Supervisor guide</h1>
+        <p>A short walkthrough for the parts of TaskForge supervisors use most often.</p>
+    </div>
+</section>
+<section class="stack admin-guide-stack">
+    <article class="card">
+        <h2>Daily workflow</h2>
+        <ol>
+            <li>Check <a href="{% url 'board' %}">Board</a> for overdue, waiting, and today's scheduled work.</li>
+            <li>Use <a href="{% url 'task-intake' %}">Intake</a> when someone sends a freeform request that needs parsing.</li>
+            <li>Use <a href="{% url 'task-create' %}">New Task</a> for tasks you already understand and want to enter manually.</li>
+            <li>Open <a href="{% url 'reports' %}">Reports</a> when you need a quick weekly workload summary.</li>
+        </ol>
+    </article>
+
+    <article class="card">
+        <h2>Roles</h2>
+        <dl class="detail-list">
+            <dt>Supervisor</dt><dd>Can create tasks, manage people, schedules, recurring work, reports, and passwords.</dd>
+            <dt>Student Supervisor</dt><dd>Can see the whole board and edit tasks, but cannot create new tasks or manage people.</dd>
+            <dt>Student Worker</dt><dd>Can see assigned work, update status, and add notes or attachments.</dd>
+        </dl>
+    </article>
+
+    <article class="card">
+        <h2>Recurring tasks</h2>
+        <p>The <a href="{% url 'recurring-list' %}">Recurring</a> page shows the templates that generate repeated work. Open a recurring task to:</p>
+        <ul>
+            <li>See the next run preview and upcoming run dates.</li>
+            <li>Confirm whether the next run will stay with a fixed assignee or rotate to a different worker.</li>
+            <li>Use <strong>Run now</strong> when you need the next recurring task to appear immediately.</li>
+        </ul>
+        <p class="meta">TaskForge will not run a recurring task again while the current run is still open.</p>
+    </article>
+
+    <article class="card">
+        <h2>Schedules and temporary changes</h2>
+        <p>On the <a href="{% url 'worker-list' %}">Workers</a> page, use <strong>Edit schedule</strong> for the weekly calendar.</p>
+        <ul>
+            <li>Drag across the weekly calendar to add blocks in 30-minute increments.</li>
+            <li>Use the weekday copy buttons to copy one day across the rest of the week.</li>
+            <li>Use <strong>Temporary schedule change</strong> for a one-date exception such as time off or a special shift.</li>
+            <li>The <strong>Load normal schedule</strong> button pulls that weekday's normal schedule into the one-date override so you can adjust it instead of rebuilding it from scratch.</li>
+        </ul>
+        <p class="meta">A temporary schedule overrides the weekly schedule only for that date.</p>
+    </article>
+
+    <article class="card">
+        <h2>People management</h2>
+        <ul>
+            <li>Use <strong>Edit worker</strong> or <strong>Edit supervisor</strong> to update names, email, notes, and role-specific settings.</li>
+            <li>Use <strong>Reset password</strong> when someone is locked out or needs a fresh login.</li>
+            <li>Removing a person reassigns their open work to the acting supervisor so tasks do not get stranded.</li>
+        </ul>
+    </article>
+
+    <article class="card">
+        <h2>Testing and checks</h2>
+        <p>Useful commands from the project root:</p>
+        <pre><code>python manage.py check
+python manage.py test workboard.tests
+python manage.py generate_recurring_tasks</code></pre>
+        <p class="meta">Use the full test suite before pushing larger workflow changes, especially anything involving recurring tasks, schedules, or permissions.</p>
+    </article>
+
+    <article class="card">
+        <h2>Troubleshooting</h2>
+        <ul>
+            <li>If a recurring task is missing from the Recurring page, open the page once to let TaskForge backfill older recurring-marked tasks into templates.</li>
+            <li>If a worker cannot be assigned to a scheduled task, check both their weekly schedule and any temporary schedule for that date.</li>
+            <li>If the board looks stale after a deploy, do a hard refresh so the newest CSS and JavaScript files load.</li>
+        </ul>
+    </article>
+</section>
+{% endblock %}

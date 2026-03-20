@@ -9,6 +9,10 @@
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}
+        {% if not supervisor %}
+            <p><label for="id_password">Password</label><input class="form-control" type="text" name="password" id="id_password"></p>
+            <p class="meta">Optional. Leave blank to generate a secure temporary password that you can share once.</p>
+        {% endif %}
         <button type="submit">{{ submit_label|default:"Save supervisor" }}</button>
     </form>
     {% if supervisor %}

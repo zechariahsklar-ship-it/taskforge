@@ -65,6 +65,21 @@ GRANT ALL PRIVILEGES ON DATABASE taskforge TO taskforge;
 
 If you need to run local checks without PostgreSQL temporarily, set `USE_SQLITE=True` in `.env`. PostgreSQL remains the main configured database for the app.
 
+## Supervisor guide
+
+A short operating guide for supervisors is available in [ADMIN_GUIDE.md](ADMIN_GUIDE.md).
+When the app is running, supervisors can also open the in-app `Guide` page from the top navigation.
+
+## Testing
+
+Useful commands during development:
+
+```bash
+python manage.py check
+python manage.py test workboard.tests
+python manage.py test workboard.tests.RecurringTaskListViewTests workboard.tests.ReportsViewTests
+```
+
 ## OpenAI key setup
 
 Store the real OpenAI key only in your local `.env` file or in deployment environment variables. Do not commit it to GitHub.

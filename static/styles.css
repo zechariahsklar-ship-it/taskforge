@@ -1174,3 +1174,131 @@ tr:hover td {
 .weekly-schedule-toolbar.is-headerless {
     justify-content: flex-end;
 }
+
+
+.button-link-secondary {
+    background: transparent;
+    border: 1px solid #4d78a5;
+    color: #d9ebff !important;
+}
+
+.button-link-secondary:hover,
+.button-link-secondary:focus-visible {
+    background: rgba(20, 120, 208, 0.18);
+    color: #ffffff !important;
+}
+
+.board-alert-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.board-alert-card {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.board-alert-card h2,
+.board-filter-card h2 {
+    margin: 0;
+}
+
+.board-filter-card {
+    margin-bottom: 1rem;
+}
+
+.board-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.85rem 1rem;
+    align-items: end;
+}
+
+.board-filter-grid p,
+.board-filter-grid-compact p {
+    margin: 0;
+    display: grid;
+    gap: 0.35rem;
+}
+
+.board-filter-actions {
+    justify-content: flex-start;
+}
+
+.board-filter-summary {
+    margin: 0;
+}
+
+.weekly-schedule-day-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.45rem;
+}
+
+.weekly-schedule-copy-day,
+.weekly-schedule-clear-day {
+    width: auto;
+    white-space: nowrap;
+}
+
+.schedule-override-heading {
+    align-items: flex-start;
+    margin-bottom: 1rem;
+}
+
+.schedule-override-note {
+    margin-bottom: 0;
+}
+
+.schedule-override-note-header {
+    margin-bottom: 0.75rem;
+}
+
+@media (max-width: 700px) {
+    .board-filter-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+.recurring-upcoming-list {
+    gap: 0.5rem;
+}
+
+.recurring-upcoming-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #0d141c;
+}
+
+.report-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.report-metric-card {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.report-metric-card h2,
+.report-summary-card h2 {
+    margin: 0;
+}
+
+.report-grid {
+    align-items: start;
+}
+
+button[disabled] {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
