@@ -10,6 +10,7 @@ from django.db.models import Q
 from .models import (
     Priority,
     RecurringTaskTemplate,
+    ScheduleAdjustmentRequest,
     StudentScheduleOverride,
     StudentWorkerProfile,
     Task,
@@ -441,6 +442,58 @@ class StudentScheduleOverrideForm(BaseScheduleBlocksForm, forms.ModelForm):
         cleaned_data["override_start"] = start_value
         cleaned_data["override_end"] = end_value
         cleaned_data["override_hours"] = hours_value
+        cleaned_data["schedule_blocks"] = [
+            {"start_time": start_block, "end_time": end_block}
+            for start_block, end_block in blocks
+        ]
+        cleaned_data["schedule_windows"] = {
+            "start_time": start_value,
+            "end_time": end_value,
+            "hours_available": hours_value,
+        }
+        return cleaned_data
+
+
+class ScheduleAdjustmentRequestForm(BaseScheduleBlocksForm, forms.ModelForm):
+    schedule_day_config = [("request", "Requested schedule", None)]
+
+    requested_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+    request_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    request_start = HalfHourTimeField(label="Requested start", widget=forms.HiddenInput())
+    request_end = HalfHourTimeField(label="Requested end", widget=forms.HiddenInput())
+    request_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+
+    class Meta:
+        model = ScheduleAdjustmentRequest
+        fields = ["requested_date", "note"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["requested_date"].label = "Date to adjust"
+        self.fields["requested_date"].help_text = "Choose the specific date you need to change."
+        self.fields["note"].label = "Why this needs to change"
+        self.fields["note"].help_text = "Optional. Add context for the supervisor reviewing this request."
+        if self.instance.pk and not self.initial.get("request_segments"):
+            blocks = [
+                (block.start_time, block.end_time)
+                for block in self.instance.blocks.order_by("position", "start_time", "end_time", "pk")
+            ]
+            self.initial["request_segments"] = _serialize_schedule_segments(blocks)
+            start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+            self.initial["request_start"] = start_value
+            self.initial["request_end"] = end_value
+            self.initial["request_hours"] = hours_value
+
+    def clean(self):
+        cleaned_data = super().clean()
+        blocks = self._parse_segments(cleaned_data.get("request_segments"), field_name="request_segments", label="Requested schedule")
+        if blocks is None:
+            return cleaned_data
+        start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+        cleaned_data["request_segments"] = _serialize_schedule_segments(blocks)
+        cleaned_data["request_start"] = start_value
+        cleaned_data["request_end"] = end_value
+        cleaned_data["request_hours"] = hours_value
         cleaned_data["schedule_blocks"] = [
             {"start_time": start_block, "end_time": end_block}
             for start_block, end_block in blocks

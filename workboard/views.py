@@ -2,6 +2,8 @@ from .services import TaskParsingService
 
 from .help_views import admin_guide_view
 from .people_views import (
+    schedule_adjustment_request_list_view,
+    schedule_adjustment_request_view,
     student_supervisor_create_view,
     supervisor_create_view,
     supervisor_delete_view,

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Schedule Requests | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading split-heading">
+    <div>
+        <h1>Schedule requests</h1>
+        <p>Review student schedule adjustment requests and apply them directly as temporary schedule overrides when approved.</p>
+    </div>
+    <div class="inline-form">
+        <a class="button-link" href="{% url 'worker-list' %}">Back to workers</a>
+    </div>
+</section>
+<section class="stack">
+    <article class="card">
+        <h2>Pending requests</h2>
+        <div class="stack">
+            {% for adjustment_request in pending_requests %}
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ adjustment_request.profile.display_name }}</strong> | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
+                        <a class="button-link button-link-secondary" href="{% url 'worker-schedule' adjustment_request.profile.pk %}?override_date={{ adjustment_request.requested_date|date:'Y-m-d' }}">Open schedule</a>
+                    </div>
+                    <p class="meta">Requested by {{ adjustment_request.requested_by.display_label }} on {{ adjustment_request.created_at|date:"M j, Y g:i A" }}</p>
+                    <p>{{ adjustment_request.note|default:"No note" }}</p>
+                    <div class="inline-form">
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="apply_request">
+                            <input type="hidden" name="schedule_request_id" value="{{ adjustment_request.pk }}">
+                            <button type="submit">Apply as temporary override</button>
+                        </form>
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="decline_request">
+                            <input type="hidden" name="schedule_request_id" value="{{ adjustment_request.pk }}">
+                            <button type="submit" class="button-link button-link-secondary">Decline</button>
+                        </form>
+                    </div>
+                </article>
+            {% empty %}
+                <p class="empty-state">No pending schedule requests.</p>
+            {% endfor %}
+        </div>
+    </article>
+    <article class="card">
+        <h2>Recently handled</h2>
+        <div class="stack">
+            {% for adjustment_request in recent_requests %}
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ adjustment_request.profile.display_name }}</strong> | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
+                        <span class="meta">{{ adjustment_request.get_status_display }}</span>
+                    </div>
+                    <p>{{ adjustment_request.note|default:"No note" }}</p>
+                    <p class="meta">Handled by {{ adjustment_request.reviewed_by.display_label|default:"TaskForge" }}{% if adjustment_request.reviewed_at %} on {{ adjustment_request.reviewed_at|date:"M j, Y g:i A" }}{% endif %}.</p>
+                </article>
+            {% empty %}
+                <p class="empty-state">No handled schedule requests yet.</p>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

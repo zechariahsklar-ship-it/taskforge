@@ -73,6 +73,12 @@ class Weekday(models.IntegerChoices):
     SUNDAY = 6, "Sunday"
 
 
+class ScheduleAdjustmentRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPLIED = "applied", "Applied"
+    DECLINED = "declined", "Declined"
+
+
 class User(AbstractUser):
     role = models.CharField(max_length=32, choices=UserRole.choices, default=UserRole.STUDENT_WORKER)
     must_change_password = models.BooleanField(default=False)
@@ -209,6 +215,62 @@ class StudentScheduleOverrideBlock(models.Model):
 
     def __str__(self):
         return f"{self.schedule_override.profile.display_name} - {self.display_label}"
+
+    @property
+    def display_label(self):
+        return _format_time_window(self.start_time, self.end_time)
+
+
+class ScheduleAdjustmentRequest(models.Model):
+    profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="schedule_adjustment_requests")
+    requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="schedule_adjustment_requests")
+    requested_date = models.DateField()
+    note = models.CharField(max_length=255, blank=True)
+    status = models.CharField(
+        max_length=16,
+        choices=ScheduleAdjustmentRequestStatus.choices,
+        default=ScheduleAdjustmentRequestStatus.PENDING,
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_schedule_adjustment_requests",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    applied_override = models.ForeignKey(
+        StudentScheduleOverride,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="applied_schedule_adjustment_requests",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["status", "requested_date", "-created_at", "-pk"]
+
+    def __str__(self):
+        return f"{self.profile.display_name} request for {self.requested_date}"
+
+    @property
+    def block_summary(self):
+        return _ordered_block_summary(self.blocks)
+
+
+class ScheduleAdjustmentRequestBlock(models.Model):
+    schedule_request = models.ForeignKey(ScheduleAdjustmentRequest, on_delete=models.CASCADE, related_name="blocks")
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["schedule_request__requested_date", "position", "start_time", "end_time", "pk"]
+
+    def __str__(self):
+        return f"{self.schedule_request.profile.display_name} - {self.display_label}"
 
     @property
     def display_label(self):

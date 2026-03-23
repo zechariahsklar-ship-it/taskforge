@@ -2,14 +2,14 @@ from datetime import date
 
 from django.contrib import messages
 from django.db.models import Count, Q, Sum
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from .forms import StudentScheduleOverrideForm, StudentWorkerProfileForm, SupervisorForm, SupervisorStudentPasswordResetForm, WeeklyAvailabilityForm
-from .models import RecurringTaskTemplate, StudentWorkerProfile, StudentScheduleOverride, Task, TaskStatus, User, UserRole
-from .task_views import _save_schedule_override, _save_weekly_schedule, _serialize_blocks_for_initial, _weekly_schedule_initial, supervisor_required
+from .forms import ScheduleAdjustmentRequestForm, StudentScheduleOverrideForm, StudentWorkerProfileForm, SupervisorForm, SupervisorStudentPasswordResetForm, WeeklyAvailabilityForm
+from .models import RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestBlock, ScheduleAdjustmentRequestStatus, StudentScheduleOverride, StudentScheduleOverrideBlock, StudentWorkerProfile, Task, TaskStatus, User, UserRole
+from .task_views import _save_schedule_override, _save_weekly_schedule, _serialize_blocks_for_initial, _weekly_schedule_initial, app_login_required, supervisor_required
 
 
 @supervisor_required
@@ -201,6 +201,127 @@ def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
         "remove_confirm": "Remove this student? Assigned tasks will be reassigned to you.",
         "success_label": "Worker updated.",
     }
+
+
+def _current_worker_profile_for_request(request):
+    if request.user.role not in UserRole.worker_roles():
+        return None
+    return StudentWorkerProfile.objects.select_related("user").filter(user=request.user).first()
+
+
+def _save_schedule_adjustment_request(adjustment_request: ScheduleAdjustmentRequest, request_form: ScheduleAdjustmentRequestForm) -> ScheduleAdjustmentRequest:
+    adjustment_request.blocks.all().delete()
+    for position, block in enumerate(request_form.cleaned_data["schedule_blocks"], start=1):
+        ScheduleAdjustmentRequestBlock.objects.create(
+            schedule_request=adjustment_request,
+            start_time=block["start_time"],
+            end_time=block["end_time"],
+            position=position,
+        )
+    return adjustment_request
+
+
+def _apply_schedule_adjustment_request(adjustment_request: ScheduleAdjustmentRequest, *, acted_by: User) -> StudentScheduleOverride:
+    note_prefix = f"Applied from request by {adjustment_request.requested_by.display_label}"
+    override_note = f"{note_prefix}: {adjustment_request.note}" if adjustment_request.note else note_prefix
+    schedule_override, _ = StudentScheduleOverride.objects.update_or_create(
+        profile=adjustment_request.profile,
+        override_date=adjustment_request.requested_date,
+        defaults={
+            "note": override_note,
+            "created_by": acted_by,
+        },
+    )
+    schedule_override.blocks.all().delete()
+    for position, block in enumerate(adjustment_request.blocks.order_by("position", "start_time", "end_time", "pk"), start=1):
+        StudentScheduleOverrideBlock.objects.create(
+            schedule_override=schedule_override,
+            start_time=block.start_time,
+            end_time=block.end_time,
+            position=position,
+        )
+    adjustment_request.status = ScheduleAdjustmentRequestStatus.APPLIED
+    adjustment_request.reviewed_by = acted_by
+    adjustment_request.reviewed_at = timezone.now()
+    adjustment_request.applied_override = schedule_override
+    adjustment_request.save(update_fields=["status", "reviewed_by", "reviewed_at", "applied_override", "updated_at"])
+    return schedule_override
+
+
+@app_login_required
+def schedule_adjustment_request_view(request):
+    profile = _current_worker_profile_for_request(request)
+    if profile is None:
+        return HttpResponseForbidden("Student worker access required.")
+
+    request_form = ScheduleAdjustmentRequestForm(request.POST or None)
+    if request.method == "POST" and request_form.is_valid():
+        adjustment_request = request_form.save(commit=False)
+        adjustment_request.profile = profile
+        adjustment_request.requested_by = request.user
+        adjustment_request.save()
+        _save_schedule_adjustment_request(adjustment_request, request_form)
+        messages.success(request, f"Schedule adjustment request submitted for {adjustment_request.requested_date}.")
+        return redirect("schedule-adjustment-request")
+
+    submitted_requests = profile.schedule_adjustment_requests.select_related("reviewed_by", "applied_override").prefetch_related("blocks").all()
+    return render(
+        request,
+        "workboard/schedule_adjustment_request.html",
+        {
+            "profile": profile,
+            "request_form": request_form,
+            "weekly_form": request_form,
+            "submitted_requests": submitted_requests,
+        },
+    )
+
+
+@supervisor_required
+def schedule_adjustment_request_list_view(request):
+    if request.method == "POST":
+        adjustment_request = get_object_or_404(
+            ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "applied_override").prefetch_related("blocks"),
+            pk=request.POST.get("schedule_request_id"),
+        )
+        if adjustment_request.status != ScheduleAdjustmentRequestStatus.PENDING:
+            messages.error(request, "That schedule request has already been handled.")
+            return redirect("schedule-adjustment-requests")
+
+        action = request.POST.get("action")
+        if action == "apply_request":
+            schedule_override = _apply_schedule_adjustment_request(adjustment_request, acted_by=request.user)
+            messages.success(request, f"Applied the requested schedule for {adjustment_request.profile.display_name} on {schedule_override.override_date}.")
+            return redirect("schedule-adjustment-requests")
+        if action == "decline_request":
+            adjustment_request.status = ScheduleAdjustmentRequestStatus.DECLINED
+            adjustment_request.reviewed_by = request.user
+            adjustment_request.reviewed_at = timezone.now()
+            adjustment_request.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+            messages.success(request, f"Declined the request for {adjustment_request.profile.display_name} on {adjustment_request.requested_date}.")
+            return redirect("schedule-adjustment-requests")
+        return HttpResponseBadRequest("Unknown action.")
+
+    pending_requests = list(
+        ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
+        .prefetch_related("blocks")
+        .filter(status=ScheduleAdjustmentRequestStatus.PENDING)
+        .order_by("requested_date", "created_at", "pk")
+    )
+    recent_requests = list(
+        ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
+        .prefetch_related("blocks")
+        .exclude(status=ScheduleAdjustmentRequestStatus.PENDING)
+        .order_by("-reviewed_at", "-updated_at", "-pk")[:20]
+    )
+    return render(
+        request,
+        "workboard/schedule_adjustment_request_list.html",
+        {
+            "pending_requests": pending_requests,
+            "recent_requests": recent_requests,
+        },
+    )
 
 
 @supervisor_required

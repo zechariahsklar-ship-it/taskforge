@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Schedule Adjustment | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Request a schedule adjustment</h1>
+        <p>Use this when your schedule needs to change for one specific date. Draw the requested hours in 30-minute blocks, or leave the schedule empty if you need the day off.</p>
+    </div>
+</section>
+<section class="stack">
+    <article class="card">
+        <h2>New request</h2>
+        <form method="post">
+            {% csrf_token %}
+            <p>
+                <label for="{{ request_form.requested_date.id_for_label }}">{{ request_form.requested_date.label }}</label>
+                {{ request_form.requested_date }}
+                {% if request_form.requested_date.help_text %}<span class="meta">{{ request_form.requested_date.help_text }}</span>{% endif %}
+                {% if request_form.requested_date.errors %}<span class="meta">{{ request_form.requested_date.errors }}</span>{% endif %}
+            </p>
+            <p>
+                <label for="{{ request_form.note.id_for_label }}">{{ request_form.note.label }}</label>
+                {{ request_form.note }}
+                {% if request_form.note.help_text %}<span class="meta">{{ request_form.note.help_text }}</span>{% endif %}
+                {% if request_form.note.errors %}<span class="meta">{{ request_form.note.errors }}</span>{% endif %}
+            </p>
+            {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=request_form picker_title="Requested schedule" picker_help_text="Click or drag across the calendar to show the hours you are asking for on that date." clear_all_label="Clear requested schedule" picker_id="schedule-request-picker" %}
+            <button type="submit">Send request</button>
+        </form>
+    </article>
+    <article class="card">
+        <h2>Your requests</h2>
+        <div class="stack">
+            {% for adjustment_request in submitted_requests %}
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ adjustment_request.requested_date }}</strong> | {{ adjustment_request.block_summary }}</p>
+                        <span class="meta">{{ adjustment_request.get_status_display }}</span>
+                    </div>
+                    <p>{{ adjustment_request.note|default:"No note" }}</p>
+                    {% if adjustment_request.reviewed_by %}
+                        <p class="meta">Reviewed by {{ adjustment_request.reviewed_by.display_label }}{% if adjustment_request.reviewed_at %} on {{ adjustment_request.reviewed_at|date:"M j, Y g:i A" }}{% endif %}.</p>
+                    {% endif %}
+                </article>
+            {% empty %}
+                <p class="empty-state">No schedule adjustment requests yet.</p>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

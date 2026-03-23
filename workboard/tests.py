@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -1615,6 +1615,94 @@ class TaskEstimateFeedbackTests(TestCase):
         self.assertEqual(feedback.original_estimated_minutes, 30)
         self.assertEqual(feedback.corrected_estimated_minutes, 75)
         self.assertEqual(feedback.source, "task_edit")
+
+
+class ScheduleAdjustmentRequestTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="schedule-request-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.student = User.objects.create_user(username="schedule-request-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.student_supervisor = User.objects.create_user(username="schedule-request-lead", password="password123", role=UserRole.STUDENT_SUPERVISOR)
+        self.profile = StudentWorkerProfile.objects.create(
+            user=self.student,
+            display_name="Schedule Student",
+            email="schedule-student@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+        self.student_supervisor_profile = StudentWorkerProfile.objects.create(
+            user=self.student_supervisor,
+            display_name="Schedule Lead",
+            email="schedule-lead@example.com",
+            normal_shift_availability="",
+            max_hours_per_day=4,
+        )
+
+    def test_student_can_submit_schedule_adjustment_request(self):
+        self.client.force_login(self.student)
+        response = self.client.post(
+            reverse("schedule-adjustment-request"),
+            {
+                "requested_date": "2026-03-24",
+                "note": "Need to swap tutoring hours.",
+                "request_segments": json.dumps([["13:00", "15:00"], ["16:00", "17:00"]]),
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        adjustment_request = ScheduleAdjustmentRequest.objects.get(profile=self.profile)
+        self.assertEqual(adjustment_request.requested_by, self.student)
+        self.assertEqual(adjustment_request.status, ScheduleAdjustmentRequestStatus.PENDING)
+        self.assertEqual(adjustment_request.blocks.count(), 2)
+        self.assertContains(response, "Schedule adjustment request submitted for 2026-03-24")
+        self.assertContains(response, "Pending")
+
+    def test_student_supervisor_can_open_schedule_adjustment_page(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("schedule-adjustment-request"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Request a schedule adjustment")
+
+    def test_supervisor_can_apply_schedule_request_to_temporary_override(self):
+        adjustment_request = ScheduleAdjustmentRequest.objects.create(
+            profile=self.profile,
+            requested_by=self.student,
+            requested_date=date(2026, 3, 24),
+            note="Need to work the afternoon instead.",
+        )
+        ScheduleAdjustmentRequest.objects.filter(pk=adjustment_request.pk)
+        adjustment_request.blocks.create(start_time=time(13, 0), end_time=time(15, 0), position=1)
+        adjustment_request.blocks.create(start_time=time(16, 0), end_time=time(17, 0), position=2)
+
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("schedule-adjustment-requests"),
+            {"action": "apply_request", "schedule_request_id": str(adjustment_request.pk)},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        adjustment_request.refresh_from_db()
+        self.assertEqual(adjustment_request.status, ScheduleAdjustmentRequestStatus.APPLIED)
+        self.assertEqual(adjustment_request.reviewed_by, self.supervisor)
+        self.assertIsNotNone(adjustment_request.applied_override)
+        schedule_override = StudentScheduleOverride.objects.get(profile=self.profile, override_date=date(2026, 3, 24))
+        self.assertEqual(schedule_override.blocks.count(), 2)
+        self.assertIn("Applied from request by Schedule Student", schedule_override.note)
+        self.assertTrue(
+            TaskAssignmentService.user_is_available_for_window(
+                self.student,
+                scheduled_date=date(2026, 3, 24),
+                scheduled_start_time=time(13, 30),
+                scheduled_end_time=time(14, 30),
+            )
+        )
+
+    def test_non_supervisor_cannot_open_schedule_request_review_page(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("schedule-adjustment-requests"))
+        self.assertEqual(response.status_code, 403)
 
 
 class PeopleManagementTests(TestCase):

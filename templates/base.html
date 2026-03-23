@@ -19,7 +19,11 @@
             <nav class="site-nav">
                 <a href="{% url 'board' %}">Board</a>
                 <a href="{% url 'my-tasks' %}">My Tasks</a>
+                {% if request.user.is_worker_role %}
+                    <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
+                {% endif %}
                 {% if request.user.is_supervisor %}
+                    <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
                     <a href="{% url 'task-intake' %}">Intake</a>
                     <a href="{% url 'task-create' %}">New Task</a>
                     <a href="{% url 'worker-list' %}">Workers</a>
