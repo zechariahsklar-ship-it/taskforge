@@ -23,11 +23,11 @@
                     <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
                 {% endif %}
                 {% if request.user.is_supervisor %}
-                    <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
                     <a href="{% url 'task-intake' %}">Intake</a>
                     <a href="{% url 'task-create' %}">New Task</a>
-                    <a href="{% url 'worker-list' %}">Workers</a>
                     <a href="{% url 'recurring-list' %}">Recurring</a>
+                    <a href="{% url 'worker-list' %}">Workers</a>
+                    <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
                     <a href="{% url 'reports' %}">Reports</a>
                     <a href="{% url 'admin-guide' %}">Guide</a>
                 {% endif %}

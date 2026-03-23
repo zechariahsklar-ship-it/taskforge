@@ -575,10 +575,6 @@ def _active_task_filter_labels(filter_form: TaskBoardFilterForm) -> list[str]:
         labels.append(f"Priority: {cleaned['priority'].title()}")
     if cleaned.get("due_scope"):
         labels.append(f"Due date: {dict(filter_form.fields['due_scope'].choices).get(cleaned['due_scope'], cleaned['due_scope'])}")
-    if cleaned.get("schedule_scope"):
-        labels.append(f"Schedule: {dict(filter_form.fields['schedule_scope'].choices).get(cleaned['schedule_scope'], cleaned['schedule_scope'])}")
-    if cleaned.get("completion_scope"):
-        labels.append(f"Status: {dict(filter_form.fields['completion_scope'].choices).get(cleaned['completion_scope'], cleaned['completion_scope'])}")
     assigned_to = cleaned.get("assigned_to")
     if assigned_to:
         labels.append(f"Teammate: {assigned_to.display_label}")
@@ -631,20 +627,6 @@ def _apply_task_board_filters(queryset, filter_form: TaskBoardFilterForm):
     elif due_scope == "none":
         filtered = filtered.filter(due_date__isnull=True)
 
-    schedule_scope = cleaned.get("schedule_scope")
-    if schedule_scope == "today":
-        filtered = filtered.exclude(status=TaskStatus.DONE).filter(scheduled_date=today)
-    elif schedule_scope == "scheduled":
-        filtered = filtered.filter(scheduled_date__isnull=False)
-    elif schedule_scope == "unscheduled":
-        filtered = filtered.filter(scheduled_date__isnull=True)
-
-    completion_scope = cleaned.get("completion_scope")
-    if completion_scope == "open":
-        filtered = filtered.exclude(status=TaskStatus.DONE)
-    elif completion_scope == "done":
-        filtered = filtered.filter(status=TaskStatus.DONE)
-
     assigned_to = cleaned.get("assigned_to")
     if assigned_to:
         filtered = filtered.filter(_task_membership_filter(assigned_to))
@@ -652,67 +634,21 @@ def _apply_task_board_filters(queryset, filter_form: TaskBoardFilterForm):
     return filtered.distinct(), _active_task_filter_labels(filter_form)
 
 
-def _build_task_alerts(*, user: User, task_queryset, current_view: str) -> list[dict]:
+def _build_due_today_warning(*, task_queryset, current_view: str):
     today = timezone.localdate()
-    open_tasks = task_queryset.exclude(status=TaskStatus.DONE).distinct()
-    alerts = []
-
-    overdue_count = open_tasks.filter(due_date__lt=today).count()
-    if overdue_count:
-        alerts.append(
-            {
-                "title": f"{overdue_count} overdue task{'s' if overdue_count != 1 else ''}",
-                "detail": "These tasks still need attention.",
-                "href": _filter_query_url(current_view, saved_view="overdue"),
-                "cta": "Open overdue work",
-            }
-        )
-
-    due_today_count = open_tasks.filter(Q(due_date=today) | Q(scheduled_date=today)).distinct().count()
-    if due_today_count:
-        alerts.append(
-            {
-                "title": f"{due_today_count} task{'s' if due_today_count != 1 else ''} due or scheduled today",
-                "detail": "This is today's work window.",
-                "href": _filter_query_url(current_view, saved_view="today"),
-                "cta": "Open today's focus",
-            }
-        )
-
-    waiting_count = open_tasks.filter(status=TaskStatus.WAITING).count()
-    if waiting_count:
-        alerts.append(
-            {
-                "title": f"{waiting_count} waiting or blocked task{'s' if waiting_count != 1 else ''}",
-                "detail": "Something is stalled and may need follow-up.",
-                "href": _filter_query_url(current_view, saved_view="waiting"),
-                "cta": "Open waiting tasks",
-            }
-        )
-
-    if user.can_view_full_board:
-        unassigned_count = open_tasks.filter(assigned_to__isnull=True).count()
-        if unassigned_count:
-            alerts.append(
-                {
-                    "title": f"{unassigned_count} unassigned task{'s' if unassigned_count != 1 else ''}",
-                    "detail": "These tasks still need a main assignee.",
-                    "href": _filter_query_url(current_view, completion_scope="open"),
-                    "cta": "Review open work",
-                }
-            )
-        recurring_due_count = RecurringTaskTemplate.objects.filter(active=True, next_run_date__lte=today + timedelta(days=2)).count()
-        if recurring_due_count:
-            alerts.append(
-                {
-                    "title": f"{recurring_due_count} recurring task{'s' if recurring_due_count != 1 else ''} due soon",
-                    "detail": "Upcoming recurring work is about to cycle back onto the board.",
-                    "href": reverse("recurring-list"),
-                    "cta": "Open recurring tasks",
-                }
-            )
-
-    return alerts[:4]
+    due_today_count = (
+        task_queryset.exclude(status=TaskStatus.DONE)
+        .filter(Q(due_date=today) | Q(scheduled_date=today))
+        .distinct()
+        .count()
+    )
+    if not due_today_count:
+        return None
+    return {
+        "count": due_today_count,
+        "href": _filter_query_url(current_view, saved_view="today"),
+        "label": f"{due_today_count} task{'s' if due_today_count != 1 else ''} due or scheduled today",
+    }
 
 
 @app_login_required
@@ -740,7 +676,7 @@ def board_view(request):
             "filter_form": filter_form,
             "active_filters": active_filters,
             "task_count": len(ordered_tasks),
-            "board_alerts": _build_task_alerts(user=request.user, task_queryset=visible_tasks, current_view="board"),
+            "due_today_warning": _build_due_today_warning(task_queryset=visible_tasks, current_view="board"),
         },
     )
 
@@ -809,7 +745,7 @@ def my_tasks_view(request):
             "filter_form": filter_form,
             "active_filters": active_filters,
             "task_count": len(ordered_tasks),
-            "board_alerts": _build_task_alerts(user=request.user, task_queryset=visible_tasks, current_view="my-tasks"),
+            "due_today_warning": _build_due_today_warning(task_queryset=visible_tasks, current_view="my-tasks"),
         },
     )
 

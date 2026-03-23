@@ -1190,14 +1190,16 @@ class BoardFilterAndAlertTests(TestCase):
         )
         self.client.force_login(self.supervisor)
 
-    def test_board_shows_alert_cards_for_overdue_and_recurring_work(self):
+    def test_board_shows_compact_due_today_warning(self):
         with patch("workboard.task_views.timezone.localdate", return_value=date(2026, 3, 20)):
             response = self.client.get(reverse("board"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "1 overdue task")
-        self.assertContains(response, "1 recurring task due soon")
-        self.assertContains(response, reverse("recurring-list"))
+        self.assertContains(response, "Warning:")
+        self.assertContains(response, "1 task due or scheduled today")
+        self.assertContains(response, reverse("board") + "?saved_view=today")
+        self.assertNotContains(response, "1 overdue task")
+        self.assertNotContains(response, "1 recurring task due soon")
         self.assertContains(response, "Saved view")
         self.assertContains(response, "Search tasks")
 
@@ -1216,6 +1218,15 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Overdue archive cleanup")
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
+
+    def test_board_filter_bar_hides_schedule_and_status_controls(self):
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'name="schedule_scope"', html=False)
+        self.assertNotContains(response, 'name="completion_scope"', html=False)
+        self.assertNotContains(response, '>Schedule</label>', html=False)
+        self.assertNotContains(response, '>Status</label>', html=False)
 
 
 class MyTasksViewOrderingTests(TestCase):
@@ -1280,6 +1291,30 @@ class MyTasksViewOrderingTests(TestCase):
         grouped_tasks = response.context["grouped_tasks"]
         waiting_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.WAITING)
         self.assertIn(waiting_task, waiting_column["tasks"])
+
+    def test_my_tasks_shows_compact_due_today_warning(self):
+        self.first_task.due_date = date(2026, 3, 20)
+        self.first_task.save(update_fields=["due_date"])
+        self.client.force_login(self.student)
+
+        with patch("workboard.task_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Warning:")
+        self.assertContains(response, "1 task due or scheduled today")
+        self.assertContains(response, reverse("my-tasks") + "?saved_view=today")
+        self.assertNotContains(response, "1 overdue task")
+
+    def test_my_tasks_filter_bar_hides_schedule_and_status_controls(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'name="schedule_scope"', html=False)
+        self.assertNotContains(response, 'name="completion_scope"', html=False)
+        self.assertNotContains(response, '>Schedule</label>', html=False)
+        self.assertNotContains(response, '>Status</label>', html=False)
 
 
 class StudentSupervisorPermissionsTests(TestCase):
@@ -1932,12 +1967,15 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'class="weekly-schedule-hidden-fields"')
         self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
         self.assertContains(create_response, 'data-copy-day="monday"')
+        self.assertContains(create_response, 'data-clear-day="monday"')
         self.assertNotContains(details_response, 'data-weekly-schedule-picker')
         self.assertContains(details_response, 'Remove student')
         self.assertContains(schedule_response, 'data-weekly-schedule-picker')
         self.assertContains(schedule_response, 'Weekly schedule', count=1)
         self.assertContains(schedule_response, 'Temporary schedule change')
         self.assertContains(schedule_response, 'data-load-normal-schedule')
+        self.assertNotContains(schedule_response, 'data-copy-day="monday"')
+        self.assertNotContains(schedule_response, 'data-clear-day="monday"')
         self.assertNotContains(schedule_response, 'Click or drag across the calendar')
         self.assertNotContains(schedule_response, 'Temporary hour adjustment')
         self.assertNotContains(schedule_response, 'Existing hour adjustments')

@@ -838,6 +838,18 @@ tr:hover td {
     margin: 0;
 }
 
+.weekly-schedule-summary-head h3,
+.weekly-schedule-summary-card,
+.weekly-schedule-summary-text {
+    min-width: 0;
+}
+
+.weekly-schedule-summary-text {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
 .weekly-schedule-errors {
     display: grid;
     gap: 0.2rem;
@@ -1188,19 +1200,19 @@ tr:hover td {
     color: #ffffff !important;
 }
 
-.board-alert-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 1rem;
+.task-due-warning {
     margin-bottom: 1rem;
+    border-color: #8f2433;
+    background: #33131a;
+    color: #ffd8de;
 }
 
-.board-alert-card {
-    display: grid;
-    gap: 0.75rem;
+.task-due-warning a {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: underline;
 }
 
-.board-alert-card h2,
 .board-filter-card h2 {
     margin: 0;
 }

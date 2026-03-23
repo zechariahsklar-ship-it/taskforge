@@ -21,13 +21,15 @@
             <article class="weekly-schedule-summary-card" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
                 <div class="weekly-schedule-summary-head">
                     <h3>{{ row.label }}</h3>
-                    <div class="weekly-schedule-day-actions">
-                        {% if day_rows|length > 1 %}
-                            <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="weekdays">Weekdays</button>
-                            <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="all">All</button>
-                        {% endif %}
-                        <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
-                    </div>
+                    {% if show_day_actions != False %}
+                        <div class="weekly-schedule-day-actions">
+                            {% if day_rows|length > 1 %}
+                                <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="weekdays">Weekdays</button>
+                                <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="all">All</button>
+                            {% endif %}
+                            <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
+                        </div>
+                    {% endif %}
                 </div>
                 <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
                 {% if row.segments.errors %}

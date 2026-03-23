@@ -52,19 +52,6 @@ TASK_DUE_SCOPE_CHOICES = [
     ("none", "No due date"),
 ]
 
-TASK_SCHEDULE_SCOPE_CHOICES = [
-    ("", "Any schedule"),
-    ("today", "Scheduled today"),
-    ("scheduled", "Has a schedule"),
-    ("unscheduled", "No schedule"),
-]
-
-TASK_COMPLETION_SCOPE_CHOICES = [
-    ("", "All statuses"),
-    ("open", "Open work"),
-    ("done", "Done"),
-]
-
 
 def _format_time_label(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
@@ -520,8 +507,6 @@ class TaskBoardFilterForm(StyledFormMixin, forms.Form):
     q = forms.CharField(required=False, label="Search")
     priority = forms.ChoiceField(required=False, choices=[("", "Any priority"), *Priority.choices])
     due_scope = forms.ChoiceField(required=False, choices=TASK_DUE_SCOPE_CHOICES)
-    schedule_scope = forms.ChoiceField(required=False, choices=TASK_SCHEDULE_SCOPE_CHOICES)
-    completion_scope = forms.ChoiceField(required=False, choices=TASK_COMPLETION_SCOPE_CHOICES)
     assigned_to = forms.ModelChoiceField(required=False, queryset=User.objects.none())
 
     def __init__(self, *args, user=None, include_assignee=False, **kwargs):
@@ -532,8 +517,6 @@ class TaskBoardFilterForm(StyledFormMixin, forms.Form):
         self.fields["q"].widget.attrs.setdefault("placeholder", "Search by title or task details")
         self.fields["priority"].label = "Priority"
         self.fields["due_scope"].label = "Due date"
-        self.fields["schedule_scope"].label = "Schedule"
-        self.fields["completion_scope"].label = "Status"
 
         if include_assignee:
             self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True)
