@@ -229,6 +229,7 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
     schedule_day_config = []
 
     def day_rows(self):
+        override_summary_map = getattr(self, "override_summary_map", {})
         rows = []
         for prefix, label, *rest in self.schedule_day_config:
             rows.append(
@@ -237,6 +238,7 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
                     "label": label,
                     "segments": self[f"{prefix}_segments"],
                     "weekday": rest[0] if rest else "",
+                    "override_entries": override_summary_map.get(prefix, []),
                 }
             )
         return rows

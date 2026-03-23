@@ -18,7 +18,7 @@
     </div>
     <div class="weekly-schedule-summary-grid">
         {% for row in day_rows %}
-            <article class="weekly-schedule-summary-card" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
+            <article class="weekly-schedule-summary-card{% if row.override_entries %} is-temporary-override{% endif %}" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
                 <div class="weekly-schedule-summary-head">
                     <h3>{{ row.label }}</h3>
                     {% if show_day_actions != False %}
@@ -31,7 +31,18 @@
                         </div>
                     {% endif %}
                 </div>
-                <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
+                {% if row.override_entries %}
+                    <div class="meta weekly-schedule-override-summary">
+                        {% for entry in row.override_entries %}
+                            <p class="weekly-schedule-override-entry">
+                                <span class="weekly-schedule-override-date">{{ entry.date_label }}</span>
+                                <span class="weekly-schedule-override-details">{{ entry.summary_label }}</span>
+                            </p>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
+                {% endif %}
                 {% if row.segments.errors %}
                     <div class="weekly-schedule-errors">
                         {% for error in row.segments.errors %}<div class="meta">{{ error }}</div>{% endfor %}

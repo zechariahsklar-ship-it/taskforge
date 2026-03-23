@@ -1866,6 +1866,10 @@ class PeopleManagementTests(TestCase):
         schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
         self.assertEqual(schedule_override.blocks.count(), 2)
         self.assertEqual(schedule_override.block_summary, "2:00 PM - 4:00 PM, 6:00 PM - 7:00 PM")
+        self.assertContains(response, 'class="weekly-schedule-summary-card is-temporary-override" data-schedule-summary-card="monday"', html=False)
+        self.assertContains(response, "Mar 16, 2026")
+        self.assertContains(response, "2:00 PM - 4:00 PM, 6:00 PM - 7:00 PM (3 hrs)")
+        self.assertNotContains(response, 'data-schedule-summary-text="monday"')
         self.assertFalse(
             TaskAssignmentService.user_is_available_for_window(
                 self.student,
@@ -1923,6 +1927,9 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(response.status_code, 200)
         schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
         self.assertEqual(schedule_override.blocks.count(), 0)
+        self.assertContains(response, "Mar 16, 2026")
+        self.assertContains(response, "Off (0 hrs)")
+        self.assertNotContains(response, 'data-schedule-summary-text="monday"')
         self.assertFalse(
             TaskAssignmentService.user_is_available_for_window(
                 self.student,

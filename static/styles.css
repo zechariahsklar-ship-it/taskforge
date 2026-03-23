@@ -826,6 +826,13 @@ tr:hover td {
     box-shadow: 0 0 0 1px rgba(77, 120, 165, 0.22);
 }
 
+.weekly-schedule-summary-card.is-temporary-override,
+.weekly-schedule-summary-card.is-temporary-override.is-scheduled {
+    border-color: rgba(188, 72, 90, 0.92);
+    background: linear-gradient(180deg, rgba(74, 20, 28, 0.98) 0%, rgba(30, 11, 15, 0.98) 100%);
+    box-shadow: 0 0 0 1px rgba(188, 72, 90, 0.24);
+}
+
 .weekly-schedule-summary-head {
     display: flex;
     justify-content: space-between;
@@ -836,6 +843,36 @@ tr:hover td {
 .weekly-schedule-summary-head h3,
 .weekly-schedule-summary-text {
     margin: 0;
+}
+
+.weekly-schedule-summary-text {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.weekly-schedule-override-summary {
+    display: grid;
+    gap: 0.45rem;
+    color: #ffc6cf;
+}
+
+.weekly-schedule-override-entry {
+    margin: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.weekly-schedule-override-date {
+    display: block;
+    margin-bottom: 0.1rem;
+    color: #ffe1e6;
+    font-weight: 700;
+}
+
+.weekly-schedule-override-details {
+    display: block;
 }
 
 .weekly-schedule-summary-head h3,
@@ -1055,6 +1092,13 @@ tr:hover td {
     box-shadow: 0 0 0 1px rgba(77, 120, 165, 0.22);
 }
 
+.weekly-schedule-summary-card.is-temporary-override,
+.weekly-schedule-summary-card.is-temporary-override.is-scheduled {
+    border-color: rgba(188, 72, 90, 0.92);
+    background: linear-gradient(180deg, rgba(74, 20, 28, 0.98) 0%, rgba(30, 11, 15, 0.98) 100%);
+    box-shadow: 0 0 0 1px rgba(188, 72, 90, 0.24);
+}
+
 .weekly-schedule-summary-head {
     display: flex;
     justify-content: space-between;
@@ -1065,6 +1109,36 @@ tr:hover td {
 .weekly-schedule-summary-head h3,
 .weekly-schedule-summary-text {
     margin: 0;
+}
+
+.weekly-schedule-summary-text {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.weekly-schedule-override-summary {
+    display: grid;
+    gap: 0.45rem;
+    color: #ffc6cf;
+}
+
+.weekly-schedule-override-entry {
+    margin: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.weekly-schedule-override-date {
+    display: block;
+    margin-bottom: 0.1rem;
+    color: #ffe1e6;
+    font-weight: 700;
+}
+
+.weekly-schedule-override-details {
+    display: block;
 }
 
 .weekly-schedule-errors {

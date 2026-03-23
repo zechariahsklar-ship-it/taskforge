@@ -7,7 +7,15 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from .forms import ScheduleAdjustmentRequestForm, StudentScheduleOverrideForm, StudentWorkerProfileForm, SupervisorForm, SupervisorStudentPasswordResetForm, WeeklyAvailabilityForm
+from .forms import (
+    DAY_FIELD_CONFIG,
+    ScheduleAdjustmentRequestForm,
+    StudentScheduleOverrideForm,
+    StudentWorkerProfileForm,
+    SupervisorForm,
+    SupervisorStudentPasswordResetForm,
+    WeeklyAvailabilityForm,
+)
 from .models import RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestBlock, ScheduleAdjustmentRequestStatus, StudentScheduleOverride, StudentScheduleOverrideBlock, StudentWorkerProfile, Task, TaskStatus, User, UserRole
 from .task_views import _save_schedule_override, _save_weekly_schedule, _serialize_blocks_for_initial, _weekly_schedule_initial, app_login_required, supervisor_required
 
@@ -182,6 +190,48 @@ def _build_schedule_override_form(profile: StudentWorkerProfile, *, override_dat
     instance, initial = _schedule_override_form_initial(profile, override_date_value)
     return StudentScheduleOverrideForm(data=data, instance=instance, initial=initial, profile=profile)
 
+
+def _format_schedule_override_date(value: date) -> str:
+    return f"{value.strftime('%b')} {value.day}, {value.year}"
+
+
+def _block_minutes(start_time, end_time) -> int:
+    return ((end_time.hour * 60) + end_time.minute) - ((start_time.hour * 60) + start_time.minute)
+
+
+def _hours_summary_label(total_minutes: int) -> str:
+    hours = total_minutes / 60
+    label = str(int(hours)) if hours.is_integer() else f"{hours:.1f}".rstrip("0").rstrip(".")
+    suffix = "hr" if label == "1" else "hrs"
+    return f"{label} {suffix}"
+
+
+def _schedule_override_summary(blocks) -> str:
+    if not blocks:
+        return "Off (0 hrs)"
+    total_minutes = sum(_block_minutes(block.start_time, block.end_time) for block in blocks)
+    block_labels = ", ".join(block.display_label for block in blocks)
+    return f"{block_labels} ({_hours_summary_label(total_minutes)})"
+
+
+def _weekly_override_summary_map(schedule_overrides) -> dict[str, list[dict[str, str]]]:
+    weekday_prefix_map = {weekday: prefix for prefix, _label, weekday in DAY_FIELD_CONFIG}
+    summary_map: dict[str, list[dict[str, str]]] = {}
+    for schedule_override in schedule_overrides:
+        prefix = weekday_prefix_map.get(schedule_override.override_date.weekday())
+        if prefix is None:
+            continue
+        blocks = sorted(
+            schedule_override.blocks.all(),
+            key=lambda block: (block.position, block.start_time, block.end_time, block.pk),
+        )
+        summary_map.setdefault(prefix, []).append(
+            {
+                "date_label": _format_schedule_override_date(schedule_override.override_date),
+                "summary_label": _schedule_override_summary(blocks),
+            }
+        )
+    return summary_map
 
 def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
     if profile.user.role == UserRole.STUDENT_SUPERVISOR:
@@ -381,6 +431,9 @@ def worker_schedule_view(request, pk):
             messages.success(request, "Temporary schedule removed.")
             return redirect("worker-schedule", pk=profile.pk)
 
+    schedule_overrides = list(profile.schedule_overrides.prefetch_related("blocks").all())
+    weekly_form.override_summary_map = _weekly_override_summary_map(schedule_overrides)
+
     return render(
         request,
         "workboard/worker_availability.html",
@@ -388,7 +441,7 @@ def worker_schedule_view(request, pk):
             "profile": profile,
             "weekly_form": weekly_form,
             "schedule_override_form": schedule_override_form,
-            "schedule_overrides": profile.schedule_overrides.prefetch_related("blocks").all(),
+            "schedule_overrides": schedule_overrides,
             "selected_override_date": selected_override_date,
             **context_labels,
         },
