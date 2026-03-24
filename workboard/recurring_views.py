@@ -99,5 +99,16 @@ def recurring_template_edit_view(request, pk):
     return render(
         request,
         'workboard/recurring_template_form.html',
-        {'form': form, 'page_title': 'Edit recurring task', 'submit_label': 'Save changes'},
+        {'form': form, 'page_title': 'Edit recurring task', 'submit_label': 'Save changes', 'template_obj': template},
     )
+
+
+@supervisor_required
+def recurring_template_delete_view(request, pk):
+    if request.method != 'POST':
+        return HttpResponseBadRequest('POST required.')
+
+    template = get_object_or_404(RecurringTaskTemplate, pk=pk)
+    template.delete()
+    messages.success(request, 'Recurring task removed.')
+    return redirect('recurring-list')

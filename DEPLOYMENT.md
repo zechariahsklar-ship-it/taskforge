@@ -1,4 +1,4 @@
-# DigitalOcean Deployment
+﻿# DigitalOcean Deployment
 
 ## App Platform
 - Source: GitHub repo `zechariahsklar-ship-it/taskforge`
@@ -6,6 +6,12 @@
 - Environment: Python
 - Build command: `python manage.py collectstatic --noinput`
 - Run command: `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
+
+## Recurring Task Runner
+- The recurring rollover logic is handled by `python manage.py generate_recurring_tasks`.
+- `.do/app.yaml` now defines a DigitalOcean App Platform scheduled job named `recurring-runner`.
+- The schedule runs every 15 minutes with cron `*/15 * * * *` in `America/New_York`.
+- If your DigitalOcean app was created in the control panel, update the app spec or add the scheduled job in the App Platform UI so the live app actually uses this config.
 
 ## Database
 Use a managed PostgreSQL database.

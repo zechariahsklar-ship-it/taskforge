@@ -16,6 +16,7 @@ from .people_views import (
     worker_schedule_view,
 )
 from .recurring_views import (
+    recurring_template_delete_view,
     recurring_template_detail_view,
     recurring_template_edit_view,
     recurring_template_list_view,

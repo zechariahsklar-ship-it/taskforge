@@ -1,5 +1,28 @@
-name: taskforge
+﻿name: taskforge
 region: nyc
+envs:
+  - key: DJANGO_DEBUG
+    value: "False"
+  - key: DJANGO_ALLOWED_HOSTS
+    value: your-app-name.ondigitalocean.app
+  - key: DJANGO_CSRF_TRUSTED_ORIGINS
+    value: https://your-app-name.ondigitalocean.app
+  - key: DJANGO_TIME_ZONE
+    value: America/New_York
+  - key: USE_SQLITE
+    value: "False"
+  - key: POSTGRES_SSL_REQUIRE
+    value: "True"
+  - key: USE_MOCK_TASK_PARSER
+    value: "False"
+  - key: DJANGO_SECRET_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: replace-me
+  - key: DATABASE_URL
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: ${taskforge-db.DATABASE_URL}
 services:
   - name: web
     environment_slug: python
@@ -13,29 +36,21 @@ services:
     http_port: 8080
     instance_count: 1
     instance_size_slug: basic-xxs
-    envs:
-      - key: DJANGO_DEBUG
-        value: "False"
-      - key: DJANGO_ALLOWED_HOSTS
-        value: your-app-name.ondigitalocean.app
-      - key: DJANGO_CSRF_TRUSTED_ORIGINS
-        value: https://your-app-name.ondigitalocean.app
-      - key: DJANGO_TIME_ZONE
-        value: America/New_York
-      - key: USE_SQLITE
-        value: "False"
-      - key: POSTGRES_SSL_REQUIRE
-        value: "True"
-      - key: USE_MOCK_TASK_PARSER
-        value: "False"
-      - key: DJANGO_SECRET_KEY
-        scope: RUN_AND_BUILD_TIME
-        type: SECRET
-        value: replace-me
-      - key: DATABASE_URL
-        scope: RUN_AND_BUILD_TIME
-        type: SECRET
-        value: ${taskforge-db.DATABASE_URL}
+jobs:
+  - name: recurring-runner
+    environment_slug: python
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: zechariahsklar-ship-it/taskforge
+    source_dir: /
+    kind: SCHEDULED
+    schedule:
+      cron: "*/15 * * * *"
+      time_zone: America/New_York
+    run_command: python manage.py generate_recurring_tasks
+    instance_count: 1
+    instance_size_slug: basic-xxs
 databases:
   - name: taskforge-db
     engine: PG

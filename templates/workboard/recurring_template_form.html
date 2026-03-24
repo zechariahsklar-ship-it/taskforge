@@ -113,6 +113,16 @@
         </section>
         <button type="submit">{{ submit_label|default:"Save template" }}</button>
     </form>
+    {% if template_obj %}
+        <div class="task-delete-form">
+            <h2>Delete recurring task</h2>
+            <p class="meta">Use this only when this recurring task should no longer generate new work.</p>
+            <form method="post" action="{% url 'recurring-delete' template_obj.pk %}" onsubmit="return window.confirm('Delete this recurring task? Existing generated tasks will stay on the board.');">
+                {% csrf_token %}
+                <button type="submit" class="task-delete-button">Delete recurring task</button>
+            </form>
+        </div>
+    {% endif %}
 </section>
 <script>
     (function () {

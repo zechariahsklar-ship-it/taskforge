@@ -21,6 +21,7 @@ urlpatterns = [
     path("recurring/new/", views.recurring_template_list_view, name="recurring-create"),
     path("recurring/<int:pk>/", views.recurring_template_detail_view, name="recurring-detail"),
     path("recurring/<int:pk>/edit/", views.recurring_template_edit_view, name="recurring-edit"),
+    path("recurring/<int:pk>/delete/", views.recurring_template_delete_view, name="recurring-delete"),
     path("recurring/<int:pk>/run-now/", views.recurring_template_run_now_view, name="recurring-run-now"),
     path("recurring/<int:pk>/move/", views.recurring_template_move_view, name="recurring-move"),
     path("reports/", views.reports_view, name="reports"),

@@ -309,7 +309,29 @@ class RecurringTaskListViewTests(TestCase):
         self.assertEqual(edit_response.status_code, 200)
         self.assertContains(edit_response, "Edit recurring task")
         self.assertContains(edit_response, "Save changes")
+        self.assertContains(edit_response, reverse("recurring-delete", args=[self.first_template.pk]))
+        self.assertContains(edit_response, "Delete recurring task")
 
+
+    def test_recurring_delete_view_removes_template_and_keeps_generated_tasks(self):
+        generated_task = Task.objects.create(
+            title="Generated recurring run",
+            description="Already created from the template",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.worker,
+            recurring_task=True,
+            recurring_template=self.first_template,
+        )
+
+        response = self.client.post(reverse("recurring-delete", args=[self.first_template.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertRedirects(response, reverse("recurring-list"))
+        self.assertFalse(RecurringTaskTemplate.objects.filter(pk=self.first_template.pk).exists())
+        generated_task.refresh_from_db()
+        self.assertIsNone(generated_task.recurring_template)
+        self.assertContains(response, "Recurring task removed.")
 
     def test_recurring_run_now_creates_task_and_advances_next_date(self):
         self.first_template.next_run_date = date(2026, 3, 27)
@@ -587,6 +609,35 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.assertEqual(self.previous_task.assigned_to, self.jordan)
         self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
         self.assertFalse(self.previous_task.checklist_items.get().is_completed)
+
+    def test_generate_recurring_tasks_reopens_next_cycle_with_new_due_date_and_rotation(self):
+        self.sam_profile.active_status = False
+        self.sam_profile.save(update_fields=["active_status"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+            call_command("generate_recurring_tasks")
+
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        self.assertEqual(self.previous_task.assigned_to, self.jordan)
+        self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
+
+        self.previous_task.status = TaskStatus.DONE
+        self.previous_task.completed_at = timezone.now()
+        self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 20)):
+            call_command("generate_recurring_tasks")
+
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
+        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
+        self.assertIsNone(self.previous_task.completed_at)
+        self.assertEqual(self.previous_task.assigned_to, self.alex)
+        self.assertEqual(self.previous_task.due_date, date(2026, 3, 20))
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 27))
 
     def test_generate_recurring_tasks_sets_fixed_and_rotating_additional_assignees(self):
         extra_template = RecurringTaskTemplate.objects.create(
