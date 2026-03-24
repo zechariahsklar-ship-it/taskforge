@@ -47,6 +47,7 @@ from .models import (
     UserRole,
     Weekday,
 )
+from .recurring_service import RecurringTaskService
 from .services import TaskAssignmentService, TaskEstimateFeedbackService, TaskParsingService
 
 
@@ -73,6 +74,18 @@ def _board_bucket_status(status: str) -> str:
     return TaskStatus.NEW if status == TaskStatus.ASSIGNED else status
 
 
+def _process_ready_recurring_tasks(request) -> None:
+    if getattr(request, "_recurring_rollover_checked", False):
+        return
+    request._recurring_rollover_checked = True
+    if request.method not in {"GET", "HEAD"}:
+        return
+    if request.resolver_match and request.resolver_match.url_name in {"logout", "password-change"}:
+        return
+    # Sweep overdue recurring rollovers on normal app traffic when no scheduler is available.
+    RecurringTaskService.run_completed_templates_ready_today()
+
+
 def supervisor_required(view_func):
     @wraps(view_func)
     def wrapped(request, *args, **kwargs):
@@ -80,6 +93,7 @@ def supervisor_required(view_func):
             return redirect("login")
         if request.user.role != UserRole.SUPERVISOR:
             return HttpResponseForbidden("Supervisor access required.")
+        _process_ready_recurring_tasks(request)
         return view_func(request, *args, **kwargs)
 
     return wrapped
@@ -92,6 +106,7 @@ def task_editor_required(view_func):
             return redirect("login")
         if not request.user.can_edit_tasks:
             return HttpResponseForbidden("Task editor access required.")
+        _process_ready_recurring_tasks(request)
         return view_func(request, *args, **kwargs)
 
     return wrapped
@@ -107,6 +122,7 @@ def app_login_required(view_func):
         }:
             messages.info(request, "You must create a new password before continuing.")
             return redirect("password-change")
+        _process_ready_recurring_tasks(request)
         return view_func(request, *args, **kwargs)
 
     return wrapped

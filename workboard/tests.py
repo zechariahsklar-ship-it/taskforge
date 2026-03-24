@@ -678,6 +678,47 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.template.refresh_from_db()
         self.assertEqual(self.template.next_run_date, date(2026, 3, 13))
 
+    def test_request_driven_rollover_waits_until_the_next_day(self):
+        self.client.force_login(self.supervisor)
+        self.sam_profile.active_status = False
+        self.sam_profile.save(update_fields=["active_status"])
+        completed_at = timezone.make_aware(datetime(2026, 3, 13, 9, 0))
+        self.previous_task.completed_at = completed_at
+        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 17, 0))):
+            response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        self.assertEqual(self.previous_task.status, TaskStatus.DONE)
+        self.assertEqual(self.previous_task.assigned_to, self.alex)
+        self.assertIsNotNone(self.previous_task.completed_at)
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 13))
+
+    def test_request_driven_rollover_reopens_completed_task_after_midnight(self):
+        self.client.force_login(self.supervisor)
+        self.sam_profile.active_status = False
+        self.sam_profile.save(update_fields=["active_status"])
+        completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
+        self.previous_task.completed_at = completed_at
+        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
+            response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
+        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
+        self.assertIsNone(self.previous_task.completed_at)
+        self.assertEqual(self.previous_task.assigned_to, self.jordan)
+        self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
+
+
 
 class TaskParsingFallbackTests(TestCase):
     def setUp(self):
