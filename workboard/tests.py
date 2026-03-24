@@ -313,7 +313,7 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(edit_response, "Delete recurring task")
 
 
-    def test_recurring_delete_view_removes_template_and_keeps_generated_tasks(self):
+    def test_recurring_delete_view_converts_generated_tasks_to_regular_tasks(self):
         generated_task = Task.objects.create(
             title="Generated recurring run",
             description="Already created from the template",
@@ -322,6 +322,9 @@ class RecurringTaskListViewTests(TestCase):
             assigned_to=self.worker,
             recurring_task=True,
             recurring_template=self.first_template,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.MONDAY,
         )
 
         response = self.client.post(reverse("recurring-delete", args=[self.first_template.pk]), follow=True)
@@ -331,6 +334,12 @@ class RecurringTaskListViewTests(TestCase):
         self.assertFalse(RecurringTaskTemplate.objects.filter(pk=self.first_template.pk).exists())
         generated_task.refresh_from_db()
         self.assertIsNone(generated_task.recurring_template)
+        self.assertFalse(generated_task.recurring_task)
+        self.assertEqual(generated_task.recurrence_pattern, "")
+        self.assertIsNone(generated_task.recurrence_interval)
+        self.assertIsNone(generated_task.recurrence_day_of_week)
+        self.assertIsNone(generated_task.recurrence_day_of_month)
+        self.assertNotContains(response, "Generated recurring run")
         self.assertContains(response, "Recurring task removed.")
 
     def test_recurring_run_now_creates_task_and_advances_next_date(self):

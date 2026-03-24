@@ -109,6 +109,15 @@ def recurring_template_delete_view(request, pk):
         return HttpResponseBadRequest('POST required.')
 
     template = get_object_or_404(RecurringTaskTemplate, pk=pk)
+    template.generated_tasks.update(
+        recurring_task=False,
+        recurring_template=None,
+        recurrence_pattern='',
+        recurrence_interval=None,
+        recurrence_day_of_week=None,
+        recurrence_day_of_month=None,
+        updated_at=timezone.now(),
+    )
     template.delete()
     messages.success(request, 'Recurring task removed.')
     return redirect('recurring-list')
