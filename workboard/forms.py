@@ -533,6 +533,10 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     scheduled_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     scheduled_start_time = HalfHourTimeField()
     scheduled_end_time = HalfHourTimeField()
+    scheduled_window_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    scheduled_window_start = HalfHourTimeField(required=False, widget=forms.HiddenInput())
+    scheduled_window_end = HalfHourTimeField(required=False, widget=forms.HiddenInput())
+    scheduled_window_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
 
     class Meta:
         model = Task
@@ -581,12 +585,13 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         )
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self.fields["scheduled_date"].label = "Scheduled date"
-        self.fields["scheduled_date"].help_text = "Optional. Use this when the task needs to happen during a specific work shift."
-        self.fields["scheduled_start_time"].label = "Start time"
-        self.fields["scheduled_start_time"].help_text = "Choose a 30-minute start time for the work window."
-        self.fields["scheduled_end_time"].label = "End time"
-        self.fields["scheduled_end_time"].help_text = "Choose a 30-minute end time for the work window."
+        self.fields["scheduled_date"].label = "Schedule on"
+        self.fields["scheduled_date"].help_text = "Pick the date this task needs to happen."
+        self.fields["scheduled_start_time"].label = "Window start"
+        self.fields["scheduled_start_time"].help_text = "Stored automatically from the task window picker."
+        self.fields["scheduled_end_time"].label = "Window end"
+        self.fields["scheduled_end_time"].help_text = "Stored automatically from the task window picker."
+        self._initialize_scheduled_window_fields()
         self.fields["recurring_task"].label = "Repeats on a schedule"
         self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
         self.fields["recurrence_pattern"].label = "Repeat cadence"
@@ -598,20 +603,118 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].label = "Day of month to repeat on"
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
+    def day_rows(self):
+        return [
+            {
+                "prefix": "scheduled_window",
+                "label": "Task window",
+                "segments": self["scheduled_window_segments"],
+                "weekday": "",
+                "override_entries": [],
+            }
+        ]
+
+    def calendar_slots(self):
+        return WEEKLY_CALENDAR_SLOTS
+
+    def _initialize_scheduled_window_fields(self):
+        if self.is_bound or self.initial.get("scheduled_window_segments"):
+            return
+        start_value = self.initial.get("scheduled_start_time") or getattr(self.instance, "scheduled_start_time", None)
+        end_value = self.initial.get("scheduled_end_time") or getattr(self.instance, "scheduled_end_time", None)
+        if not (start_value and end_value):
+            return
+        blocks = [(start_value, end_value)]
+        self.initial["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
+        self.initial["scheduled_window_start"] = start_value
+        self.initial["scheduled_window_end"] = end_value
+        self.initial["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60")
+
+    def _parse_task_window_segments(self, raw_value):
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            self.add_error("scheduled_window_segments", "The task window has an invalid schedule payload.")
+            return None
+        if not isinstance(payload, list):
+            self.add_error("scheduled_window_segments", "The task window has an invalid schedule payload.")
+            return None
+
+        parsed_blocks = []
+        for item in payload:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                self.add_error("scheduled_window_segments", "The task window has an invalid schedule block.")
+                return None
+            start_raw, end_raw = item
+            try:
+                start_value = datetime.strptime(str(start_raw), "%H:%M").time()
+                end_value = datetime.strptime(str(end_raw), "%H:%M").time()
+            except ValueError:
+                self.add_error("scheduled_window_segments", "The task window must use 30-minute times.")
+                return None
+            if end_value <= start_value:
+                self.add_error("scheduled_window_segments", "The task window end time must be after the start time.")
+                return None
+            if _window_minutes(start_value, end_value) % 30 != 0:
+                self.add_error("scheduled_window_segments", "The task window must use 30-minute increments.")
+                return None
+            parsed_blocks.append((start_value, end_value))
+
+        parsed_blocks.sort(key=lambda block: (block[0], block[1]))
+        normalized_blocks = []
+        for start_value, end_value in parsed_blocks:
+            if not normalized_blocks:
+                normalized_blocks.append([start_value, end_value])
+                continue
+            last_start, last_end = normalized_blocks[-1]
+            if start_value <= last_end:
+                normalized_blocks[-1][1] = max(last_end, end_value)
+            else:
+                normalized_blocks.append([start_value, end_value])
+        blocks = [(start_value, end_value) for start_value, end_value in normalized_blocks]
+        if len(blocks) > 1:
+            self.add_error("scheduled_window_segments", "Choose one continuous task window.")
+            return None
+        return blocks
+
     # Treat partial schedule input as a request for a full work window.
     def _clean_schedule_window(self, cleaned_data):
         due_date = cleaned_data.get("due_date")
         scheduled_date = cleaned_data.get("scheduled_date")
         start_value = cleaned_data.get("scheduled_start_time")
         end_value = cleaned_data.get("scheduled_end_time")
-        has_schedule_value = bool(scheduled_date or start_value or end_value)
+        segments_value = cleaned_data.get("scheduled_window_segments")
 
-        if (start_value or end_value) and not scheduled_date:
+        if segments_value:
+            blocks = self._parse_task_window_segments(segments_value)
+            if blocks is not None:
+                start_value = blocks[0][0] if blocks else None
+                end_value = blocks[-1][1] if blocks else None
+                hours_value = Decimal(_window_minutes(start_value, end_value)) / Decimal("60") if blocks else Decimal("0")
+                cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
+                cleaned_data["scheduled_window_start"] = start_value
+                cleaned_data["scheduled_window_end"] = end_value
+                cleaned_data["scheduled_window_hours"] = hours_value
+                cleaned_data["scheduled_start_time"] = start_value
+                cleaned_data["scheduled_end_time"] = end_value
+        elif start_value and end_value:
+            cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments([(start_value, end_value)])
+            cleaned_data["scheduled_window_start"] = start_value
+            cleaned_data["scheduled_window_end"] = end_value
+            cleaned_data["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60")
+
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
+        has_schedule_value = bool(scheduled_date or start_value or end_value or cleaned_data.get("scheduled_window_segments"))
+
+        if (start_value or end_value or cleaned_data.get("scheduled_window_segments")) and not scheduled_date:
             if due_date:
                 scheduled_date = due_date
                 cleaned_data["scheduled_date"] = scheduled_date
             else:
-                self.add_error("scheduled_date", "Choose the date for this scheduled work window.")
+                self.add_error("scheduled_date", "Choose the date for this task window.")
 
         if cleaned_data.get("scheduled_date") and not cleaned_data.get("due_date"):
             cleaned_data["due_date"] = cleaned_data["scheduled_date"]
@@ -619,22 +722,22 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         start_value = cleaned_data.get("scheduled_start_time")
         end_value = cleaned_data.get("scheduled_end_time")
         scheduled_date = cleaned_data.get("scheduled_date")
-        has_schedule_value = bool(scheduled_date or start_value or end_value)
+        has_schedule_value = bool(scheduled_date or start_value or end_value or cleaned_data.get("scheduled_window_segments"))
 
         if not has_schedule_value:
             return cleaned_data
 
         if not start_value:
-            self.add_error("scheduled_start_time", "Choose a start time for this scheduled task window.")
+            self.add_error("scheduled_window_segments", "Choose the task window for this scheduled task.")
         if not end_value:
-            self.add_error("scheduled_end_time", "Choose an end time for this scheduled task window.")
+            self.add_error("scheduled_window_segments", "Choose the task window for this scheduled task.")
         if start_value and end_value and end_value <= start_value:
-            self.add_error("scheduled_end_time", "End time must be after the start time.")
+            self.add_error("scheduled_window_segments", "The task window must end after it starts.")
 
         if start_value and end_value:
             estimated_minutes = cleaned_data.get("estimated_minutes")
             if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
-                self.add_error("estimated_minutes", "The time estimate is longer than the scheduled work window.")
+                self.add_error("estimated_minutes", "The time estimate is longer than the scheduled task window.")
 
         return cleaned_data
 

@@ -939,6 +939,46 @@ class TaskScheduledWindowTests(TestCase):
                 position=position,
             )
 
+    def test_task_create_page_uses_task_window_picker(self):
+        response = self.client.get(reverse("task-create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Task window")
+        self.assertNotContains(response, '<label for="id_scheduled_start_time">Start time</label>', html=True)
+        self.assertNotContains(response, '<label for="id_scheduled_end_time">End time</label>', html=True)
+
+    def test_task_create_accepts_task_window_segments_payload(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Segment scheduled coverage",
+                "description": "Cover the front desk in the morning.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_date": "2026-03-16",
+                "scheduled_window_segments": '[["09:30", "10:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Segment scheduled coverage")
+        self.assertEqual(task.assigned_to, self.morning_worker)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.scheduled_start_time, time(9, 30))
+        self.assertEqual(task.scheduled_end_time, time(10, 30))
+        self.assertEqual(task.due_date, date(2026, 3, 16))
+
     def test_task_create_auto_assigns_worker_available_in_scheduled_window(self):
         response = self.client.post(
             reverse("task-create"),
