@@ -195,34 +195,35 @@ class RecurringTaskService:
         return task, outcome
 
     @staticmethod
-    def run_completed_templates_ready_today(*, now=None) -> int:
+    def run_templates_ready_today(*, now=None) -> tuple[int, int]:
         now = now or timezone.now()
         run_date = timezone.localdate(now)
         local_midnight = timezone.make_aware(datetime.combine(run_date, time.min))
-        processed_count = 0
+        created_count = 0
+        reopened_count = 0
         templates = (
             RecurringTaskTemplate.objects.filter(
                 active=True,
                 next_run_date__lte=run_date,
-                generated_tasks__status=TaskStatus.DONE,
-                generated_tasks__completed_at__lt=local_midnight,
             )
             .prefetch_related('additional_assignees', 'generated_tasks')
             .distinct()
         )
         for template in templates:
             last_generated_task = RecurringTaskService._last_generated_task(template)
-            if (
-                not last_generated_task
-                or last_generated_task.status != TaskStatus.DONE
-                or not last_generated_task.completed_at
-                or last_generated_task.completed_at >= local_midnight
-            ):
-                continue
+            if last_generated_task:
+                if (
+                    last_generated_task.status != TaskStatus.DONE
+                    or not last_generated_task.completed_at
+                    or last_generated_task.completed_at >= local_midnight
+                ):
+                    continue
             _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
-            if outcome in {'created', 'reopened'}:
-                processed_count += 1
-        return processed_count
+            if outcome == 'created':
+                created_count += 1
+            elif outcome == 'reopened':
+                reopened_count += 1
+        return created_count, reopened_count
 
     @staticmethod
     def run_due_templates(*, run_date: date | None = None) -> tuple[int, int]:

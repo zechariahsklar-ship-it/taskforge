@@ -83,7 +83,7 @@ def _process_ready_recurring_tasks(request) -> None:
     if request.resolver_match and request.resolver_match.url_name in {"logout", "password-change"}:
         return
     # Sweep overdue recurring rollovers on normal app traffic when no scheduler is available.
-    RecurringTaskService.run_completed_templates_ready_today()
+    RecurringTaskService.run_templates_ready_today()
 
 
 def supervisor_required(view_func):

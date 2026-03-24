@@ -599,7 +599,10 @@ class RecurringTaskGenerationRotationTests(TestCase):
         TaskChecklistItem.objects.create(task=self.previous_task, title="Recurring step", is_completed=True, position=1)
 
     def test_generate_recurring_tasks_reopens_completed_task_and_rotates_assignment(self):
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
+        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
             call_command("generate_recurring_tasks")
 
         self.previous_task.refresh_from_db()
@@ -614,7 +617,10 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.sam_profile.active_status = False
         self.sam_profile.save(update_fields=["active_status"])
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
+        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
             call_command("generate_recurring_tasks")
 
         self.previous_task.refresh_from_db()
@@ -627,7 +633,10 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.previous_task.completed_at = timezone.now()
         self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 20)):
+        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 19, 23, 50))
+        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 0, 5))):
             call_command("generate_recurring_tasks")
 
         self.previous_task.refresh_from_db()
@@ -655,7 +664,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
         )
         extra_template.additional_assignees.add(self.jordan)
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
             call_command("generate_recurring_tasks")
 
         generated = Task.objects.filter(recurring_template=extra_template).latest("pk")
@@ -669,7 +678,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.previous_task.completed_at = None
         self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.localdate", return_value=date(2026, 3, 13)):
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
             call_command("generate_recurring_tasks")
 
         self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
@@ -717,6 +726,30 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.assertEqual(self.previous_task.assigned_to, self.jordan)
         self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
         self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
+
+
+    def test_generate_recurring_tasks_backfills_legacy_recurring_tasks(self):
+        legacy_task = Task.objects.create(
+            title="Legacy recurring cleanup",
+            description="Older recurring task without a template",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 17),
+            assigned_to=self.alex,
+            requested_by=self.supervisor,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.TUESDAY,
+        )
+
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
+            call_command("generate_recurring_tasks")
+
+        legacy_task.refresh_from_db()
+        self.assertIsNotNone(legacy_task.recurring_template)
+        self.assertEqual(legacy_task.recurring_template.assign_to, self.alex)
 
 
 
