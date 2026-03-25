@@ -965,7 +965,7 @@ def task_detail_view(request, pk):
                 TaskAuditService.record_attachment_added(task, actor=request.user, file_name=attachment.original_name)
                 messages.success(request, "Attachment added.")
                 return redirect("task-detail", pk=task.pk)
-        elif action == "checklist" and request.user.can_edit_tasks:
+        elif action == "checklist" and request.user.is_supervisor:
             checklist_form = TaskChecklistItemForm(request.POST)
             if checklist_form.is_valid():
                 item = checklist_form.save(commit=False)
@@ -975,7 +975,7 @@ def task_detail_view(request, pk):
                 TaskAuditService.record_checklist_updated(task, actor=request.user, summary=f"Added checklist item: {item.title}")
                 messages.success(request, "Checklist item added.")
                 return redirect("task-detail", pk=task.pk)
-        elif action == "checklist_save" and request.user.can_edit_tasks:
+        elif action == "checklist_save" and request.user.is_supervisor:
             item_ids = request.POST.getlist("checklist_item_ids")
             titles = request.POST.getlist("checklist_item_titles")
             completed_ids = set(request.POST.getlist("checklist_item_completed"))
@@ -1066,6 +1066,7 @@ def task_detail_view(request, pk):
             "checklist_form": checklist_form,
             "attachment_form": attachment_form,
             "audit_events": audit_events,
+            "can_manage_checklist_items": request.user.is_supervisor,
         },
     )
 

@@ -45,12 +45,12 @@
                                 type="checkbox"
                                 class="checklist-complete"
                                 {% if item.is_completed %}checked{% endif %}
-                                {% if request.user.can_edit_tasks %}name="checklist_item_completed" value="{{ item.pk }}"{% else %}data-checklist-toggle value="{{ item.pk }}"{% endif %}
+                                {% if can_manage_checklist_items %}name="checklist_item_completed" value="{{ item.pk }}"{% else %}data-checklist-toggle value="{{ item.pk }}"{% endif %}
                                 aria-label="Mark checklist item complete"
                             >
                             <button type="button" class="checklist-grip" draggable="true" aria-label="Reorder checklist item">|||</button>
                             <input type="hidden" name="checklist_item_ids" value="{{ item.pk }}">
-                            {% if request.user.can_edit_tasks %}
+                            {% if can_manage_checklist_items %}
                                 <input type="text" name="checklist_item_titles" value="{{ item.title }}" class="form-control checklist-title-input">
                                 <button type="submit" name="delete_item_id" value="{{ item.pk }}" class="button-link checklist-delete">Delete</button>
                             {% else %}
@@ -62,13 +62,13 @@
                         <p class="empty-state" data-checklist-empty>No checklist items yet.</p>
                     {% endfor %}
                 </div>
-                {% if request.user.can_edit_tasks and task.checklist_items.all %}
+                {% if can_manage_checklist_items and task.checklist_items.all %}
                     <div>
                         <button type="submit">Save checklist changes</button>
                     </div>
                 {% endif %}
             </form>
-            {% if request.user.can_edit_tasks %}
+            {% if can_manage_checklist_items %}
                 <form method="post" class="inline-form checklist-add-form">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="checklist">

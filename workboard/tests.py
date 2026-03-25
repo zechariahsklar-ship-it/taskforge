@@ -1641,6 +1641,7 @@ class TaskDetailChecklistTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="detail-sup", password="password123", role=UserRole.SUPERVISOR)
         self.student = User.objects.create_user(username="detail-student", password="password123", role=UserRole.STUDENT_WORKER)
+        self.student_supervisor = User.objects.create_user(username="detail-student-sup", password="password123", role=UserRole.STUDENT_SUPERVISOR)
         self.task = Task.objects.create(
             title="Checklist task",
             description="Task with checklist",
@@ -1736,6 +1737,65 @@ class TaskDetailChecklistTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.first.refresh_from_db()
         self.assertTrue(self.first.is_completed)
+
+    def test_assigned_user_can_reorder_checklist_items(self):
+        self.client.force_login(self.student)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_reorder",
+                "item_ids": [str(self.second.pk), str(self.third.pk), str(self.first.pk)],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.second.position, 1)
+        self.assertEqual(self.third.position, 2)
+        self.assertEqual(self.first.position, 3)
+
+    def test_student_supervisor_can_reorder_but_not_edit_checklist_text(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("task-detail", args=[self.task.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-checklist-toggle value="{}"'.format(self.first.pk), html=False)
+        self.assertContains(response, 'class="checklist-grip"', html=False)
+        self.assertNotContains(response, 'class="form-control checklist-title-input"', html=False)
+        self.assertNotContains(response, 'class="button-link checklist-delete"', html=False)
+        self.assertNotContains(response, 'placeholder="Add checklist item"', html=False)
+
+        post_response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_save",
+                "checklist_item_ids": [str(self.first.pk), str(self.second.pk), str(self.third.pk)],
+                "checklist_item_titles": ["Edited first", "Edited second", "Edited third"],
+            },
+            follow=True,
+        )
+        self.assertEqual(post_response.status_code, 200)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.first.title, "First item")
+        self.assertEqual(self.second.title, "Second item")
+        self.assertEqual(self.third.title, "Third item")
+
+        reorder_response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {
+                "action": "checklist_reorder",
+                "item_ids": [str(self.third.pk), str(self.first.pk), str(self.second.pk)],
+            },
+        )
+        self.assertEqual(reorder_response.status_code, 200)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.third.refresh_from_db()
+        self.assertEqual(self.third.position, 1)
+        self.assertEqual(self.first.position, 2)
+        self.assertEqual(self.second.position, 3)
 
     def test_checklist_add_form_uses_placeholder_instead_of_title_label(self):
         self.client.force_login(self.supervisor)
