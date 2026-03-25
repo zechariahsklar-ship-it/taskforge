@@ -1,6 +1,9 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}{{ page_title }} | TaskForge{% endblock %}
+{% block title %}{{ page_title }} | TaskForge<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
+
+{% endblock %}
 
 {% block content %}
 <section class="detail-grid">
@@ -82,7 +85,7 @@
                 </div>
             </div>
             {% for field in form %}
-                {% if field.name != "raw_due_text" and field.name != "due_date" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+                {% if field.name != "raw_due_text" and field.name != "due_date" and field.name != "scheduled_week_of" and field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "task_window_day_0_segments" and field.name != "task_window_day_1_segments" and field.name != "task_window_day_2_segments" and field.name != "task_window_day_3_segments" and field.name != "task_window_day_4_segments" and field.name != "task_window_day_5_segments" and field.name != "task_window_day_6_segments" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
                     <p>
                         <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                         {{ field }}
@@ -90,6 +93,27 @@
                     </p>
                 {% endif %}
             {% endfor %}
+            <section class="review-field recurring-task-panel">
+                <div class="stack">
+                    <div>
+                        <h3>Scheduled work window</h3>
+                        <p class="meta">Pick the week, then click or drag on the calendar to choose the exact day and time this task should happen.</p>
+                    </div>
+                    <p>
+                        <label for="{{ form.scheduled_week_of.id_for_label }}">{{ form.scheduled_week_of.label }}</label>
+                        {{ form.scheduled_week_of }}
+                        {% if form.scheduled_week_of.help_text %}<span class="meta">{{ form.scheduled_week_of.help_text }}</span>{% endif %}
+                        {% if form.scheduled_week_of.errors %}<div class="meta">{{ form.scheduled_week_of.errors }}</div>{% endif %}
+                    </p>
+                    {% if form.scheduled_window_segments.errors %}
+                        <div class="meta">{{ form.scheduled_window_segments.errors }}</div>
+                    {% endif %}
+                    {% if form.scheduled_date.errors %}
+                        <div class="meta">{{ form.scheduled_date.errors }}</div>
+                    {% endif %}
+                    {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=form picker_id="task-window-picker" hide_picker_header=True show_day_actions=False clear_all_label="Clear task window" %}
+                </div>
+            </section>
             <section class="review-field checklist-editor">
                 <div class="split-heading checklist-header">
                     <div>
@@ -182,5 +206,7 @@
         });
     }());
 </script>
+
+<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
 
 {% endblock %}

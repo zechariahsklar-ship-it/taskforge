@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 import json
 from decimal import Decimal
@@ -6,6 +6,7 @@ from decimal import Decimal
 from django import forms
 from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 from django.db.models import Q
+from django.utils import timezone
 
 from .models import (
     Priority,
@@ -35,6 +36,11 @@ DAY_FIELD_CONFIG = [
     ("sunday", "Sunday", Weekday.SUNDAY),
 ]
 
+TASK_WINDOW_DAY_CONFIG = [
+    (f"task_window_day_{offset}", offset)
+    for offset in range(7)
+]
+
 TASK_SAVED_VIEW_CHOICES = [
     ("", "All visible tasks"),
     ("today", "Today's focus"),
@@ -55,6 +61,10 @@ TASK_DUE_SCOPE_CHOICES = [
 
 def _format_time_label(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _format_short_date_label(value: date) -> str:
+    return f"{value.strftime('%a')} {value.strftime('%b')} {value.day}"
 
 
 HALF_HOUR_CHOICES = [("", "Not scheduled")]
@@ -167,6 +177,19 @@ def _legacy_hours_to_window(hours_value: Decimal | None) -> tuple[time | None, t
     start_value = time(9, 0)
     end_dt = datetime.combine(datetime.today(), start_value) + timedelta(minutes=total_minutes)
     return start_value, end_dt.time(), hours_value
+
+
+def _start_of_week(value: date) -> date:
+    return value - timedelta(days=value.weekday())
+
+
+def _parse_date_value(raw_value: str | None) -> date | None:
+    if not raw_value:
+        return None
+    try:
+        return datetime.strptime(raw_value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def _worker_user_queryset(*, include_assignable_supervisors: bool = False):
@@ -529,14 +552,21 @@ class TaskBoardFilterForm(StyledFormMixin, forms.Form):
 
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
-    due_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
-    scheduled_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
-    scheduled_start_time = HalfHourTimeField()
-    scheduled_end_time = HalfHourTimeField()
+    scheduled_week_of = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    scheduled_date = forms.DateField(required=False, widget=forms.HiddenInput())
+    scheduled_start_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
+    scheduled_end_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
     scheduled_window_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     scheduled_window_start = HalfHourTimeField(required=False, widget=forms.HiddenInput())
     scheduled_window_end = HalfHourTimeField(required=False, widget=forms.HiddenInput())
     scheduled_window_hours = forms.DecimalField(required=False, min_value=Decimal("0"), max_digits=4, decimal_places=2, widget=forms.HiddenInput())
+    task_window_day_0_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_1_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_2_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_3_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_4_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_5_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_6_segments = forms.CharField(required=False, widget=forms.HiddenInput())
 
     class Meta:
         model = Task
@@ -585,13 +615,11 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         )
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self.fields["scheduled_date"].label = "Schedule on"
-        self.fields["scheduled_date"].help_text = "Pick the date this task needs to happen."
-        self.fields["scheduled_start_time"].label = "Window start"
-        self.fields["scheduled_start_time"].help_text = "Stored automatically from the task window picker."
-        self.fields["scheduled_end_time"].label = "Window end"
-        self.fields["scheduled_end_time"].help_text = "Stored automatically from the task window picker."
-        self._initialize_scheduled_window_fields()
+        self.fields["scheduled_week_of"].label = "Show week of"
+        self.fields["scheduled_week_of"].help_text = "Pick the week, then click or drag on the calendar to choose the exact day and time for this task."
+        self._task_window_week_start = self._resolve_task_window_week_start()
+        self.initial["scheduled_week_of"] = self._task_window_week_start
+        self._initialize_task_window_fields()
         self.fields["recurring_task"].label = "Repeats on a schedule"
         self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
         self.fields["recurrence_pattern"].label = "Repeat cadence"
@@ -604,27 +632,67 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
     def day_rows(self):
-        return [
-            {
-                "prefix": "scheduled_window",
-                "label": "Task window",
-                "segments": self["scheduled_window_segments"],
-                "weekday": "",
-                "override_entries": [],
-            }
-        ]
+        rows = []
+        for prefix, day_offset in TASK_WINDOW_DAY_CONFIG:
+            target_date = self._task_window_week_start + timedelta(days=day_offset)
+            rows.append(
+                {
+                    "prefix": prefix,
+                    "label": _format_short_date_label(target_date),
+                    "segments": self[f"{prefix}_segments"],
+                    "weekday": target_date.weekday(),
+                    "override_entries": [],
+                }
+            )
+        return rows
 
     def calendar_slots(self):
         return WEEKLY_CALENDAR_SLOTS
 
-    def _initialize_scheduled_window_fields(self):
-        if self.is_bound or self.initial.get("scheduled_window_segments"):
+    def _resolve_task_window_week_start(self):
+        if self.is_bound:
+            for field_name in ("scheduled_week_of", "scheduled_date", "due_date"):
+                parsed_value = _parse_date_value(self.data.get(self.add_prefix(field_name)))
+                if parsed_value:
+                    return _start_of_week(parsed_value)
+            return _start_of_week(timezone.localdate())
+
+        for candidate in (
+            self.initial.get("scheduled_week_of"),
+            self.initial.get("scheduled_date"),
+            getattr(self.instance, "scheduled_date", None),
+            self.initial.get("due_date"),
+        ):
+            if isinstance(candidate, str):
+                candidate = _parse_date_value(candidate)
+            if candidate:
+                return _start_of_week(candidate)
+        return _start_of_week(timezone.localdate())
+
+    def _initialize_task_window_fields(self):
+        if self.is_bound:
             return
+
+        scheduled_date = self.initial.get("scheduled_date") or getattr(self.instance, "scheduled_date", None)
+        if isinstance(scheduled_date, str):
+            scheduled_date = _parse_date_value(scheduled_date)
         start_value = self.initial.get("scheduled_start_time") or getattr(self.instance, "scheduled_start_time", None)
         end_value = self.initial.get("scheduled_end_time") or getattr(self.instance, "scheduled_end_time", None)
-        if not (start_value and end_value):
+        if not (scheduled_date and start_value and end_value):
             return
+
+        week_start = _start_of_week(scheduled_date)
+        if week_start != self._task_window_week_start:
+            self._task_window_week_start = week_start
+            self.initial["scheduled_week_of"] = week_start
+
+        day_offset = (scheduled_date - self._task_window_week_start).days
+        if not 0 <= day_offset < len(TASK_WINDOW_DAY_CONFIG):
+            return
+
         blocks = [(start_value, end_value)]
+        prefix = TASK_WINDOW_DAY_CONFIG[day_offset][0]
+        self.initial[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
         self.initial["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
         self.initial["scheduled_window_start"] = start_value
         self.initial["scheduled_window_end"] = end_value
@@ -673,51 +741,79 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 normalized_blocks[-1][1] = max(last_end, end_value)
             else:
                 normalized_blocks.append([start_value, end_value])
-        blocks = [(start_value, end_value) for start_value, end_value in normalized_blocks]
+        return [(start_value, end_value) for start_value, end_value in normalized_blocks]
+
+    def _clean_task_window_days(self, cleaned_data):
+        selected_days = []
+        for prefix, day_offset in TASK_WINDOW_DAY_CONFIG:
+            raw_value = cleaned_data.get(f"{prefix}_segments")
+            blocks = self._parse_task_window_segments(raw_value) if raw_value else []
+            if blocks is None:
+                return None
+            if blocks:
+                selected_days.append((day_offset, blocks))
+
+        if len(selected_days) > 1:
+            self.add_error("scheduled_window_segments", "Choose only one day for this task window.")
+            return None
+        if not selected_days:
+            return None
+
+        day_offset, blocks = selected_days[0]
         if len(blocks) > 1:
             self.add_error("scheduled_window_segments", "Choose one continuous task window.")
             return None
-        return blocks
+        return day_offset, blocks
 
     # Treat partial schedule input as a request for a full work window.
     def _clean_schedule_window(self, cleaned_data):
         due_date = cleaned_data.get("due_date")
         scheduled_date = cleaned_data.get("scheduled_date")
-        start_value = cleaned_data.get("scheduled_start_time")
-        end_value = cleaned_data.get("scheduled_end_time")
-        segments_value = cleaned_data.get("scheduled_window_segments")
+        week_value = cleaned_data.get("scheduled_week_of") or scheduled_date or due_date or timezone.localdate()
+        cleaned_data["scheduled_week_of"] = _start_of_week(week_value)
 
-        if segments_value:
-            blocks = self._parse_task_window_segments(segments_value)
-            if blocks is not None:
-                start_value = blocks[0][0] if blocks else None
-                end_value = blocks[-1][1] if blocks else None
-                hours_value = Decimal(_window_minutes(start_value, end_value)) / Decimal("60") if blocks else Decimal("0")
-                cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
-                cleaned_data["scheduled_window_start"] = start_value
-                cleaned_data["scheduled_window_end"] = end_value
-                cleaned_data["scheduled_window_hours"] = hours_value
-                cleaned_data["scheduled_start_time"] = start_value
-                cleaned_data["scheduled_end_time"] = end_value
-        elif start_value and end_value:
-            cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments([(start_value, end_value)])
+        selected_day = self._clean_task_window_days(cleaned_data)
+        if selected_day is not None:
+            day_offset, blocks = selected_day
+            start_value = blocks[0][0]
+            end_value = blocks[-1][1]
+            scheduled_date = cleaned_data["scheduled_week_of"] + timedelta(days=day_offset)
+            cleaned_data["scheduled_date"] = scheduled_date
+            cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
             cleaned_data["scheduled_window_start"] = start_value
             cleaned_data["scheduled_window_end"] = end_value
             cleaned_data["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60")
-
-        start_value = cleaned_data.get("scheduled_start_time")
-        end_value = cleaned_data.get("scheduled_end_time")
-        has_schedule_value = bool(scheduled_date or start_value or end_value or cleaned_data.get("scheduled_window_segments"))
-
-        if (start_value or end_value or cleaned_data.get("scheduled_window_segments")) and not scheduled_date:
-            if due_date:
-                scheduled_date = due_date
-                cleaned_data["scheduled_date"] = scheduled_date
+            cleaned_data["scheduled_start_time"] = start_value
+            cleaned_data["scheduled_end_time"] = end_value
+        else:
+            start_value = cleaned_data.get("scheduled_start_time")
+            end_value = cleaned_data.get("scheduled_end_time")
+            segments_value = cleaned_data.get("scheduled_window_segments")
+            if segments_value:
+                blocks = self._parse_task_window_segments(segments_value)
+                if blocks is None:
+                    return cleaned_data
+                start_value = blocks[0][0] if blocks else None
+                end_value = blocks[-1][1] if blocks else None
+                cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
+                cleaned_data["scheduled_window_start"] = start_value
+                cleaned_data["scheduled_window_end"] = end_value
+                cleaned_data["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60") if blocks else Decimal("0")
+                cleaned_data["scheduled_start_time"] = start_value
+                cleaned_data["scheduled_end_time"] = end_value
+            elif start_value and end_value:
+                cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments([(start_value, end_value)])
+                cleaned_data["scheduled_window_start"] = start_value
+                cleaned_data["scheduled_window_end"] = end_value
+                cleaned_data["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60")
             else:
-                self.add_error("scheduled_date", "Choose the date for this task window.")
-
-        if cleaned_data.get("scheduled_date") and not cleaned_data.get("due_date"):
-            cleaned_data["due_date"] = cleaned_data["scheduled_date"]
+                cleaned_data["scheduled_date"] = None
+                cleaned_data["scheduled_start_time"] = None
+                cleaned_data["scheduled_end_time"] = None
+                cleaned_data["scheduled_window_segments"] = ""
+                cleaned_data["scheduled_window_start"] = None
+                cleaned_data["scheduled_window_end"] = None
+                cleaned_data["scheduled_window_hours"] = Decimal("0")
 
         start_value = cleaned_data.get("scheduled_start_time")
         end_value = cleaned_data.get("scheduled_end_time")
@@ -726,6 +822,19 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
         if not has_schedule_value:
             return cleaned_data
+
+        if (start_value or end_value or cleaned_data.get("scheduled_window_segments")) and not scheduled_date:
+            if due_date:
+                scheduled_date = due_date
+                cleaned_data["scheduled_date"] = scheduled_date
+            else:
+                self.add_error("scheduled_window_segments", "Choose the day for this task window.")
+
+        if cleaned_data.get("scheduled_date") and not cleaned_data.get("due_date"):
+            cleaned_data["due_date"] = cleaned_data["scheduled_date"]
+
+        start_value = cleaned_data.get("scheduled_start_time")
+        end_value = cleaned_data.get("scheduled_end_time")
 
         if not start_value:
             self.add_error("scheduled_window_segments", "Choose the task window for this scheduled task.")

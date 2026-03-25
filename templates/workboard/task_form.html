@@ -15,7 +15,7 @@
         {% endif %}
 
         {% for hidden in form.hidden_fields %}
-            {% if hidden.name != "scheduled_window_segments" and hidden.name != "scheduled_window_start" and hidden.name != "scheduled_window_end" and hidden.name != "scheduled_window_hours" %}
+            {% if hidden.name != "scheduled_date" and hidden.name != "scheduled_start_time" and hidden.name != "scheduled_end_time" and hidden.name != "scheduled_window_segments" and hidden.name != "scheduled_window_start" and hidden.name != "scheduled_window_end" and hidden.name != "scheduled_window_hours" and hidden.name != "task_window_day_0_segments" and hidden.name != "task_window_day_1_segments" and hidden.name != "task_window_day_2_segments" and hidden.name != "task_window_day_3_segments" and hidden.name != "task_window_day_4_segments" and hidden.name != "task_window_day_5_segments" and hidden.name != "task_window_day_6_segments" %}
                 {{ hidden }}
             {% endif %}
         {% endfor %}
@@ -53,7 +53,7 @@
                         </p>
                     </div>
                 </section>
-            {% elif field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+            {% elif field.name != "scheduled_week_of" and field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "task_window_day_0_segments" and field.name != "task_window_day_1_segments" and field.name != "task_window_day_2_segments" and field.name != "task_window_day_3_segments" and field.name != "task_window_day_4_segments" and field.name != "task_window_day_5_segments" and field.name != "task_window_day_6_segments" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -67,61 +67,21 @@
             <div class="stack">
                 <div>
                     <h2>Scheduled work window</h2>
-                    <p class="meta">Use this when the task must happen during a specific shift. Pick one time block and TaskForge will only keep teammates assigned if they are scheduled and open during that block.</p>
+                    <p class="meta">Pick the week, then click or drag on the calendar to choose the exact day and time this task should happen. TaskForge will only keep teammates assigned if they are scheduled and open during that block.</p>
                 </div>
                 <p>
-                    <label for="{{ form.scheduled_date.id_for_label }}">{{ form.scheduled_date.label }}</label>
-                    {{ form.scheduled_date }}
-                    {% if form.scheduled_date.help_text %}<span class="meta">{{ form.scheduled_date.help_text }}</span>{% endif %}
-                    {% if form.scheduled_date.errors %}<div class="meta">{{ form.scheduled_date.errors }}</div>{% endif %}
+                    <label for="{{ form.scheduled_week_of.id_for_label }}">{{ form.scheduled_week_of.label }}</label>
+                    {{ form.scheduled_week_of }}
+                    {% if form.scheduled_week_of.help_text %}<span class="meta">{{ form.scheduled_week_of.help_text }}</span>{% endif %}
+                    {% if form.scheduled_week_of.errors %}<div class="meta">{{ form.scheduled_week_of.errors }}</div>{% endif %}
                 </p>
-                <div id="task-window-picker" class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: 1;">
-                    <div class="weekly-schedule-hidden-fields" hidden aria-hidden="true">
-                        {{ form.scheduled_window_segments }}
-                        {{ form.scheduled_window_start }}
-                        {{ form.scheduled_window_end }}
-                        {{ form.scheduled_window_hours }}
-                    </div>
-                    <div class="weekly-schedule-toolbar is-headerless">
-                        <div>
-                            <h3>Task window</h3>
-                            <p>Click or drag across the calendar to choose the single block of time this task should happen.</p>
-                        </div>
-                        <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>Clear task window</button>
-                    </div>
-                    <div class="weekly-schedule-summary-grid">
-                        <article class="weekly-schedule-summary-card" data-schedule-summary-card="scheduled_window" data-weekday="">
-                            <div class="weekly-schedule-summary-head">
-                                <h3>Task window</h3>
-                            </div>
-                            <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="scheduled_window">Not scheduled</p>
-                            {% if form.scheduled_window_segments.errors %}
-                                <div class="weekly-schedule-errors">
-                                    {% for error in form.scheduled_window_segments.errors %}<div class="meta">{{ error }}</div>{% endfor %}
-                                </div>
-                            {% endif %}
-                        </article>
-                    </div>
-                    <div class="weekly-calendar-frame">
-                        <div class="weekly-calendar-grid">
-                            <div class="weekly-calendar-corner">Time</div>
-                            <div class="weekly-calendar-header">Task window</div>
-                            {% for slot in form.calendar_slots %}
-                                <div class="weekly-calendar-time{% if not slot.label %} weekly-calendar-time-half{% endif %}">{% if slot.label %}{{ slot.label }}{% endif %}</div>
-                                <button
-                                    type="button"
-                                    class="weekly-calendar-cell"
-                                    data-day="scheduled_window"
-                                    data-slot-index="{{ slot.index }}"
-                                    data-slot-value="{{ slot.value }}"
-                                    data-slot-end="{{ slot.end_value }}"
-                                    aria-label="Task window {{ slot.full_label }}"
-                                    title="Task window {{ slot.full_label }}"
-                                ></button>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
+                {% if form.scheduled_window_segments.errors %}
+                    <div class="meta">{{ form.scheduled_window_segments.errors }}</div>
+                {% endif %}
+                {% if form.scheduled_date.errors %}
+                    <div class="meta">{{ form.scheduled_date.errors }}</div>
+                {% endif %}
+                {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=form picker_id="task-window-picker" hide_picker_header=True show_day_actions=False clear_all_label="Clear task window" %}
             </div>
         </section>
 
@@ -189,5 +149,5 @@
         updateRecurringVisibility();
     }());
 </script>
-<script src="{% static 'weekly_schedule_picker.js' %}?v=20260320a" defer></script>
+<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
 {% endblock %}

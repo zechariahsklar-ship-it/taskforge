@@ -952,7 +952,10 @@ class TaskScheduledWindowTests(TestCase):
         response = self.client.get(reverse("task-create"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Task window")
+        self.assertContains(response, "Scheduled work window")
+        self.assertContains(response, 'id="id_scheduled_week_of"')
+        self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
+        self.assertContains(response, 'data-schedule-summary-card="task_window_day_6"')
         self.assertNotContains(response, '<label for="id_scheduled_start_time">Start time</label>', html=True)
         self.assertNotContains(response, '<label for="id_scheduled_end_time">End time</label>', html=True)
 
@@ -965,8 +968,8 @@ class TaskScheduledWindowTests(TestCase):
                 "priority": Priority.MEDIUM,
                 "status": TaskStatus.NEW,
                 "due_date": "",
-                "scheduled_date": "2026-03-16",
-                "scheduled_window_segments": '[["09:30", "10:30"]]',
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_2_segments": '[["09:30", "10:30"]]',
                 "respond_to_text": "",
                 "estimated_minutes": "30",
                 "assigned_to": "",
@@ -983,10 +986,10 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         task = Task.objects.get(title="Segment scheduled coverage")
         self.assertEqual(task.assigned_to, self.morning_worker)
-        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.scheduled_date, date(2026, 3, 18))
         self.assertEqual(task.scheduled_start_time, time(9, 30))
         self.assertEqual(task.scheduled_end_time, time(10, 30))
-        self.assertEqual(task.due_date, date(2026, 3, 16))
+        self.assertEqual(task.due_date, date(2026, 3, 18))
 
     def test_task_create_auto_assigns_worker_available_in_scheduled_window(self):
         response = self.client.post(
@@ -997,9 +1000,8 @@ class TaskScheduledWindowTests(TestCase):
                 "priority": Priority.MEDIUM,
                 "status": TaskStatus.NEW,
                 "due_date": "",
-                "scheduled_date": "2026-03-16",
-                "scheduled_start_time": "09:30",
-                "scheduled_end_time": "10:30",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:30", "10:30"]]',
                 "respond_to_text": "",
                 "estimated_minutes": "30",
                 "assigned_to": "",
@@ -1030,9 +1032,8 @@ class TaskScheduledWindowTests(TestCase):
                 "priority": Priority.MEDIUM,
                 "status": TaskStatus.NEW,
                 "due_date": "2026-03-16",
-                "scheduled_date": "2026-03-16",
-                "scheduled_start_time": "09:30",
-                "scheduled_end_time": "10:30",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:30", "10:30"]]',
                 "respond_to_text": "",
                 "estimated_minutes": "30",
                 "assigned_to": str(self.afternoon_worker.pk),
@@ -1150,9 +1151,11 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Add rotating team members")
         self.assertContains(response, "Scheduled work window")
-        self.assertContains(response, "Scheduled date")
-        self.assertContains(response, "Start time")
-        self.assertContains(response, "End time")
+        self.assertContains(response, "Show week of")
+        self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
+        self.assertNotContains(response, "Scheduled date")
+        self.assertNotContains(response, "Start time")
+        self.assertNotContains(response, "End time")
         self.assertContains(response, 'name="additional_assignees"', count=1)
         self.assertContains(response, 'name="rotating_additional_assignee_count"')
         self.assertContains(response, 'type="checkbox"', html=False)

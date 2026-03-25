@@ -193,6 +193,12 @@
             state.segmentsInput.value = JSON.stringify(segments);
             updateLegacyFields(state, segments);
             refreshDay(day);
+            root.dispatchEvent(new CustomEvent("taskforge:schedule-change", {
+                detail: {
+                    day: day,
+                    segments: cloneSegments(segments),
+                },
+            }));
         }
 
         function refreshDay(day) {
