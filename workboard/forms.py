@@ -68,11 +68,17 @@ def _format_short_date_label(value: date) -> str:
     return f"{value.strftime('%a')} {value.strftime('%b')} {value.day}"
 
 
+SCHEDULE_DAY_START_MINUTES = 7 * 60
+SCHEDULE_DAY_END_MINUTES = 18 * 60
+SCHEDULE_DAY_START_TIME = time(7, 0)
+SCHEDULE_DAY_END_TIME = time(18, 0)
+
+
 HALF_HOUR_CHOICES = [("", "Not scheduled")]
-for hour in range(24):
-    for minute in (0, 30):
-        value = time(hour, minute)
-        HALF_HOUR_CHOICES.append((value.strftime("%H:%M"), _format_time_label(value)))
+for minutes in range(SCHEDULE_DAY_START_MINUTES, SCHEDULE_DAY_END_MINUTES + 1, 30):
+    hour, minute = divmod(minutes, 60)
+    value = time(hour, minute)
+    HALF_HOUR_CHOICES.append((value.strftime("%H:%M"), _format_time_label(value)))
 
 WEEKLY_CALENDAR_SLOTS = []
 for index, choice in enumerate(HALF_HOUR_CHOICES[1:-1]):
@@ -167,6 +173,9 @@ def _window_minutes(start_value: time, end_value: time) -> int:
     start_dt = datetime.combine(datetime.today(), start_value)
     end_dt = datetime.combine(datetime.today(), end_value)
     return int((end_dt - start_dt).total_seconds() // 60)
+
+def _schedule_block_within_workday(start_value: time, end_value: time) -> bool:
+    return start_value >= SCHEDULE_DAY_START_TIME and end_value <= SCHEDULE_DAY_END_TIME
 
 
 def _legacy_hours_to_window(hours_value: Decimal | None) -> tuple[time | None, time | None, Decimal]:
@@ -300,6 +309,9 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
             if _window_minutes(start_value, end_value) % 30 != 0:
                 self.add_error(field_name, f"{label} must use 30-minute increments.")
                 return None
+            if not _schedule_block_within_workday(start_value, end_value):
+                self.add_error(field_name, f"{label} must stay between 7:00 AM and 6:00 PM.")
+                return None
             parsed_blocks.append((start_value, end_value))
 
         parsed_blocks.sort(key=lambda block: (block[0], block[1]))
@@ -332,6 +344,9 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
                 return None
             if _window_minutes(start_value, end_value) % 30 != 0:
                 self.add_error(f"{prefix}_end", f"{label} must use 30-minute increments.")
+                return None
+            if not _schedule_block_within_workday(start_value, end_value):
+                self.add_error(f"{prefix}_end", f"{label} must stay between 7:00 AM and 6:00 PM.")
                 return None
             return [(start_value, end_value)]
 
@@ -764,6 +779,9 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             if _window_minutes(start_value, end_value) % 30 != 0:
                 self.add_error("scheduled_window_segments", "The task windows must use 30-minute increments.")
                 return None
+            if not _schedule_block_within_workday(start_value, end_value):
+                self.add_error("scheduled_window_segments", "Task windows must stay between 7:00 AM and 6:00 PM.")
+                return None
             parsed_blocks.append((start_value, end_value))
 
         parsed_blocks.sort(key=lambda block: (block[0], block[1]))
@@ -823,6 +841,9 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 if blocks is None:
                     return cleaned_data
             elif start_value and end_value:
+                if not _schedule_block_within_workday(start_value, end_value):
+                    self.add_error("scheduled_window_segments", "Task windows must stay between 7:00 AM and 6:00 PM.")
+                    return cleaned_data
                 blocks = [(start_value, end_value)]
 
             scheduled_date = cleaned_data.get("scheduled_date") or cleaned_data.get("due_date")
@@ -1170,22 +1191,34 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             if start_value and end_value and end_value <= start_value:
                 self.add_error("scheduled_end_time", "End time must be after the start time.")
             if start_value and end_value:
-                estimated_minutes = cleaned_data.get("estimated_minutes")
-                if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
-                    self.add_error("estimated_minutes", "The time estimate is longer than the recurring work window.")
-                unavailable = []
-                for teammate in filter(None, [assign_to, *(additional_assignees or [])]):
-                    if not TaskAssignmentService.user_is_available_for_window(
-                        teammate,
-                        scheduled_date=next_run_date,
-                        scheduled_start_time=start_value,
-                        scheduled_end_time=end_value,
-                    ):
-                        unavailable.append(teammate.display_label)
-                if assign_to and assign_to.display_label in unavailable:
-                    self.add_error("assign_to", f"{assign_to.display_label} is not scheduled during the next recurring work window.")
-                    unavailable = [label for label in unavailable if label != assign_to.display_label]
-                if unavailable:
-                    self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
+                if not _schedule_block_within_workday(start_value, end_value):
+                    self.add_error("scheduled_end_time", "Recurring work windows must stay between 7:00 AM and 6:00 PM.")
+                else:
+                    estimated_minutes = cleaned_data.get("estimated_minutes")
+                    if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
+                        self.add_error("estimated_minutes", "The time estimate is longer than the recurring work window.")
+                    unavailable = []
+                    for teammate in filter(None, [assign_to, *(additional_assignees or [])]):
+                        if not TaskAssignmentService.user_is_available_for_window(
+                            teammate,
+                            scheduled_date=next_run_date,
+                            scheduled_start_time=start_value,
+                            scheduled_end_time=end_value,
+                        ):
+                            unavailable.append(teammate.display_label)
+                    if assign_to and assign_to.display_label in unavailable:
+                        self.add_error("assign_to", f"{assign_to.display_label} is not scheduled during the next recurring work window.")
+                        unavailable = [label for label in unavailable if label != assign_to.display_label]
+                    if unavailable:
+                        self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
 
         return cleaned_data
+
+
+
+
+
+
+
+
+

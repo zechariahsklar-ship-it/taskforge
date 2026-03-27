@@ -396,7 +396,7 @@
         refreshAll();
 
         if (frame) {
-            var targetCell = root.querySelector(".weekly-calendar-cell.is-selected") || root.querySelector('.weekly-calendar-cell[data-slot-value="08:00"]');
+            var targetCell = root.querySelector(".weekly-calendar-cell.is-selected") || root.querySelector('.weekly-calendar-cell[data-slot-value="07:00"]');
             if (targetCell) {
                 frame.scrollTop = Math.max(0, targetCell.offsetTop - 160);
             }
@@ -459,3 +459,4 @@
         initAllPickers();
     }
 })();
+

@@ -386,6 +386,10 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Monday")
         self.assertContains(response, "Sunday")
         self.assertNotContains(response, 'type="number" name="day_of_week"', html=False)
+        self.assertContains(response, 'value="07:00"')
+        self.assertContains(response, 'value="18:00"')
+        self.assertNotContains(response, 'value="06:30"')
+        self.assertNotContains(response, 'value="18:30"')
         self.assertContains(response, "Day of month to repeat on")
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Add rotating team members")
@@ -960,8 +964,39 @@ class TaskScheduledWindowTests(TestCase):
         self.assertContains(response, 'id="id_scheduled_week_of"')
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_6"')
+        self.assertContains(response, 'data-slot-value="07:00"')
+        self.assertContains(response, 'data-slot-end="18:00"')
+        self.assertNotContains(response, 'data-slot-value="06:30"')
+        self.assertNotContains(response, 'data-slot-end="18:30"')
         self.assertNotContains(response, '<label for="id_scheduled_start_time">Start time</label>', html=True)
         self.assertNotContains(response, '<label for="id_scheduled_end_time">End time</label>', html=True)
+
+    def test_task_create_rejects_task_window_outside_student_workday(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Late shift coverage",
+                "description": "Should not be schedulable after hours.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_2_segments": "[[\"18:00\", \"19:00\"]]",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Task windows must stay between 7:00 AM and 6:00 PM.")
+        self.assertFalse(Task.objects.filter(title="Late shift coverage").exists())
 
     def test_task_create_accepts_task_window_segments_payload(self):
         response = self.client.post(
@@ -2178,7 +2213,7 @@ class PeopleManagementTests(TestCase):
                 "action": "schedule_override",
                 "override_date": "2026-03-16",
                 "note": "Split lab schedule",
-                "override_segments": json.dumps([["14:00", "16:00"], ["18:00", "19:00"]]),
+                "override_segments": json.dumps([["14:00", "16:00"], ["16:30", "17:30"]]),
             },
             follow=True,
         )
@@ -2186,10 +2221,10 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(response.status_code, 200)
         schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
         self.assertEqual(schedule_override.blocks.count(), 2)
-        self.assertEqual(schedule_override.block_summary, "2:00 PM - 4:00 PM, 6:00 PM - 7:00 PM")
+        self.assertEqual(schedule_override.block_summary, "2:00 PM - 4:00 PM, 4:30 PM - 5:30 PM")
         self.assertContains(response, 'class="weekly-schedule-summary-card is-temporary-override" data-schedule-summary-card="monday"', html=False)
         self.assertContains(response, "Mar 16, 2026")
-        self.assertContains(response, "2:00 PM - 4:00 PM, 6:00 PM - 7:00 PM (3 hrs)")
+        self.assertContains(response, "2:00 PM - 4:00 PM, 4:30 PM - 5:30 PM (3 hrs)")
         self.assertNotContains(response, 'data-schedule-summary-text="monday"')
         self.assertFalse(
             TaskAssignmentService.user_is_available_for_window(
@@ -2268,6 +2303,21 @@ class PeopleManagementTests(TestCase):
             )
         )
 
+    def test_worker_schedule_rejects_after_hours_override(self):
+        response = self.client.post(
+            reverse("worker-schedule", args=[self.profile.pk]),
+            {
+                "action": "schedule_override",
+                "override_date": "2026-03-16",
+                "note": "Too late",
+                "override_segments": json.dumps([["18:00", "19:00"]]),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Temporary schedule must stay between 7:00 AM and 6:00 PM.")
+        self.assertFalse(self.profile.schedule_overrides.filter(override_date=date(2026, 3, 16)).exists())
+
     def test_add_student_form_uses_weekly_schedule_fields_and_hides_old_profile_fields(self):
         response = self.client.get(reverse("worker-create"))
 
@@ -2293,7 +2343,11 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'data-clear-week')
         self.assertContains(create_response, 'data-schedule-summary-card="monday"')
         self.assertContains(create_response, 'class="weekly-schedule-hidden-fields"')
-        self.assertContains(create_response, 'class="weekly-calendar-cell"', count=329)
+        self.assertContains(create_response, 'class="weekly-calendar-cell"', count=154)
+        self.assertContains(create_response, 'data-slot-value="07:00"')
+        self.assertContains(create_response, 'data-slot-end="18:00"')
+        self.assertNotContains(create_response, 'data-slot-value="06:30"')
+        self.assertNotContains(create_response, 'data-slot-end="18:30"')
         self.assertContains(create_response, 'data-copy-day="monday"')
         self.assertContains(create_response, 'data-clear-day="monday"')
         self.assertNotContains(details_response, 'data-weekly-schedule-picker')
