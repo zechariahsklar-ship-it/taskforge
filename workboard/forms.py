@@ -59,6 +59,8 @@ TASK_DUE_SCOPE_CHOICES = [
     ("none", "No due date"),
 ]
 
+WEEKDAY_SELECT_CHOICES = [("", "Select a weekday"), *Weekday.choices]
+
 
 def _format_time_label(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
@@ -583,6 +585,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     task_window_day_4_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     task_window_day_5_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     task_window_day_6_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    recurrence_day_of_week = forms.TypedChoiceField(
+        required=False,
+        choices=WEEKDAY_SELECT_CHOICES,
+        coerce=lambda value: int(value) if value not in ("", None) else None,
+        empty_value=None,
+    )
 
     class Meta:
         model = Task
@@ -1086,7 +1094,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
     next_run_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
     day_of_week = forms.TypedChoiceField(
         required=False,
-        choices=[("", "Select a weekday"), *Weekday.choices],
+        choices=WEEKDAY_SELECT_CHOICES,
         coerce=lambda value: int(value) if value not in ("", None) else None,
         empty_value=None,
     )

@@ -968,6 +968,10 @@ class TaskScheduledWindowTests(TestCase):
         self.assertContains(response, 'data-slot-end="18:00"')
         self.assertNotContains(response, 'data-slot-value="06:30"')
         self.assertNotContains(response, 'data-slot-end="18:30"')
+        self.assertContains(response, 'Select a weekday')
+        self.assertContains(response, 'Monday')
+        self.assertContains(response, 'Sunday')
+        self.assertNotContains(response, 'type="number" name="recurrence_day_of_week"', html=False)
         self.assertNotContains(response, '<label for="id_scheduled_start_time">Start time</label>', html=True)
         self.assertNotContains(response, '<label for="id_scheduled_end_time">End time</label>', html=True)
 
