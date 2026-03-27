@@ -67,7 +67,7 @@
             <div class="stack">
                 <div>
                     <h2>Scheduled work window</h2>
-                    <p class="meta">Pick the week, then click or drag on the calendar to choose the exact day and time this task should happen. TaskForge will only keep teammates assigned if they are scheduled and open during that block.</p>
+                    <p class="meta">Pick the week, then click or drag on the calendar to choose every day and time this task can be worked. TaskForge will only assign teammates who have enough open scheduled time inside those windows.</p>
                 </div>
                 <p>
                     <label for="{{ form.scheduled_week_of.id_for_label }}">{{ form.scheduled_week_of.label }}</label>
@@ -149,5 +149,5 @@
         updateRecurringVisibility();
     }());
 </script>
-<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
+<script src="{% static 'task_window_picker.js' %}?v=20260326a" defer></script>
 {% endblock %}

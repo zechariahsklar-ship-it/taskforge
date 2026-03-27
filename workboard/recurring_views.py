@@ -51,12 +51,13 @@ def recurring_template_run_now_view(request, pk):
         return HttpResponseBadRequest('POST required.')
 
     template = get_object_or_404(RecurringTaskTemplate, pk=pk)
-    task, outcome = RecurringTaskService.run_template(template, run_date=timezone.localdate(), force=True)
+    run_date = template.next_run_date
+    task, outcome = RecurringTaskService.run_template(template, run_date=run_date, force=True)
     if outcome == 'skipped':
         messages.warning(request, 'This recurring task already has an open run on the board. Finish it before running it again.')
         return redirect('recurring-detail', pk=template.pk)
 
-    messages.success(request, f'Recurring task queued for {timezone.localdate().isoformat()}.')
+    messages.success(request, f'Recurring task queued for {run_date.isoformat()}.')
     return redirect('task-detail', pk=task.pk)
 
 

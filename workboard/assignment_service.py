@@ -41,10 +41,24 @@ class TaskAssignmentService:
         )
 
     @staticmethod
-    def _candidate_metrics(profile, *, due_date):
+    def _single_window_blocks(*, scheduled_date=None, scheduled_start_time=None, scheduled_end_time=None):
+        if scheduled_date and scheduled_start_time and scheduled_end_time:
+            return {scheduled_date: [(scheduled_start_time, scheduled_end_time)]}
+        return {}
+
+    @staticmethod
+    def _candidate_metrics(profile, *, due_date, task_window_blocks=None, exclude_task_id=None):
         active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
+        if task_window_blocks:
+            capacity = TaskAssignmentService._remaining_capacity_minutes_in_task_windows(
+                profile,
+                task_window_blocks,
+                exclude_task_id=exclude_task_id,
+            )
+        else:
+            capacity = TaskAssignmentService._remaining_capacity_minutes(profile, due_date)
         return (
-            TaskAssignmentService._remaining_capacity_minutes(profile, due_date),
+            capacity,
             active_tasks.count(),
             active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"],
         )
@@ -54,26 +68,17 @@ class TaskAssignmentService:
         *,
         due_date,
         exclude_user_ids=None,
-        scheduled_date=None,
-        scheduled_start_time=None,
-        scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
         workers = TaskAssignmentService._worker_profiles(exclude_user_ids=exclude_user_ids)
         candidates = []
         for profile in workers:
-            if scheduled_date and scheduled_start_time and scheduled_end_time:
-                if not TaskAssignmentService.user_is_available_for_window(
-                    profile.user,
-                    scheduled_date=scheduled_date,
-                    scheduled_start_time=scheduled_start_time,
-                    scheduled_end_time=scheduled_end_time,
-                    exclude_task_id=exclude_task_id,
-                ):
-                    continue
             capacity, open_tasks, last_assigned_at = TaskAssignmentService._candidate_metrics(
                 profile,
                 due_date=due_date,
+                task_window_blocks=task_window_blocks,
+                exclude_task_id=exclude_task_id,
             )
             candidates.append((profile, capacity, open_tasks, last_assigned_at))
         candidates.sort(key=TaskAssignmentService._candidate_sort_key)
@@ -89,29 +94,33 @@ class TaskAssignmentService:
         scheduled_date=None,
         scheduled_start_time=None,
         scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
+        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+        )
         viable = TaskAssignmentService._matching_worker_candidates(
             due_date=due_date,
             estimated_minutes=estimated_minutes,
             exclude_user_ids=exclude_user_ids,
-            scheduled_date=scheduled_date,
-            scheduled_start_time=scheduled_start_time,
-            scheduled_end_time=scheduled_end_time,
+            task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
         )
 
         if viable:
             profile, capacity, _, _ = viable[0]
-            if scheduled_date and scheduled_start_time and scheduled_end_time:
+            if task_window_blocks:
                 summary = (
-                    f"Suggested worker: {profile.display_name} based on schedule availability for "
-                    f"{scheduled_date.isoformat()} {_format_time_label(scheduled_start_time)} - {_format_time_label(scheduled_end_time)}."
+                    f"Suggested worker: {profile.display_name} based on scheduled availability inside the task windows. "
+                    f"Remaining matching time: {int(capacity)} minutes."
                 )
                 rationale = [
                     f"Recommended assignee: {profile.display_name}",
-                    f"Available during the scheduled window on {scheduled_date.isoformat()}",
-                    "Selection favors worker-level teammates who are scheduled at that time and do not have overlapping work.",
+                    f"Estimated matching availability inside the task windows: {int(capacity)} minutes",
+                    "Selection favors worker-level teammates who can complete this work inside the allowed schedule windows.",
                 ]
             else:
                 summary = f"Suggested worker: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
@@ -123,13 +132,18 @@ class TaskAssignmentService:
             return profile.user, summary, rationale
 
         if fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
-            return fallback_supervisor, "No worker has enough available capacity before the due date, so this task should stay with the supervising user.", [
+            message = (
+                "No worker has enough scheduled availability inside those task windows, so this task should stay with the supervising user."
+                if task_window_blocks
+                else "No worker has enough available capacity before the due date, so this task should stay with the supervising user."
+            )
+            return fallback_supervisor, message, [
                 f"Recommended assignee: {fallback_supervisor.display_label}",
-                "No worker currently has enough available hours before the due date window.",
+                "No worker currently has enough available hours for this assignment rule.",
                 "Fallback rule assigned the task to the supervising user instead of rotating among supervisors.",
             ]
-        return None, "No eligible worker has enough available capacity before the due date, and no supervisor fallback is available.", [
-            "No worker currently has enough available hours before the due date window.",
+        return None, "No eligible worker has enough available capacity for this task, and no supervisor fallback is available.", [
+            "No worker currently has enough available hours for this assignment rule.",
             "No supervising fallback is available for automatic assignment.",
         ]
 
@@ -142,15 +156,19 @@ class TaskAssignmentService:
         scheduled_date=None,
         scheduled_start_time=None,
         scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
+        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+        )
         viable = TaskAssignmentService._matching_worker_candidates(
             due_date=due_date,
             estimated_minutes=estimated_minutes,
             exclude_user_ids=exclude_user_ids,
-            scheduled_date=scheduled_date,
-            scheduled_start_time=scheduled_start_time,
-            scheduled_end_time=scheduled_end_time,
+            task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
         )
         if viable:
@@ -166,6 +184,7 @@ class TaskAssignmentService:
         scheduled_date=None,
         scheduled_start_time=None,
         scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
         if not user or user.role not in UserRole.worker_roles():
@@ -176,14 +195,22 @@ class TaskAssignmentService:
             return False
         if not profile.active_status:
             return False
-        if scheduled_date and scheduled_start_time and scheduled_end_time:
-            return TaskAssignmentService.user_is_available_for_window(
-                user,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
+
+        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+        )
+        if task_window_blocks:
+            remaining_minutes = TaskAssignmentService._remaining_capacity_minutes_in_task_windows(
+                profile,
+                task_window_blocks,
                 exclude_task_id=exclude_task_id,
             )
+            if estimated_minutes is None:
+                return remaining_minutes > 0
+            return remaining_minutes >= estimated_minutes
+
         if estimated_minutes is None:
             return True
         return TaskAssignmentService._remaining_capacity_minutes(profile, due_date) >= estimated_minutes
@@ -200,11 +227,17 @@ class TaskAssignmentService:
         scheduled_date=None,
         scheduled_start_time=None,
         scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
         if count <= 0:
             return []
 
+        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+        )
         selected_users = []
         excluded_ids = {user_id for user_id in (exclude_user_ids or []) if user_id}
 
@@ -222,17 +255,13 @@ class TaskAssignmentService:
                 candidate,
                 due_date=due_date,
                 estimated_minutes=estimated_minutes,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
+                task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
             ):
                 return
             selected_users.append(candidate)
             excluded_ids.add(candidate.pk)
 
-        # Keep preferred teammates when possible, then fill from fresh rotation choices,
-        # and only fall back to previously deferred teammates if more coverage is needed.
         for user_id in preferred_user_ids or []:
             maybe_add(user_id)
 
@@ -242,9 +271,7 @@ class TaskAssignmentService:
                 due_date=due_date,
                 estimated_minutes=estimated_minutes,
                 exclude_user_ids=list(excluded_ids.union(deferred_ids)),
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
+                task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
             )
             if not candidate:
@@ -260,9 +287,7 @@ class TaskAssignmentService:
                 due_date=due_date,
                 estimated_minutes=estimated_minutes,
                 exclude_user_ids=list(excluded_ids),
-                scheduled_date=scheduled_date,
-                scheduled_start_time=scheduled_start_time,
-                scheduled_end_time=scheduled_end_time,
+                task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
             )
             if not candidate:
@@ -277,6 +302,14 @@ class TaskAssignmentService:
         start_dt = datetime.combine(date.today(), start_time)
         end_dt = datetime.combine(date.today(), end_time)
         return int((end_dt - start_dt).total_seconds() // 60)
+
+    @staticmethod
+    def _time_overlap_minutes(start_a, end_a, start_b, end_b):
+        overlap_start = max(start_a, start_b)
+        overlap_end = min(end_a, end_b)
+        if overlap_end <= overlap_start:
+            return 0
+        return TaskAssignmentService._block_minutes(overlap_start, overlap_end)
 
     @staticmethod
     def _block_tuples_from_availability(availability):
@@ -334,24 +367,129 @@ class TaskAssignmentService:
         return int(float(availability.hours_available or 0) * 60)
 
     @staticmethod
-    def user_is_available_for_window(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
-        if not user or user.role not in UserRole.worker_roles():
-            return False
-        try:
-            profile = user.worker_profile
-        except StudentWorkerProfile.DoesNotExist:
-            return False
-        if not profile.active_status:
-            return False
+    def _normalize_task_window_blocks(task_window_blocks):
+        normalized = {}
+        if not task_window_blocks:
+            return normalized
+        for work_date, blocks in task_window_blocks.items():
+            if not blocks:
+                continue
+            sorted_blocks = sorted(blocks, key=lambda block: (block[0], block[1]))
+            merged_blocks = []
+            for start_value, end_value in sorted_blocks:
+                if not merged_blocks:
+                    merged_blocks.append([start_value, end_value])
+                    continue
+                last_start, last_end = merged_blocks[-1]
+                if start_value <= last_end:
+                    merged_blocks[-1][1] = max(last_end, end_value)
+                else:
+                    merged_blocks.append([start_value, end_value])
+            normalized[work_date] = [(start_value, end_value) for start_value, end_value in merged_blocks]
+        return normalized
 
-        blocks = TaskAssignmentService._schedule_blocks_for_date(profile, scheduled_date)
-        if not any(start_time <= scheduled_start_time and end_time >= scheduled_end_time for start_time, end_time in blocks):
-            return False
-        return not TaskAssignmentService._scheduled_conflict_exists(
+    @staticmethod
+    def _task_window_blocks_for_task(task):
+        scheduled_blocks = list(task.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk"))
+        if scheduled_blocks:
+            grouped = {}
+            for block in scheduled_blocks:
+                grouped.setdefault(block.work_date, []).append((block.start_time, block.end_time))
+            return TaskAssignmentService._normalize_task_window_blocks(grouped)
+        if task.scheduled_date and task.scheduled_start_time and task.scheduled_end_time:
+            return {task.scheduled_date: [(task.scheduled_start_time, task.scheduled_end_time)]}
+        return {}
+
+    @staticmethod
+    def _minutes_remaining_in_interval(target_date, start_time, end_time):
+        if target_date != timezone.localdate():
+            return TaskAssignmentService._block_minutes(start_time, end_time)
+        local_now = timezone.localtime()
+        now_time = local_now.time().replace(second=0, microsecond=0)
+        if now_time >= end_time:
+            return 0
+        effective_start = max(start_time, now_time)
+        if effective_start >= end_time:
+            return 0
+        return TaskAssignmentService._block_minutes(effective_start, end_time)
+
+    @staticmethod
+    def _task_window_overlap_minutes(task_window_blocks, other_window_blocks):
+        total_minutes = 0
+        normalized_target = TaskAssignmentService._normalize_task_window_blocks(task_window_blocks)
+        normalized_other = TaskAssignmentService._normalize_task_window_blocks(other_window_blocks)
+        for work_date, target_blocks in normalized_target.items():
+            other_blocks = normalized_other.get(work_date, [])
+            for target_start, target_end in target_blocks:
+                for other_start, other_end in other_blocks:
+                    total_minutes += TaskAssignmentService._time_overlap_minutes(
+                        target_start,
+                        target_end,
+                        other_start,
+                        other_end,
+                    )
+        return total_minutes
+
+    @staticmethod
+    def _minutes_available_in_task_windows(profile, task_window_blocks):
+        total_minutes = 0
+        normalized_blocks = TaskAssignmentService._normalize_task_window_blocks(task_window_blocks)
+        for work_date, task_blocks in normalized_blocks.items():
+            worker_blocks = TaskAssignmentService._schedule_blocks_for_date(profile, work_date)
+            for task_start, task_end in task_blocks:
+                for worker_start, worker_end in worker_blocks:
+                    overlap_start = max(task_start, worker_start)
+                    overlap_end = min(task_end, worker_end)
+                    if overlap_end <= overlap_start:
+                        continue
+                    total_minutes += TaskAssignmentService._minutes_remaining_in_interval(
+                        work_date,
+                        overlap_start,
+                        overlap_end,
+                    )
+        return total_minutes
+
+    @staticmethod
+    def _reserved_window_minutes_for_user(user, task_window_blocks, *, exclude_task_id=None):
+        normalized_blocks = TaskAssignmentService._normalize_task_window_blocks(task_window_blocks)
+        if not normalized_blocks:
+            return 0
+
+        active_tasks = TaskAssignmentService._active_task_queryset_for_user(user)
+        if exclude_task_id:
+            active_tasks = active_tasks.exclude(pk=exclude_task_id)
+        relevant_dates = list(normalized_blocks.keys())
+        active_tasks = active_tasks.filter(
+            Q(scheduled_date__in=relevant_dates) | Q(scheduled_blocks__work_date__in=relevant_dates)
+        ).prefetch_related("scheduled_blocks").distinct()
+
+        reserved_minutes = 0
+        for other_task in active_tasks:
+            other_blocks = TaskAssignmentService._task_window_blocks_for_task(other_task)
+            overlap_minutes = TaskAssignmentService._task_window_overlap_minutes(normalized_blocks, other_blocks)
+            if overlap_minutes <= 0:
+                continue
+            reserved_minutes += min(other_task.estimated_minutes or overlap_minutes, overlap_minutes)
+        return reserved_minutes
+
+    @staticmethod
+    def _remaining_capacity_minutes_in_task_windows(profile, task_window_blocks, *, exclude_task_id=None):
+        available_minutes = TaskAssignmentService._minutes_available_in_task_windows(profile, task_window_blocks)
+        reserved_minutes = TaskAssignmentService._reserved_window_minutes_for_user(
+            profile.user,
+            task_window_blocks,
+            exclude_task_id=exclude_task_id,
+        )
+        return max(available_minutes - reserved_minutes, 0)
+
+    @staticmethod
+    def user_is_available_for_window(user, *, scheduled_date, scheduled_start_time, scheduled_end_time, exclude_task_id=None):
+        required_minutes = TaskAssignmentService._block_minutes(scheduled_start_time, scheduled_end_time)
+        return TaskAssignmentService.worker_can_take_task(
             user,
-            scheduled_date=scheduled_date,
-            scheduled_start_time=scheduled_start_time,
-            scheduled_end_time=scheduled_end_time,
+            due_date=scheduled_date,
+            estimated_minutes=required_minutes,
+            task_window_blocks={scheduled_date: [(scheduled_start_time, scheduled_end_time)]},
             exclude_task_id=exclude_task_id,
         )
 
@@ -387,18 +525,24 @@ class TaskAssignmentService:
         scheduled_date=None,
         scheduled_start_time=None,
         scheduled_end_time=None,
+        task_window_blocks=None,
         exclude_task_id=None,
     ):
-        pool = TaskAssignmentService._candidate_pool(
-            due_date=due_date or scheduled_date,
-            exclude_user_ids=exclude_user_ids,
+        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
+        )
+        pool = TaskAssignmentService._candidate_pool(
+            due_date=due_date or scheduled_date,
+            exclude_user_ids=exclude_user_ids,
+            task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
         )
-        if scheduled_date and scheduled_start_time and scheduled_end_time:
-            return pool
+        if task_window_blocks:
+            if estimated_minutes is None:
+                return [candidate for candidate in pool if candidate[1] > 0]
+            return [candidate for candidate in pool if candidate[1] >= estimated_minutes]
         if estimated_minutes is None:
             return pool
         return [candidate for candidate in pool if candidate[1] >= estimated_minutes]

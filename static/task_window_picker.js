@@ -88,18 +88,6 @@
         scheduledDateInput.value = formatInputValue(addDays(weekStart, dayIndex));
     }
 
-    function clearOtherDays(root, keepPrefix) {
-        var picker = root.taskforgeSchedulePicker;
-        if (!picker) {
-            return;
-        }
-        TASK_DAY_PREFIXES.forEach(function (prefix) {
-            if (prefix !== keepPrefix && picker.getSegments(prefix).length) {
-                picker.setSegments(prefix, []);
-            }
-        });
-    }
-
     function updateDayLabels(root, weekStart) {
         var headers = root.querySelectorAll(".weekly-calendar-header");
         TASK_DAY_PREFIXES.forEach(function (prefix, index) {
@@ -148,9 +136,6 @@
         root.addEventListener("taskforge:schedule-change", function (event) {
             if (!event.detail || TASK_DAY_PREFIXES.indexOf(event.detail.day) === -1) {
                 return;
-            }
-            if (event.detail.segments && event.detail.segments.length) {
-                clearOtherDays(root, event.detail.day);
             }
             syncScheduledDate(root, currentWeekStart(weekInput, scheduledDateInput), scheduledDateInput);
         });

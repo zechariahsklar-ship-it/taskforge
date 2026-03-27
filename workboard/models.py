@@ -13,6 +13,10 @@ def _format_time_window(start_time, end_time):
     return f"{_format_clock_time(start_time)} - {_format_clock_time(end_time)}"
 
 
+def _format_calendar_date(value):
+    return f"{value.strftime('%b')} {value.day}, {value.year}"
+
+
 def _ordered_block_summary(block_manager):
     blocks = list(block_manager.order_by("position", "start_time", "end_time", "pk"))
     if not blocks:
@@ -442,9 +446,27 @@ class Task(models.Model):
 
     @property
     def scheduled_window_display(self):
+        scheduled_blocks = list(self.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk"))
+        if scheduled_blocks:
+            grouped_labels = {}
+            for block in scheduled_blocks:
+                grouped_labels.setdefault(block.work_date, []).append(
+                    _format_time_window(block.start_time, block.end_time)
+                )
+            return "; ".join(
+                f"{_format_calendar_date(work_date)}: {', '.join(labels)}"
+                for work_date, labels in grouped_labels.items()
+            )
         if not self.scheduled_date or not self.scheduled_start_time or not self.scheduled_end_time:
             return ""
         return f"{self.scheduled_date.isoformat()} | {_format_time_window(self.scheduled_start_time, self.scheduled_end_time)}"
+
+    @property
+    def scheduled_window_latest_date(self):
+        latest_block = self.scheduled_blocks.order_by("-work_date", "-position", "-end_time", "-pk").first()
+        if latest_block:
+            return latest_block.work_date
+        return self.scheduled_date
 
     def mark_complete(self):
         self.status = TaskStatus.DONE
@@ -485,6 +507,24 @@ class Task(models.Model):
         elif self.rotate_additional_assignee:
             labels.append("Rotation x1")
         return ", ".join(labels) if labels else "None"
+
+
+class TaskScheduleBlock(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="scheduled_blocks")
+    work_date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["work_date", "position", "start_time", "end_time", "pk"]
+
+    def __str__(self):
+        return f"{self.task.title} - {_format_calendar_date(self.work_date)} {self.display_label}"
+
+    @property
+    def display_label(self):
+        return _format_time_window(self.start_time, self.end_time)
 
 
 class TaskNote(models.Model):

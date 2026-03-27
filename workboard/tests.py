@@ -342,19 +342,19 @@ class RecurringTaskListViewTests(TestCase):
         self.assertNotContains(response, "Generated recurring run")
         self.assertContains(response, "Recurring task removed.")
 
-    def test_recurring_run_now_creates_task_and_advances_next_date(self):
+    def test_recurring_run_now_creates_task_using_template_next_run_date(self):
         self.first_template.next_run_date = date(2026, 3, 27)
         self.first_template.save(update_fields=["next_run_date", "updated_at"])
 
-        with patch("workboard.recurring_views.timezone.localdate", return_value=date(2026, 3, 20)):
-            response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
+        response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
 
         self.assertEqual(response.status_code, 200)
         generated = Task.objects.filter(recurring_template=self.first_template).latest("pk")
         self.first_template.refresh_from_db()
-        self.assertEqual(generated.due_date, date(2026, 3, 20))
+        self.assertEqual(generated.due_date, date(2026, 3, 27))
         self.assertEqual(generated.assigned_to, self.worker)
-        self.assertEqual(self.first_template.next_run_date, date(2026, 3, 27))
+        self.assertEqual(self.first_template.next_run_date, date(2026, 4, 3))
+        self.assertContains(response, "Recurring task queued for 2026-03-27.")
 
     def test_recurring_run_now_warns_when_current_run_is_still_open(self):
         Task.objects.create(
@@ -382,6 +382,10 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Repeat cadence")
         self.assertContains(response, "Repeat every")
         self.assertContains(response, "Weekday to repeat on")
+        self.assertContains(response, "Select a weekday")
+        self.assertContains(response, "Monday")
+        self.assertContains(response, "Sunday")
+        self.assertNotContains(response, 'type="number" name="day_of_week"', html=False)
         self.assertContains(response, "Day of month to repeat on")
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Add rotating team members")
@@ -1047,8 +1051,88 @@ class TaskScheduledWindowTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "is not scheduled during that work window")
+        self.assertContains(response, "does not have enough scheduled availability during those task windows")
         self.assertFalse(Task.objects.filter(title="Scheduled phone shift").exists())
+
+    def test_task_create_accepts_multiple_task_windows_and_uses_last_window_as_due_date(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Multi-window lab coverage",
+                "description": "Can be completed during two morning windows.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:00", "10:00"]]',
+                "task_window_day_2_segments": '[["09:00", "10:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "120",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Multi-window lab coverage")
+        self.assertEqual(task.assigned_to, self.morning_worker)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.due_date, date(2026, 3, 18))
+        self.assertEqual(task.scheduled_blocks.count(), 2)
+        self.assertEqual(
+            list(task.scheduled_blocks.values_list("work_date", "start_time", "end_time")),
+            [
+                (date(2026, 3, 16), time(9, 0), time(10, 0)),
+                (date(2026, 3, 18), time(9, 0), time(10, 30)),
+            ],
+        )
+
+    def test_task_create_checks_total_available_minutes_inside_task_windows(self):
+        Task.objects.create(
+            title="Existing morning commitment",
+            description="Already using the Monday task window.",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.morning_worker,
+            due_date=date(2026, 3, 16),
+            estimated_minutes=60,
+            scheduled_date=date(2026, 3, 16),
+            scheduled_start_time=time(9, 0),
+            scheduled_end_time=time(10, 0),
+        )
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Needs more window time",
+                "description": "Two windows exist, but one is already consumed.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:00", "10:00"]]',
+                "task_window_day_2_segments": '[["09:00", "10:00"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "90",
+                "assigned_to": str(self.morning_worker.pk),
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "does not have enough scheduled availability during those task windows")
+        self.assertFalse(Task.objects.filter(title="Needs more window time").exists())
 
     def test_split_shift_worker_is_available_inside_second_block_but_not_gap(self):
         self._replace_blocks(

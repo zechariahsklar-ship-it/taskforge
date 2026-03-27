@@ -200,7 +200,19 @@ def _task_board_queryset():
         "requested_by",
         "created_by",
         "rotating_additional_assignee",
-    ).prefetch_related("additional_assignees", "rotating_additional_assignees")
+    ).prefetch_related("additional_assignees", "rotating_additional_assignees", "scheduled_blocks")
+
+
+def _task_schedule_blocks_by_date(task: Task) -> dict:
+    scheduled_blocks = list(task.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk"))
+    if scheduled_blocks:
+        grouped_blocks = {}
+        for block in scheduled_blocks:
+            grouped_blocks.setdefault(block.work_date, []).append((block.start_time, block.end_time))
+        return grouped_blocks
+    if task.scheduled_date and task.scheduled_start_time and task.scheduled_end_time:
+        return {task.scheduled_date: [(task.scheduled_start_time, task.scheduled_end_time)]}
+    return {}
 
 
 def _ordered_board_tasks(queryset):
@@ -288,6 +300,7 @@ def _choose_rotating_additional_assignees(
     scheduled_date=None,
     scheduled_start_time=None,
     scheduled_end_time=None,
+    task_window_blocks=None,
     exclude_task_id=None,
 ) -> list[User]:
     excluded_ids = {user_id for user_id in (fixed_additional_ids or []) if user_id}
@@ -304,6 +317,7 @@ def _choose_rotating_additional_assignees(
         scheduled_date=scheduled_date,
         scheduled_start_time=scheduled_start_time,
         scheduled_end_time=scheduled_end_time,
+        task_window_blocks=task_window_blocks,
         exclude_task_id=exclude_task_id,
     )
 
@@ -314,6 +328,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
 
     fixed_additional_ids = list(task.additional_assignees.values_list("pk", flat=True))
     rotation_count = task.rotating_additional_assignee_count or 0
+    task_window_blocks = _task_schedule_blocks_by_date(task)
     rotating_assignees = _choose_rotating_additional_assignees(
         due_date=task.due_date,
         estimated_minutes=task.estimated_minutes,
@@ -325,6 +340,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
         scheduled_date=task.scheduled_date,
         scheduled_start_time=task.scheduled_start_time,
         scheduled_end_time=task.scheduled_end_time,
+        task_window_blocks=task_window_blocks,
         exclude_task_id=task.pk,
     )
     task.rotate_additional_assignee = rotation_count > 0
@@ -599,7 +615,7 @@ def _active_task_filter_labels(filter_form: TaskBoardFilterForm) -> list[str]:
 
 def _apply_saved_task_view(queryset, *, saved_view: str, today: date):
     if saved_view == "today":
-        return queryset.exclude(status=TaskStatus.DONE).filter(Q(due_date=today) | Q(scheduled_date=today))
+        return queryset.exclude(status=TaskStatus.DONE).filter(Q(due_date=today) | Q(scheduled_date=today) | Q(scheduled_blocks__work_date=today))
     if saved_view == "overdue":
         return queryset.exclude(status=TaskStatus.DONE).filter(due_date__lt=today)
     if saved_view == "waiting":
@@ -607,7 +623,7 @@ def _apply_saved_task_view(queryset, *, saved_view: str, today: date):
     if saved_view == "recurring":
         return queryset.filter(Q(recurring_task=True) | Q(recurring_template__isnull=False))
     if saved_view == "scheduled":
-        return queryset.exclude(status=TaskStatus.DONE).filter(scheduled_date__isnull=False)
+        return queryset.exclude(status=TaskStatus.DONE).filter(Q(scheduled_date__isnull=False) | Q(scheduled_blocks__isnull=False))
     return queryset
 
 
@@ -654,7 +670,7 @@ def _build_due_today_warning(*, task_queryset, current_view: str):
     today = timezone.localdate()
     due_today_count = (
         task_queryset.exclude(status=TaskStatus.DONE)
-        .filter(Q(due_date=today) | Q(scheduled_date=today))
+        .filter(Q(due_date=today) | Q(scheduled_date=today) | Q(scheduled_blocks__work_date=today))
         .distinct()
         .count()
     )
@@ -816,6 +832,7 @@ def task_intake_review_view(request, pk):
             form.fields.pop(field_name, None)
         if form.is_valid():
             original_estimated_minutes = initial.get("estimated_minutes")
+            task_window_blocks = form.scheduled_task_window_map()
             task = form.save(commit=False)
             task.created_by = request.user
             task = _ensure_task_due_date(task)
@@ -828,11 +845,13 @@ def task_intake_review_view(request, pk):
                     scheduled_date=task.scheduled_date,
                     scheduled_start_time=task.scheduled_start_time,
                     scheduled_end_time=task.scheduled_end_time,
+                    task_window_blocks=task_window_blocks,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
+            form.save_task_schedule(task)
             TaskEstimateFeedbackService.record_feedback(
                 task=task,
                 original_estimated_minutes=original_estimated_minutes,
@@ -884,6 +903,7 @@ def task_create_view(request):
     if request.method == "POST":
         form = TaskManualForm(request.POST)
         if form.is_valid():
+            task_window_blocks = form.scheduled_task_window_map()
             task = form.save(commit=False)
             task.created_by = request.user
             task = _ensure_task_due_date(task)
@@ -896,11 +916,13 @@ def task_create_view(request):
                     scheduled_date=task.scheduled_date,
                     scheduled_start_time=task.scheduled_start_time,
                     scheduled_end_time=task.scheduled_end_time,
+                    task_window_blocks=task_window_blocks,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
                 task.mark_complete()
             task.save()
+            form.save_task_schedule(task)
             form.save_m2m()
             task = _apply_task_additional_assignee_settings(task, preserve_existing_rotation=False)
             task = _sync_task_recurring_template(task)
@@ -1100,6 +1122,7 @@ def task_edit_view(request, pk):
         before_snapshot = TaskAuditService.snapshot(task)
         form = TaskManualForm(request.POST, instance=task)
         if form.is_valid():
+            task_window_blocks = form.scheduled_task_window_map()
             updated_task = form.save(commit=False)
             updated_task = _ensure_task_due_date(updated_task)
             updated_task = _append_task_to_status(updated_task, previous_status=previous_status)
@@ -1108,6 +1131,7 @@ def task_edit_view(request, pk):
             elif updated_task.status != TaskStatus.DONE:
                 updated_task.completed_at = None
             updated_task.save()
+            form.save_task_schedule(updated_task)
             TaskEstimateFeedbackService.record_feedback(
                 task=updated_task,
                 original_estimated_minutes=original_estimated_minutes,

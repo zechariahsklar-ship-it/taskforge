@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ page_title }} | TaskForge<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
+{% block title %}{{ page_title }} | TaskForge<script src="{% static 'task_window_picker.js' %}?v=20260326a" defer></script>
 
 {% endblock %}
 
@@ -97,7 +97,7 @@
                 <div class="stack">
                     <div>
                         <h3>Scheduled work window</h3>
-                        <p class="meta">Pick the week, then click or drag on the calendar to choose the exact day and time this task should happen.</p>
+                        <p class="meta">Pick the week, then click or drag on the calendar to choose every day and time this task can be worked.</p>
                     </div>
                     <p>
                         <label for="{{ form.scheduled_week_of.id_for_label }}">{{ form.scheduled_week_of.label }}</label>
@@ -207,6 +207,6 @@
     }());
 </script>
 
-<script src="{% static 'task_window_picker.js' %}?v=20260324a" defer></script>
+<script src="{% static 'task_window_picker.js' %}?v=20260326a" defer></script>
 
 {% endblock %}

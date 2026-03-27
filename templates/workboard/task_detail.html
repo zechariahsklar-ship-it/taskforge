@@ -84,7 +84,7 @@
             <dl class="detail-list">
                 <dt>Assigned To</dt><dd>{{ task.assignee_labels }}</dd>
                 <dt>Estimate</dt><dd>{{ task.estimated_minutes|default:"-" }} minutes</dd>
-                <dt>Scheduled For</dt><dd>{% if task.scheduled_date and task.scheduled_start_time and task.scheduled_end_time %}{{ task.scheduled_date|date:"M j, Y" }} during {{ task.scheduled_start_time|time:"g:i A" }} - {{ task.scheduled_end_time|time:"g:i A" }}{% else %}-{% endif %}</dd>
+                <dt>Allowed Work Windows</dt><dd>{{ task.scheduled_window_display|default:"-" }}</dd>
                 <dt>Notify When Done</dt><dd>{{ task.respond_to_text|default:"-" }}</dd>
             </dl>
         </section>
