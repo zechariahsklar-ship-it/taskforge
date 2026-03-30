@@ -43,6 +43,7 @@ from .models import (
     TaskIntakeDraft,
     TaskIntakeDraftAttachment,
     TaskStatus,
+    Team,
     User,
     UserRole,
     Weekday,
@@ -91,8 +92,21 @@ def supervisor_required(view_func):
     def wrapped(request, *args, **kwargs):
         if not request.user.is_authenticated:
             return redirect("login")
-        if request.user.role != UserRole.SUPERVISOR:
+        if not request.user.is_supervisor:
             return HttpResponseForbidden("Supervisor access required.")
+        _process_ready_recurring_tasks(request)
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
+
+
+def admin_required(view_func):
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect("login")
+        if not request.user.is_admin:
+            return HttpResponseForbidden("Admin access required.")
         _process_ready_recurring_tasks(request)
         return view_func(request, *args, **kwargs)
 
@@ -164,24 +178,40 @@ def _ensure_task_due_date(task: Task) -> Task:
     return task
 
 
-def _next_board_order(status: str, exclude_pk: int | None = None) -> int:
+def _scope_queryset_to_user_team(queryset, user: User, *, field_name: str = "team"):
+    if user.is_admin:
+        return queryset
+    if not user.team_id:
+        return queryset.none()
+    return queryset.filter(**{f"{field_name}_id": user.team_id})
+
+
+def _team_scoped_task_queryset(user: User, queryset=None):
+    return _scope_queryset_to_user_team(queryset or _task_board_queryset(), user)
+
+
+def _next_board_order(status: str, exclude_pk: int | None = None, team: Team | None = None) -> int:
     queryset = Task.objects.filter(status=status)
+    if team is not None:
+        queryset = queryset.filter(team=team)
     if exclude_pk:
         queryset = queryset.exclude(pk=exclude_pk)
     return (queryset.aggregate(max_order=Max("board_order")).get("max_order") or 0) + 1
 
 
-def _ordered_status_tasks(status: str, *, exclude_pk: int | None = None) -> list[Task]:
+def _ordered_status_tasks(status: str, *, exclude_pk: int | None = None, team: Team | None = None) -> list[Task]:
     queryset = Task.objects.filter(status=status)
+    if team is not None:
+        queryset = queryset.filter(team=team)
     if exclude_pk:
         queryset = queryset.exclude(pk=exclude_pk)
     return list(queryset.order_by(F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
 
 
-def _append_task_to_status(task: Task, previous_status: str | None = None) -> Task:
-    if task.board_order is not None and previous_status == task.status:
+def _append_task_to_status(task: Task, previous_status: str | None = None, previous_team_id: int | None = None) -> Task:
+    if task.board_order is not None and previous_status == task.status and previous_team_id == task.team_id:
         return task
-    task.board_order = _next_board_order(task.status, exclude_pk=task.pk)
+    task.board_order = _next_board_order(task.status, exclude_pk=task.pk, team=task.team)
     return task
 
 
@@ -196,6 +226,7 @@ def _task_membership_filter(user: User) -> Q:
 
 def _task_board_queryset():
     return Task.objects.select_related(
+        "team",
         "assigned_to",
         "requested_by",
         "created_by",
@@ -230,6 +261,8 @@ def _group_tasks_for_board(tasks: list[Task]) -> list[dict]:
 
 
 def _user_can_access_task(user: User, task: Task) -> bool:
+    if not user.is_admin and user.team_id != task.team_id:
+        return False
     if user.can_view_full_board:
         return True
     return (
@@ -254,12 +287,14 @@ def _resequence_status_tasks(tasks: list[Task], status: str) -> None:
             item.save(update_fields=update_fields)
 
 
-def _close_status_gap(status: str, *, exclude_pk: int) -> None:
-    _resequence_status_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk), status)
+def _close_status_gap(status: str, *, exclude_pk: int, team: Team | None = None) -> None:
+    _resequence_status_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk, team=team), status)
 
 
-def _ordered_recurring_templates(*, exclude_pk: int | None = None) -> list[RecurringTaskTemplate]:
+def _ordered_recurring_templates(*, exclude_pk: int | None = None, team: Team | None = None) -> list[RecurringTaskTemplate]:
     queryset = RecurringTaskTemplate.objects.all()
+    if team is not None:
+        queryset = queryset.filter(team=team)
     if exclude_pk:
         queryset = queryset.exclude(pk=exclude_pk)
     return list(queryset.order_by(F("display_order").asc(nulls_last=True), "next_run_date", "title", "pk"))
@@ -302,6 +337,7 @@ def _choose_rotating_additional_assignees(
     scheduled_end_time=None,
     task_window_blocks=None,
     exclude_task_id=None,
+    team=None,
 ) -> list[User]:
     excluded_ids = {user_id for user_id in (fixed_additional_ids or []) if user_id}
     if assigned_to_id:
@@ -319,6 +355,7 @@ def _choose_rotating_additional_assignees(
         scheduled_end_time=scheduled_end_time,
         task_window_blocks=task_window_blocks,
         exclude_task_id=exclude_task_id,
+        team=team,
     )
 
 
@@ -342,6 +379,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
         scheduled_end_time=task.scheduled_end_time,
         task_window_blocks=task_window_blocks,
         exclude_task_id=task.pk,
+        team=task.team,
     )
     task.rotate_additional_assignee = rotation_count > 0
     task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
@@ -376,6 +414,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
 
     if template is None:
         template = RecurringTaskTemplate.objects.create(
+            team=task.team,
             title=task.title,
             description=task.description or task.raw_message,
             priority=task.priority,
@@ -405,6 +444,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
         or template.day_of_week != task.recurrence_day_of_week
         or template.day_of_month != task.recurrence_day_of_month
     )
+    template.team = task.team
     template.title = task.title
     template.description = task.description or task.raw_message
     template.priority = task.priority
@@ -428,12 +468,14 @@ def _sync_task_recurring_template(task: Task) -> Task:
     return task
 
 
-def _backfill_orphan_recurring_tasks() -> None:
+def _backfill_orphan_recurring_tasks(*, user: User | None = None) -> None:
     orphan_tasks = (
         Task.objects.filter(recurring_task=True, recurring_template__isnull=True)
         .exclude(recurrence_pattern="")
-        .select_related("assigned_to", "requested_by", "created_by")
+        .select_related("team", "assigned_to", "requested_by", "created_by")
     )
+    if user is not None:
+        orphan_tasks = _team_scoped_task_queryset(user, orphan_tasks)
     for task in orphan_tasks:
         _sync_task_recurring_template(task)
 
@@ -692,7 +734,7 @@ def dashboard(request):
 
 @app_login_required
 def board_view(request):
-    tasks = _task_board_queryset()
+    tasks = _team_scoped_task_queryset(request.user)
     if not request.user.can_view_full_board:
         tasks = tasks.filter(_task_membership_filter(request.user))
     visible_tasks = tasks.distinct()
@@ -718,7 +760,7 @@ def board_task_move_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    task = get_object_or_404(_task_board_queryset(), pk=pk)
+    task = get_object_or_404(_team_scoped_task_queryset(request.user), pk=pk)
     if not request.user.can_edit_tasks and not _user_can_access_task(request.user, task):
         return HttpResponseForbidden("You can only move tasks assigned to you.")
 
@@ -728,7 +770,7 @@ def board_task_move_view(request, pk):
         return HttpResponseBadRequest("Invalid status.")
 
     before_task_id = request.POST.get("before_task_id", "").strip()
-    ordered_target_tasks = _ordered_status_tasks(new_status, exclude_pk=task.pk)
+    ordered_target_tasks = _ordered_status_tasks(new_status, exclude_pk=task.pk, team=task.team)
     if before_task_id:
         try:
             before_task_id_int = int(before_task_id)
@@ -753,7 +795,7 @@ def board_task_move_view(request, pk):
 
     _resequence_status_tasks(ordered_target_tasks, new_status)
     if previous_status != new_status:
-        _resequence_status_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk), previous_status)
+        _resequence_status_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk, team=task.team), previous_status)
     TaskAuditService.record_updated(task, actor=request.user, before_snapshot=before_snapshot)
 
     return JsonResponse({"ok": True, "status": task.status, "label": TaskStatus(task.status).label})
@@ -762,9 +804,9 @@ def board_task_move_view(request, pk):
 @app_login_required
 def my_tasks_view(request):
     visibility_filter = _task_membership_filter(request.user)
-    if request.user.role == UserRole.SUPERVISOR:
+    if request.user.is_supervisor:
         visibility_filter |= Q(status=TaskStatus.WAITING)
-    visible_tasks = _task_board_queryset().filter(visibility_filter).distinct()
+    visible_tasks = _team_scoped_task_queryset(request.user).filter(visibility_filter).distinct()
     filter_form = _task_filter_form(request, include_assignee=False)
     filtered_tasks, active_filters = _apply_task_board_filters(visible_tasks, filter_form)
     ordered_tasks = _ordered_board_tasks(filtered_tasks)
@@ -827,7 +869,7 @@ def task_intake_review_view(request, pk):
 
     if request.method == "POST":
         checklist_values = request.POST.getlist("checklist_items")
-        form = TaskForm(request.POST, initial=initial)
+        form = TaskForm(request.POST, initial=initial, actor=request.user)
         for field_name in excluded_intake_fields:
             form.fields.pop(field_name, None)
         if form.is_valid():
@@ -835,8 +877,9 @@ def task_intake_review_view(request, pk):
             task_window_blocks = form.scheduled_task_window_map()
             task = form.save(commit=False)
             task.created_by = request.user
+            task.team = form.cleaned_data["team"]
             task = _ensure_task_due_date(task)
-            task = _append_task_to_status(task)
+            task = _append_task_to_status(task, previous_team_id=task.team_id)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -846,6 +889,7 @@ def task_intake_review_view(request, pk):
                     scheduled_start_time=task.scheduled_start_time,
                     scheduled_end_time=task.scheduled_end_time,
                     task_window_blocks=task_window_blocks,
+                    team=task.team,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -874,7 +918,7 @@ def task_intake_review_view(request, pk):
             messages.success(request, "Task created from intake request.")
             return redirect("task-detail", pk=task.pk)
     else:
-        form = TaskForm(initial=initial)
+        form = TaskForm(initial=initial, actor=request.user)
         for field_name in excluded_intake_fields:
             form.fields.pop(field_name, None)
 
@@ -901,13 +945,14 @@ def task_intake_review_view(request, pk):
 @supervisor_required
 def task_create_view(request):
     if request.method == "POST":
-        form = TaskManualForm(request.POST)
+        form = TaskManualForm(request.POST, actor=request.user)
         if form.is_valid():
             task_window_blocks = form.scheduled_task_window_map()
             task = form.save(commit=False)
             task.created_by = request.user
+            task.team = form.cleaned_data["team"]
             task = _ensure_task_due_date(task)
-            task = _append_task_to_status(task)
+            task = _append_task_to_status(task, previous_team_id=task.team_id)
             if not task.assigned_to:
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
@@ -917,6 +962,7 @@ def task_create_view(request):
                     scheduled_start_time=task.scheduled_start_time,
                     scheduled_end_time=task.scheduled_end_time,
                     task_window_blocks=task_window_blocks,
+                    team=task.team,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -930,14 +976,14 @@ def task_create_view(request):
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
-        form = TaskManualForm()
+        form = TaskManualForm(actor=request.user)
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Create task"})
 
 
 @app_login_required
 def task_detail_view(request, pk):
     task = get_object_or_404(
-        _task_board_queryset().prefetch_related("checklist_items", "attachments", "notes__author"),
+        _team_scoped_task_queryset(request.user, _task_board_queryset().prefetch_related("checklist_items", "attachments", "notes__author")),
         pk=pk,
     )
     if not _user_can_access_task(request.user, task):
@@ -960,10 +1006,10 @@ def task_detail_view(request, pk):
                     updated_task.mark_complete()
                 elif updated_task.status != TaskStatus.DONE:
                     updated_task.completed_at = None
-                updated_task = _append_task_to_status(updated_task, previous_status=previous_status)
+                updated_task = _append_task_to_status(updated_task, previous_status=previous_status, previous_team_id=task.team_id)
                 updated_task.save()
                 if previous_status != updated_task.status:
-                    _close_status_gap(previous_status, exclude_pk=updated_task.pk)
+                    _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=updated_task.team)
                 TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
                 messages.success(request, "Task status updated.")
                 return redirect("task-detail", pk=task.pk)
@@ -1115,17 +1161,19 @@ def password_change_view(request):
 
 @task_editor_required
 def task_edit_view(request, pk):
-    task = get_object_or_404(Task, pk=pk)
+    task = get_object_or_404(_team_scoped_task_queryset(request.user, Task.objects.all()), pk=pk)
     if request.method == "POST":
         previous_status = task.status
+        previous_team_id = task.team_id
         original_estimated_minutes = task.estimated_minutes
         before_snapshot = TaskAuditService.snapshot(task)
-        form = TaskManualForm(request.POST, instance=task)
+        form = TaskManualForm(request.POST, instance=task, actor=request.user)
         if form.is_valid():
             task_window_blocks = form.scheduled_task_window_map()
             updated_task = form.save(commit=False)
+            updated_task.team = form.cleaned_data["team"]
             updated_task = _ensure_task_due_date(updated_task)
-            updated_task = _append_task_to_status(updated_task, previous_status=previous_status)
+            updated_task = _append_task_to_status(updated_task, previous_status=previous_status, previous_team_id=previous_team_id)
             if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                 updated_task.mark_complete()
             elif updated_task.status != TaskStatus.DONE:
@@ -1139,8 +1187,8 @@ def task_edit_view(request, pk):
                 corrected_by=request.user,
                 source="task_edit",
             )
-            if previous_status != updated_task.status:
-                _close_status_gap(previous_status, exclude_pk=updated_task.pk)
+            if previous_status != updated_task.status or previous_team_id != updated_task.team_id:
+                _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=Team.objects.filter(pk=previous_team_id).first())
             form.save_m2m()
             updated_task = _apply_task_additional_assignee_settings(updated_task)
             updated_task = _sync_task_recurring_template(updated_task)
@@ -1148,7 +1196,7 @@ def task_edit_view(request, pk):
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:
-        form = TaskManualForm(instance=task)
+        form = TaskManualForm(instance=task, actor=request.user)
     return render(request, "workboard/task_form.html", {"form": form, "page_title": "Edit task"})
 
 
@@ -1157,11 +1205,11 @@ def task_delete_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    task = get_object_or_404(Task, pk=pk)
+    task = get_object_or_404(_team_scoped_task_queryset(request.user, Task.objects.all()), pk=pk)
     previous_status = task.status
     delete_title = task.title
     TaskAuditService.record_deleted(task, actor=request.user)
     task.delete()
-    _close_status_gap(_board_bucket_status(previous_status), exclude_pk=0)
+    _close_status_gap(_board_bucket_status(previous_status), exclude_pk=0, team=task.team)
     messages.success(request, f'Task "{delete_title}" deleted.')
     return redirect("board")

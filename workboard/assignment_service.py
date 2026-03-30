@@ -12,11 +12,13 @@ def _format_time_label(value):
 
 class TaskAssignmentService:
     @staticmethod
-    def _worker_profiles(*, exclude_user_ids=None):
+    def _worker_profiles(*, exclude_user_ids=None, team=None):
         workers = StudentWorkerProfile.objects.filter(
             active_status=True,
             user__role__in=UserRole.worker_roles(),
         ).select_related("user")
+        if team is not None:
+            workers = workers.filter(user__team=team)
         if exclude_user_ids:
             workers = workers.exclude(user_id__in=exclude_user_ids)
         return workers
@@ -39,6 +41,16 @@ class TaskAssignmentService:
             open_tasks,
             -capacity,
         )
+
+    @staticmethod
+    def _team_fallback_supervisor(*, team=None, preferred_user=None):
+        if preferred_user and preferred_user.is_supervisor and preferred_user.assignable_to_tasks:
+            if team is None or preferred_user.team_id == getattr(team, "pk", team):
+                return preferred_user
+        queryset = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True)
+        if team is not None:
+            queryset = queryset.filter(team=team)
+        return queryset.order_by("first_name", "last_name", "username", "pk").first()
 
     @staticmethod
     def _single_window_blocks(*, scheduled_date=None, scheduled_start_time=None, scheduled_end_time=None):
@@ -70,8 +82,9 @@ class TaskAssignmentService:
         exclude_user_ids=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        team=None,
     ):
-        workers = TaskAssignmentService._worker_profiles(exclude_user_ids=exclude_user_ids)
+        workers = TaskAssignmentService._worker_profiles(exclude_user_ids=exclude_user_ids, team=team)
         candidates = []
         for profile in workers:
             capacity, open_tasks, last_assigned_at = TaskAssignmentService._candidate_metrics(
@@ -96,6 +109,7 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        team=None,
     ):
         task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
             scheduled_date=scheduled_date,
@@ -108,6 +122,7 @@ class TaskAssignmentService:
             exclude_user_ids=exclude_user_ids,
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
+            team=team,
         )
 
         if viable:
@@ -131,20 +146,21 @@ class TaskAssignmentService:
                 ]
             return profile.user, summary, rationale
 
-        if fallback_supervisor and fallback_supervisor.role == UserRole.SUPERVISOR and fallback_supervisor.assignable_to_tasks:
+        fallback_candidate = TaskAssignmentService._team_fallback_supervisor(team=team, preferred_user=fallback_supervisor)
+        if fallback_candidate:
             message = (
-                "No worker has enough scheduled availability inside those task windows, so this task should stay with the supervising user."
+                "No worker on that team has enough scheduled availability inside those task windows, so this task should stay with the supervising user for that team."
                 if task_window_blocks
-                else "No worker has enough available capacity before the due date, so this task should stay with the supervising user."
+                else "No worker on that team has enough available capacity before the due date, so this task should stay with the supervising user for that team."
             )
-            return fallback_supervisor, message, [
-                f"Recommended assignee: {fallback_supervisor.display_label}",
-                "No worker currently has enough available hours for this assignment rule.",
+            return fallback_candidate, message, [
+                f"Recommended assignee: {fallback_candidate.display_label}",
+                "No worker on that team currently has enough available hours for this assignment rule.",
                 "Fallback rule assigned the task to the supervising user instead of rotating among supervisors.",
             ]
-        return None, "No eligible worker has enough available capacity for this task, and no supervisor fallback is available.", [
-            "No worker currently has enough available hours for this assignment rule.",
-            "No supervising fallback is available for automatic assignment.",
+        return None, "No eligible same-team worker has enough available capacity for this task, and no same-team supervisor fallback is available.", [
+            "No worker on that team currently has enough available hours for this assignment rule.",
+            "No same-team supervising fallback is available for automatic assignment.",
         ]
 
     @staticmethod
@@ -158,6 +174,7 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        team=None,
     ):
         task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
             scheduled_date=scheduled_date,
@@ -170,6 +187,7 @@ class TaskAssignmentService:
             exclude_user_ids=exclude_user_ids,
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
+            team=team,
         )
         if viable:
             return viable[0][0].user
@@ -229,6 +247,7 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        team=None,
     ):
         if count <= 0:
             return []
@@ -244,11 +263,14 @@ class TaskAssignmentService:
         def maybe_add(user_id):
             if len(selected_users) >= count or not user_id or user_id in excluded_ids:
                 return
-            candidate = User.objects.filter(
+            candidate_queryset = User.objects.filter(
                 pk=user_id,
                 role__in=UserRole.worker_roles(),
                 worker_profile__active_status=True,
-            ).first()
+            )
+            if team is not None:
+                candidate_queryset = candidate_queryset.filter(team=team)
+            candidate = candidate_queryset.first()
             if not candidate:
                 return
             if not TaskAssignmentService.worker_can_take_task(
@@ -273,6 +295,7 @@ class TaskAssignmentService:
                 exclude_user_ids=list(excluded_ids.union(deferred_ids)),
                 task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
+                team=team,
             )
             if not candidate:
                 break
@@ -289,6 +312,7 @@ class TaskAssignmentService:
                 exclude_user_ids=list(excluded_ids),
                 task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
+                team=team,
             )
             if not candidate:
                 break
@@ -527,6 +551,7 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        team=None,
     ):
         task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
             scheduled_date=scheduled_date,
@@ -538,6 +563,7 @@ class TaskAssignmentService:
             exclude_user_ids=exclude_user_ids,
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
+            team=team,
         )
         if task_window_blocks:
             if estimated_minutes is None:

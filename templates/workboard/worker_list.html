@@ -6,17 +6,58 @@
 <section class="page-heading split-heading">
     <h1>People</h1>
     <div class="inline-form">
+        {% if request.user.is_admin %}
+            <a class="button-link" href="{% url 'team-create' %}">Add team</a>
+        {% endif %}
         <a class="button-link" href="{% url 'worker-create' %}">Add student</a>
         <a class="button-link" href="{% url 'student-supervisor-create' %}">Add student supervisor</a>
         <a class="button-link" href="{% url 'supervisor-create' %}">Add supervisor</a>
     </div>
 </section>
+{% if request.user.is_admin %}
+<section class="table-card">
+    <h2>Teams</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Team</th>
+                <th>Description</th>
+                <th>Members</th>
+                <th>Tasks</th>
+                <th>Recurring</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for team in teams %}
+                <tr>
+                    <td>{{ team.name }}</td>
+                    <td>{{ team.description|default:"-" }}</td>
+                    <td>{{ team.member_count }}</td>
+                    <td>{{ team.task_count }}</td>
+                    <td>{{ team.recurring_count }}</td>
+                    <td>
+                        <a href="{% url 'team-edit' team.pk %}">Edit team</a><br>
+                        <form method="post" action="{% url 'team-delete' team.pk %}" onsubmit="return window.confirm('Delete this team? Move all people and work off the team first.');">
+                            {% csrf_token %}
+                            <button type="submit" class="link-button task-delete-button">Delete team</button>
+                        </form>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">No teams yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
 <section class="table-card">
     <h2>Student workers</h2>
     <table>
         <thead>
             <tr>
                 <th>Name</th>
+                {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
                 <th>Max Hours/Day</th>
@@ -29,6 +70,7 @@
             {% for item in students %}
                 <tr>
                     <td>{{ item.profile.display_name }}</td>
+                    {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
                     <td>{{ item.profile.max_hours_per_day }}</td>
@@ -41,7 +83,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="7">No student workers yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student workers yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -52,6 +94,7 @@
         <thead>
             <tr>
                 <th>Name</th>
+                {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
                 <th>Max Hours/Day</th>
@@ -64,6 +107,7 @@
             {% for item in student_supervisors %}
                 <tr>
                     <td>{{ item.profile.display_name }}</td>
+                    {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
                     <td>{{ item.profile.max_hours_per_day }}</td>
@@ -76,7 +120,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="7">No student supervisors yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student supervisors yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -87,6 +131,7 @@
         <thead>
             <tr>
                 <th>Name</th>
+                {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Can Receive Tasks</th>
                 <th>Open Tasks</th>
@@ -98,6 +143,7 @@
             {% for supervisor in supervisors %}
                 <tr>
                     <td>{{ supervisor.display_label }}</td>
+                    {% if show_team_column %}<td>{{ supervisor.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ supervisor.email|default:"-" }}</td>
                     <td>{{ supervisor.assignable_to_tasks|yesno:"Yes,No" }}</td>
                     <td>{{ supervisor.active_tasks }}</td>
@@ -108,7 +154,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="6">No supervisors found.</td></tr>
+                <tr><td colspan="{% if show_team_column %}7{% else %}6{% endif %}">No supervisors found.</td></tr>
             {% endfor %}
         </tbody>
     </table>

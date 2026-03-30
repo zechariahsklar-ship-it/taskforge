@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, Team, User, UserRole, Weekday
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -2849,3 +2849,133 @@ class TaskAuditHistoryTests(TestCase):
         self.assertFalse(Task.objects.filter(pk=self.task.pk).exists())
         self.assertTrue(TaskAuditEvent.objects.filter(task_title="Audit task", action=TaskAuditAction.DELETED).exists())
 
+
+
+class TeamHierarchyTests(TestCase):
+    def setUp(self):
+        self.team_alpha = Team.objects.create(name="Alpha", description="Alpha team")
+        self.team_beta = Team.objects.create(name="Beta", description="Beta team")
+        self.admin = User.objects.create_superuser(username="global-admin", password="password123")
+        self.supervisor_alpha = User.objects.create_user(
+            username="supervisor-alpha",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            first_name="Alice",
+            last_name="Alpha",
+            team=self.team_alpha,
+        )
+        self.supervisor_beta = User.objects.create_user(
+            username="supervisor-beta",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            first_name="Ben",
+            last_name="Beta",
+            team=self.team_beta,
+        )
+        self.worker_alpha = User.objects.create_user(
+            username="worker-alpha",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Willa",
+            last_name="Alpha",
+            team=self.team_alpha,
+        )
+        self.worker_beta = User.objects.create_user(
+            username="worker-beta",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Wes",
+            last_name="Beta",
+            team=self.team_beta,
+        )
+        self.alpha_task = Task.objects.create(
+            team=self.team_alpha,
+            title="Alpha task",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 31),
+            assigned_to=self.worker_alpha,
+            created_by=self.supervisor_alpha,
+        )
+        self.beta_task = Task.objects.create(
+            team=self.team_beta,
+            title="Beta task",
+            priority=Priority.HIGH,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 31),
+            assigned_to=self.worker_beta,
+            created_by=self.supervisor_beta,
+        )
+        self.alpha_template = RecurringTaskTemplate.objects.create(
+            team=self.team_alpha,
+            title="Alpha recurring",
+            description="Alpha recurring work",
+            priority=Priority.MEDIUM,
+            assign_to=self.worker_alpha,
+            requested_by=self.supervisor_alpha,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+        )
+        self.beta_template = RecurringTaskTemplate.objects.create(
+            team=self.team_beta,
+            title="Beta recurring",
+            description="Beta recurring work",
+            priority=Priority.MEDIUM,
+            assign_to=self.worker_beta,
+            requested_by=self.supervisor_beta,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+        )
+
+    def test_supervisor_board_is_limited_to_their_team(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.get(reverse("board"))
+
+        self.assertContains(response, "Alpha task")
+        self.assertNotContains(response, "Beta task")
+
+    def test_supervisor_cannot_open_other_team_task_detail(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.get(reverse("task-detail", args=[self.beta_task.pk]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_recurring_list_is_team_scoped_for_supervisors(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.get(reverse("recurring-list"))
+
+        self.assertContains(response, "Alpha recurring")
+        self.assertNotContains(response, "Beta recurring")
+
+    def test_admin_people_page_shows_team_management(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("worker-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Teams")
+        self.assertContains(response, reverse("team-create"))
+        self.assertContains(response, self.team_alpha.name)
+        self.assertContains(response, self.team_beta.name)
+
+    def test_admin_can_create_team(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("team-create"),
+            {"name": "Gamma", "description": "Gamma team"},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Team.objects.filter(name="Gamma").exists())
+
+    def test_supervisor_cannot_open_team_management_routes(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.get(reverse("team-create"))
+
+        self.assertEqual(response.status_code, 403)

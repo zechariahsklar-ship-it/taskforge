@@ -19,7 +19,7 @@
             {% for adjustment_request in pending_requests %}
                 <article class="note schedule-override-note">
                     <div class="split-heading schedule-override-note-header">
-                        <p><strong>{{ adjustment_request.profile.display_name }}</strong> | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
+                        <p><strong>{{ adjustment_request.profile.display_name }}</strong>{% if request.user.is_admin %} | {{ adjustment_request.team.name|default:"No team" }}{% endif %} | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
                         <a class="button-link button-link-secondary" href="{% url 'worker-schedule' adjustment_request.profile.pk %}?override_date={{ adjustment_request.requested_date|date:'Y-m-d' }}">Open schedule</a>
                     </div>
                     <p class="meta">Requested by {{ adjustment_request.requested_by.display_label }} on {{ adjustment_request.created_at|date:"M j, Y g:i A" }}</p>
@@ -50,7 +50,7 @@
             {% for adjustment_request in recent_requests %}
                 <article class="note schedule-override-note">
                     <div class="split-heading schedule-override-note-header">
-                        <p><strong>{{ adjustment_request.profile.display_name }}</strong> | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
+                        <p><strong>{{ adjustment_request.profile.display_name }}</strong>{% if request.user.is_admin %} | {{ adjustment_request.team.name|default:"No team" }}{% endif %} | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
                         <span class="meta">{{ adjustment_request.get_status_display }}</span>
                     </div>
                     <p>{{ adjustment_request.note|default:"No note" }}</p>

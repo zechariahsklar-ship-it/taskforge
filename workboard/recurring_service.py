@@ -43,10 +43,13 @@ class RecurringTaskService:
         return template.generated_tasks.order_by('-created_at', '-pk').first()
 
     @staticmethod
-    def _exclude_recent_primary_assignee(last_generated_task) -> list[int]:
+    def _exclude_recent_primary_assignee(last_generated_task, *, team=None) -> list[int]:
         if not last_generated_task or not last_generated_task.assigned_to_id:
             return []
-        if not User.objects.filter(role__in=UserRole.worker_roles(), worker_profile__active_status=True).exclude(pk=last_generated_task.assigned_to_id).exists():
+        queryset = User.objects.filter(role__in=UserRole.worker_roles(), worker_profile__active_status=True)
+        if team is not None:
+            queryset = queryset.filter(team=team)
+        if not queryset.exclude(pk=last_generated_task.assigned_to_id).exists():
             return []
         return [last_generated_task.assigned_to_id]
 
@@ -82,7 +85,7 @@ class RecurringTaskService:
             else:
                 assignee_summary = f'{assigned_to.display_label} is the fixed assignee for the next run.'
         else:
-            excluded_user_ids = RecurringTaskService._exclude_recent_primary_assignee(last_generated_task)
+            excluded_user_ids = RecurringTaskService._exclude_recent_primary_assignee(last_generated_task, team=template.team)
             suggested_user, summary, _ = TaskAssignmentService.suggest_assignee(
                 due_date=run_date,
                 estimated_minutes=template.estimated_minutes,
@@ -92,6 +95,7 @@ class RecurringTaskService:
                 scheduled_start_time=template.scheduled_start_time,
                 scheduled_end_time=template.scheduled_end_time,
                 exclude_task_id=exclude_task_id,
+                team=template.team,
             )
             assigned_to = suggested_user
             assignee_summary = summary
@@ -108,6 +112,7 @@ class RecurringTaskService:
             scheduled_start_time=template.scheduled_start_time,
             scheduled_end_time=template.scheduled_end_time,
             exclude_task_id=exclude_task_id,
+            team=template.team,
         )
         return RecurringRunPreview(
             run_date=run_date,
@@ -126,11 +131,17 @@ class RecurringTaskService:
             return None, 'skipped'
 
         preview = RecurringTaskService.preview_next_run(template, run_date=run_date)
-        next_order = (Task.objects.filter(status=TaskStatus.NEW).aggregate(max_order=Max('board_order')).get('max_order') or 0) + 1
+        next_order = (
+            Task.objects.filter(status=TaskStatus.NEW, team=template.team)
+            .aggregate(max_order=Max('board_order'))
+            .get('max_order')
+            or 0
+        ) + 1
         rotating_assignees = preview.rotating_assignees
 
         if last_generated_task:
             task = last_generated_task
+            task.team = template.team
             task.title = template.title
             task.description = template.description
             task.priority = template.priority
@@ -161,6 +172,7 @@ class RecurringTaskService:
             outcome = 'reopened'
         else:
             task = Task.objects.create(
+                team=template.team,
                 title=template.title,
                 description=template.description,
                 priority=template.priority,

@@ -14,22 +14,61 @@ from .forms import (
     StudentWorkerProfileForm,
     SupervisorForm,
     SupervisorStudentPasswordResetForm,
+    TeamForm,
     WeeklyAvailabilityForm,
 )
-from .models import RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestBlock, ScheduleAdjustmentRequestStatus, StudentScheduleOverride, StudentScheduleOverrideBlock, StudentWorkerProfile, Task, TaskStatus, User, UserRole
-from .task_views import _save_schedule_override, _save_weekly_schedule, _serialize_blocks_for_initial, _weekly_schedule_initial, app_login_required, supervisor_required
+from .models import RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestBlock, ScheduleAdjustmentRequestStatus, StudentScheduleOverride, StudentScheduleOverrideBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole
+from .task_views import _save_schedule_override, _save_weekly_schedule, _scope_queryset_to_user_team, _serialize_blocks_for_initial, _weekly_schedule_initial, admin_required, app_login_required, supervisor_required
+
+
+def _scoped_worker_profiles(user):
+    queryset = StudentWorkerProfile.objects.select_related("user")
+    return _scope_queryset_to_user_team(queryset, user, field_name="user__team")
+
+
+def _scoped_users(user, queryset=None):
+    return _scope_queryset_to_user_team(queryset or User.objects.all(), user)
+
+
+def _scoped_supervisors(user):
+    return _scoped_users(user, User.objects.filter(role=UserRole.SUPERVISOR))
+
+
+def _scoped_schedule_requests(user, queryset=None):
+    queryset = queryset or ScheduleAdjustmentRequest.objects.all()
+    return _scope_queryset_to_user_team(queryset, user)
+
+
+def _reassignment_user_for_removed_account(request_user, removed_user):
+    if not request_user.is_admin and request_user.is_supervisor and request_user.team_id == removed_user.team_id:
+        return request_user
+    fallback = (
+        User.objects.filter(
+            role=UserRole.SUPERVISOR,
+            team=removed_user.team,
+            assignable_to_tasks=True,
+        )
+        .exclude(pk=removed_user.pk)
+        .order_by("first_name", "last_name", "username", "pk")
+        .first()
+    )
+    if fallback:
+        return fallback
+    if request_user.is_admin:
+        return request_user
+    return None
 
 
 @supervisor_required
 def worker_list_view(request):
     worker_profiles = list(
-        StudentWorkerProfile.objects.select_related("user")
+        _scoped_worker_profiles(request.user)
         .filter(user__role__in=UserRole.worker_roles())
         .order_by("display_name")
     )
     worker_workload = {
         worker.pk: worker
-        for worker in User.objects.filter(role__in=UserRole.worker_roles())
+        for worker in _scoped_users(request.user, User.objects.filter(role__in=UserRole.worker_roles()))
         .annotate(
             active_tasks=Count("assigned_tasks", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
             estimated_minutes=Sum("assigned_tasks__estimated_minutes", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
@@ -46,17 +85,30 @@ def worker_list_view(request):
         if profile.user.role == UserRole.STUDENT_SUPERVISOR
     ]
     supervisors = (
-        User.objects.filter(role=UserRole.SUPERVISOR)
+        _scoped_supervisors(request.user)
         .annotate(
             active_tasks=Count("assigned_tasks", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
             estimated_minutes=Sum("assigned_tasks__estimated_minutes", filter=~Q(assigned_tasks__status=TaskStatus.DONE)),
         )
         .order_by("username")
     )
+    teams = []
+    if request.user.is_admin:
+        teams = Team.objects.annotate(
+            member_count=Count("members", distinct=True),
+            task_count=Count("tasks", distinct=True),
+            recurring_count=Count("recurring_templates", distinct=True),
+        ).order_by("name", "pk")
     return render(
         request,
         "workboard/worker_list.html",
-        {"students": students, "student_supervisors": student_supervisors, "supervisors": supervisors},
+        {
+            "students": students,
+            "student_supervisors": student_supervisors,
+            "supervisors": supervisors,
+            "teams": teams,
+            "show_team_column": request.user.is_admin,
+        },
     )
 
 
@@ -83,7 +135,7 @@ def _queue_temporary_password_notice(request, *, display_name: str, password: st
     )
 
 
-def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: StudentWorkerProfileForm, post_data) -> bool:
+def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: StudentWorkerProfileForm, post_data, *, actor: User) -> bool:
     user = profile.user
     username = post_data.get("username", "").strip()
     if not username:
@@ -97,6 +149,7 @@ def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: Stu
     user.first_name = post_data.get("first_name", "").strip()
     user.last_name = post_data.get("last_name", "").strip()
     user.email = worker_form.cleaned_data["email"]
+    user.team = worker_form.cleaned_data["team"]
     user.save()
 
     updated_profile = worker_form.save(commit=False)
@@ -116,7 +169,7 @@ def _create_worker_profile_account(
     success_message: str,
     worker_type_label: str,
 ):
-    form = StudentWorkerProfileForm(request.POST or None)
+    form = StudentWorkerProfileForm(request.POST or None, actor=request.user)
     weekly_form = WeeklyAvailabilityForm(request.POST or None)
     context = {
         "form": form,
@@ -142,6 +195,7 @@ def _create_worker_profile_account(
                 last_name=account["last_name"],
                 email=account["email"],
                 role=role,
+                team=form.cleaned_data["team"],
                 must_change_password=True,
             )
             profile = form.save(commit=False)
@@ -331,7 +385,10 @@ def schedule_adjustment_request_view(request):
 def schedule_adjustment_request_list_view(request):
     if request.method == "POST":
         adjustment_request = get_object_or_404(
-            ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "applied_override").prefetch_related("blocks"),
+            _scoped_schedule_requests(
+                request.user,
+                ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "applied_override").prefetch_related("blocks"),
+            ),
             pk=request.POST.get("schedule_request_id"),
         )
         if adjustment_request.status != ScheduleAdjustmentRequestStatus.PENDING:
@@ -353,15 +410,21 @@ def schedule_adjustment_request_list_view(request):
         return HttpResponseBadRequest("Unknown action.")
 
     pending_requests = list(
-        ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
-        .prefetch_related("blocks")
-        .filter(status=ScheduleAdjustmentRequestStatus.PENDING)
+        _scoped_schedule_requests(
+            request.user,
+            ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
+            .prefetch_related("blocks")
+            .filter(status=ScheduleAdjustmentRequestStatus.PENDING)
+        )
         .order_by("requested_date", "created_at", "pk")
     )
     recent_requests = list(
-        ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
-        .prefetch_related("blocks")
-        .exclude(status=ScheduleAdjustmentRequestStatus.PENDING)
+        _scoped_schedule_requests(
+            request.user,
+            ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
+            .prefetch_related("blocks")
+            .exclude(status=ScheduleAdjustmentRequestStatus.PENDING)
+        )
         .order_by("-reviewed_at", "-updated_at", "-pk")[:20]
     )
     return render(
@@ -376,11 +439,11 @@ def schedule_adjustment_request_list_view(request):
 
 @supervisor_required
 def worker_edit_view(request, pk):
-    profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
+    profile = get_object_or_404(_scoped_worker_profiles(request.user), pk=pk)
     context_labels = _worker_role_page_context(profile)
-    worker_form = StudentWorkerProfileForm(request.POST or None, instance=profile)
+    worker_form = StudentWorkerProfileForm(request.POST or None, instance=profile, actor=request.user)
 
-    if request.method == "POST" and worker_form.is_valid() and _save_worker_profile_details(profile, worker_form, request.POST):
+    if request.method == "POST" and worker_form.is_valid() and _save_worker_profile_details(profile, worker_form, request.POST, actor=request.user):
         messages.success(request, context_labels["success_label"])
         return redirect("worker-edit", pk=profile.pk)
 
@@ -397,7 +460,7 @@ def worker_edit_view(request, pk):
 
 @supervisor_required
 def worker_schedule_view(request, pk):
-    profile = get_object_or_404(StudentWorkerProfile.objects.select_related("user"), pk=pk)
+    profile = get_object_or_404(_scoped_worker_profiles(request.user), pk=pk)
     context_labels = _worker_role_page_context(profile)
     initial = _weekly_schedule_initial(profile)
     selected_override_date = _parse_override_date(request.GET.get("override_date", ""))
@@ -450,7 +513,7 @@ def worker_schedule_view(request, pk):
 
 @supervisor_required
 def supervisor_create_view(request):
-    form = SupervisorForm(request.POST or None)
+    form = SupervisorForm(request.POST or None, actor=request.user)
     context = {"form": form, "page_title": "Add supervisor", "submit_label": "Create supervisor"}
     if request.method == "POST":
         account = _posted_account_details(request.POST)
@@ -471,7 +534,7 @@ def supervisor_create_view(request):
             must_change_password=True,
             assignable_to_tasks=True,
         )
-        form = SupervisorForm(request.POST, instance=user)
+        form = SupervisorForm(request.POST, instance=user, actor=request.user)
         context["form"] = form
         if form.is_valid():
             form.save()
@@ -512,16 +575,17 @@ def worker_profile_delete_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    worker = get_object_or_404(User.objects.select_related("worker_profile"), pk=pk, role__in=UserRole.worker_roles())
-    Task.objects.filter(assigned_to=worker).update(assigned_to=request.user, updated_at=timezone.now())
+    worker = get_object_or_404(_scoped_users(request.user, User.objects.select_related("worker_profile").filter(role__in=UserRole.worker_roles())), pk=pk)
+    reassignment_user = _reassignment_user_for_removed_account(request.user, worker)
+    Task.objects.filter(assigned_to=worker).update(assigned_to=reassignment_user, updated_at=timezone.now())
     Task.objects.filter(rotating_additional_assignee=worker).update(rotating_additional_assignee=None, updated_at=timezone.now())
     Task.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
     Task.rotating_additional_assignees.through.objects.filter(user_id=worker.pk).delete()
-    RecurringTaskTemplate.objects.filter(assign_to=worker).update(assign_to=request.user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=worker).update(assign_to=reassignment_user, updated_at=timezone.now())
     RecurringTaskTemplate.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
     worker_name = worker.display_label
     worker.delete()
-    messages.success(request, f"Removed {worker_name}. Any assigned tasks were reassigned to you.")
+    messages.success(request, f"Removed {worker_name}. Any assigned tasks were reassigned to {reassignment_user.display_label if reassignment_user else 'the team board'}.")
     return redirect("worker-list")
 
 
@@ -530,23 +594,24 @@ def supervisor_delete_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    supervisor = get_object_or_404(User, pk=pk, role=UserRole.SUPERVISOR)
+    supervisor = get_object_or_404(_scoped_supervisors(request.user), pk=pk)
     if supervisor.pk == request.user.pk:
         messages.error(request, "You cannot remove your own supervisor account while logged in.")
         return redirect("worker-list")
 
-    Task.objects.filter(assigned_to=supervisor).update(assigned_to=request.user, updated_at=timezone.now())
-    RecurringTaskTemplate.objects.filter(assign_to=supervisor).update(assign_to=request.user, updated_at=timezone.now())
+    reassignment_user = _reassignment_user_for_removed_account(request.user, supervisor)
+    Task.objects.filter(assigned_to=supervisor).update(assigned_to=reassignment_user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=supervisor).update(assign_to=reassignment_user, updated_at=timezone.now())
     supervisor_name = supervisor.display_label
     supervisor.delete()
-    messages.success(request, f"Removed {supervisor_name}. Any assigned tasks were reassigned to you.")
+    messages.success(request, f"Removed {supervisor_name}. Any assigned tasks were reassigned to {reassignment_user.display_label if reassignment_user else 'the team board'}.")
     return redirect("worker-list")
 
 
 @supervisor_required
 def supervisor_edit_view(request, pk):
-    supervisor = get_object_or_404(User, pk=pk, role=UserRole.SUPERVISOR)
-    form = SupervisorForm(request.POST or None, instance=supervisor)
+    supervisor = get_object_or_404(_scoped_supervisors(request.user), pk=pk)
+    form = SupervisorForm(request.POST or None, instance=supervisor, actor=request.user)
     if request.method == "POST" and form.is_valid():
         form.save()
         messages.success(request, "Supervisor updated.")
@@ -567,7 +632,7 @@ def supervisor_edit_view(request, pk):
 
 @supervisor_required
 def worker_password_reset_view(request, pk):
-    person = get_object_or_404(User, pk=pk, role__in=[UserRole.STUDENT_WORKER, UserRole.STUDENT_SUPERVISOR, UserRole.SUPERVISOR])
+    person = get_object_or_404(_scoped_users(request.user, User.objects.filter(role__in=[UserRole.STUDENT_WORKER, UserRole.STUDENT_SUPERVISOR, UserRole.SUPERVISOR])), pk=pk)
     if request.method == "POST":
         form = SupervisorStudentPasswordResetForm(person, request.POST)
         if form.is_valid():
@@ -583,3 +648,49 @@ def worker_password_reset_view(request, pk):
         "workboard/worker_password_reset_form.html",
         {"form": form, "person": person},
     )
+
+
+@admin_required
+def team_create_view(request):
+    form = TeamForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Team created.")
+        return redirect("worker-list")
+    return render(request, "workboard/team_form.html", {"form": form, "page_title": "Add team", "submit_label": "Create team"})
+
+
+@admin_required
+def team_edit_view(request, pk):
+    team = get_object_or_404(Team, pk=pk)
+    form = TeamForm(request.POST or None, instance=team)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Team updated.")
+        return redirect("worker-list")
+    return render(
+        request,
+        "workboard/team_form.html",
+        {
+            "form": form,
+            "page_title": f"Edit team: {team.name}",
+            "submit_label": "Save changes",
+            "team": team,
+        },
+    )
+
+
+@admin_required
+def team_delete_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    team = get_object_or_404(Team, pk=pk)
+    if team.members.exists() or team.tasks.exists() or team.recurring_templates.exists() or team.schedule_adjustment_requests.exists():
+        messages.error(request, "This team still has people or work attached to it. Reassign them before deleting the team.")
+        return redirect("worker-list")
+
+    team_name = team.name
+    team.delete()
+    messages.success(request, f"Removed the {team_name} team.")
+    return redirect("worker-list")

@@ -83,30 +83,57 @@ class ScheduleAdjustmentRequestStatus(models.TextChoices):
     DECLINED = "declined", "Declined"
 
 
+class Team(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def get_default_team(cls):
+        return cls.objects.get_or_create(name="General", defaults={"description": "Default team for existing TaskForge data."})[0]
+
+
 class User(AbstractUser):
     role = models.CharField(max_length=32, choices=UserRole.choices, default=UserRole.STUDENT_WORKER)
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="members")
     must_change_password = models.BooleanField(default=False)
     assignable_to_tasks = models.BooleanField(default=True)
 
+    def save(self, *args, **kwargs):
+        if not self.team_id and not self.is_superuser:
+            self.team = Team.get_default_team()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_admin(self):
+        return self.is_superuser
+
     @property
     def is_supervisor(self):
-        return self.role == UserRole.SUPERVISOR
+        return self.is_admin or self.role == UserRole.SUPERVISOR
 
     @property
     def is_student_supervisor(self):
-        return self.role == UserRole.STUDENT_SUPERVISOR
+        return (not self.is_admin) and self.role == UserRole.STUDENT_SUPERVISOR
 
     @property
     def is_worker_role(self):
-        return self.role in UserRole.worker_roles()
+        return (not self.is_admin) and self.role in UserRole.worker_roles()
 
     @property
     def can_view_full_board(self):
-        return self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
+        return self.is_admin or self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
 
     @property
     def can_edit_tasks(self):
-        return self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
+        return self.is_admin or self.role in {UserRole.SUPERVISOR, UserRole.STUDENT_SUPERVISOR}
 
     @property
     def display_label(self):
@@ -227,6 +254,7 @@ class StudentScheduleOverrideBlock(models.Model):
 
 class ScheduleAdjustmentRequest(models.Model):
     profile = models.ForeignKey(StudentWorkerProfile, on_delete=models.CASCADE, related_name="schedule_adjustment_requests")
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="schedule_adjustment_requests")
     requested_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="schedule_adjustment_requests")
     requested_date = models.DateField()
     note = models.CharField(max_length=255, blank=True)
@@ -256,6 +284,11 @@ class ScheduleAdjustmentRequest(models.Model):
     class Meta:
         ordering = ["status", "requested_date", "-created_at", "-pk"]
 
+    def save(self, *args, **kwargs):
+        if not self.team_id:
+            self.team = self.profile.user.team or self.requested_by.team or Team.get_default_team()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.profile.display_name} request for {self.requested_date}"
 
@@ -282,6 +315,7 @@ class ScheduleAdjustmentRequestBlock(models.Model):
 
 
 class RecurringTaskTemplate(models.Model):
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="recurring_templates")
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     priority = models.CharField(max_length=16, choices=Priority.choices, default=Priority.MEDIUM)
@@ -326,8 +360,10 @@ class RecurringTaskTemplate(models.Model):
         ordering = ["display_order", "next_run_date", "title", "pk"]
 
     def save(self, *args, **kwargs):
+        if not self.team_id:
+            self.team = (self.requested_by.team if self.requested_by_id else None) or (self.assign_to.team if self.assign_to_id else None) or Team.get_default_team()
         if self.display_order is None:
-            max_order = RecurringTaskTemplate.objects.exclude(pk=self.pk).aggregate(max_order=models.Max("display_order")).get("max_order") or 0
+            max_order = RecurringTaskTemplate.objects.exclude(pk=self.pk).filter(team=self.team).aggregate(max_order=models.Max("display_order")).get("max_order") or 0
             self.display_order = max_order + 1
         super().save(*args, **kwargs)
 
@@ -364,6 +400,7 @@ class RecurringTaskTemplate(models.Model):
 
 
 class Task(models.Model):
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="tasks")
     title = models.CharField(max_length=255)
     raw_message = models.TextField(blank=True)
     description = models.TextField(blank=True)
@@ -440,6 +477,17 @@ class Task(models.Model):
 
     class Meta:
         ordering = ["board_order", "due_date", "-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.team_id:
+            self.team = (
+                (self.recurring_template.team if self.recurring_template_id else None)
+                or (self.created_by.team if self.created_by_id else None)
+                or (self.requested_by.team if self.requested_by_id else None)
+                or (self.assigned_to.team if self.assigned_to_id else None)
+                or Team.get_default_team()
+            )
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title

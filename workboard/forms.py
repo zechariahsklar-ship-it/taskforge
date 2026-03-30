@@ -20,6 +20,7 @@ from .models import (
     TaskNote,
     TaskStatus,
     TaskScheduleBlock,
+    Team,
     User,
     UserRole,
     Weekday,
@@ -204,15 +205,22 @@ def _parse_date_value(raw_value: str | None) -> date | None:
         return None
 
 
-def _worker_user_queryset(*, include_assignable_supervisors: bool = False):
+def _worker_user_queryset(*, include_assignable_supervisors: bool = False, team=None):
     worker_filter = Q(role__in=UserRole.worker_roles())
     if include_assignable_supervisors:
         worker_filter |= Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)
-    return User.objects.filter(worker_filter).order_by("first_name", "last_name", "username")
+    queryset = User.objects.filter(worker_filter)
+    if team is not None:
+        queryset = queryset.filter(team=team)
+    return queryset.order_by("first_name", "last_name", "username")
 
 
-def _configure_additional_assignees_field(field, *, help_text: str) -> None:
-    field.queryset = _worker_user_queryset()
+def _team_queryset():
+    return Team.objects.order_by("name", "pk")
+
+
+def _configure_additional_assignees_field(field, *, help_text: str, team=None) -> None:
+    field.queryset = _worker_user_queryset(team=team)
     field.required = False
     field.widget = forms.CheckboxSelectMultiple(choices=field.choices)
     field.label = "Fixed additional assignees"
@@ -230,6 +238,8 @@ def _configure_rotation_count_field(field, *, count: int, help_text: str) -> Non
 
 
 class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
+    team = forms.ModelChoiceField(queryset=Team.objects.none(), required=False)
+
     class Meta:
         model = StudentWorkerProfile
         fields = [
@@ -241,12 +251,32 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
             "skill_notes": forms.Textarea(attrs={"rows": 3}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, actor=None, **kwargs):
+        self.actor = actor
         super().__init__(*args, **kwargs)
         self.fields["email"].required = False
         self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this person."
         self.fields["skill_notes"].label = "Notes"
         self.fields["skill_notes"].help_text = "Optional notes about strengths, training, or preferences."
+        self.fields["team"].queryset = _team_queryset()
+        self.fields["team"].label = "Team"
+        self.fields["team"].required = True
+        if getattr(self.instance, "pk", None):
+            self.initial.setdefault("team", self.instance.user.team_id)
+        if actor and not actor.is_admin:
+            self.fields["team"].widget = forms.HiddenInput()
+            self.fields["team"].required = False
+            self.initial["team"] = actor.team_id
+        else:
+            self.fields["team"].help_text = "Choose which team this person belongs to."
+
+    def clean_team(self):
+        if self.actor and not self.actor.is_admin:
+            return self.actor.team
+        team = self.cleaned_data.get("team")
+        if not team:
+            raise forms.ValidationError("Choose a team for this person.")
+        return team
 
 
 def _serialize_schedule_segments(blocks):
@@ -562,7 +592,8 @@ class TaskBoardFilterForm(StyledFormMixin, forms.Form):
         self.fields["due_scope"].label = "Due date"
 
         if include_assignee:
-            self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True)
+            team = None if (user and user.is_admin) else getattr(user, "team", None)
+            self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True, team=team)
             self.fields["assigned_to"].label = "Teammate"
             self.fields["assigned_to"].label_from_instance = _user_choice_label
         else:
@@ -595,6 +626,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Task
         fields = [
+            "team",
             "title",
             "raw_message",
             "description",
@@ -621,16 +653,31 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "description": forms.Textarea(attrs={"rows": 5}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, actor=None, **kwargs):
+        self.actor = actor
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
-        self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True)
+        self.fields["team"].queryset = _team_queryset()
+        self.fields["team"].label = "Team"
+        self.fields["team"].required = True
+        selected_team = self._resolve_selected_team()
+        if actor and not actor.is_admin:
+            self.fields["team"].widget = forms.HiddenInput()
+            self.fields["team"].required = False
+            self.initial["team"] = actor.team_id
+            selected_team = actor.team
+        else:
+            self.fields["team"].help_text = "Choose which team owns this task."
+            if selected_team:
+                self.initial.setdefault("team", selected_team.pk)
+        self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True, team=selected_team)
         self.fields["assigned_to"].label = "Assign to"
         self.fields["assigned_to"].help_text = "Choose the main teammate for this task."
         self.fields["assigned_to"].label_from_instance = _user_choice_label
         _configure_additional_assignees_field(
             self.fields["additional_assignees"],
             help_text="Pick any teammates who should always be added to this task.",
+            team=selected_team,
         )
         _configure_rotation_count_field(
             self.fields["rotating_additional_assignee_count"],
@@ -675,6 +722,20 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def scheduled_task_window_map(self):
         return self.cleaned_data.get("task_schedule_blocks_by_date", {}) if hasattr(self, "cleaned_data") else {}
+
+    def _resolve_selected_team(self):
+        if self.actor and not self.actor.is_admin:
+            return self.actor.team
+        if self.is_bound:
+            raw_team_id = self.data.get(self.add_prefix("team"))
+            if raw_team_id:
+                return _team_queryset().filter(pk=raw_team_id).first()
+        for candidate in (self.initial.get("team"), getattr(self.instance, "team", None), getattr(self.actor, "team", None)):
+            if isinstance(candidate, Team):
+                return candidate
+            if candidate:
+                return _team_queryset().filter(pk=candidate).first()
+        return None
 
     def _resolve_task_window_week_start(self):
         if self.is_bound:
@@ -946,8 +1007,19 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if self.actor and not self.actor.is_admin:
+            cleaned_data["team"] = self.actor.team
+        team = cleaned_data.get("team")
+        if not team:
+            self.add_error("team", "Choose which team owns this task.")
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
+        if assigned_to and team and assigned_to.team_id != team.id:
+            self.add_error("assigned_to", f"{assigned_to.display_label} is not on that team.")
+        if additional_assignees:
+            mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
+            if mismatched_teammates:
+                self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
@@ -1002,6 +1074,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 class TaskManualForm(TaskForm):
     class Meta(TaskForm.Meta):
         fields = [
+            "team",
             "title",
             "description",
             "priority",
@@ -1043,14 +1116,39 @@ class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
 class SupervisorForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = User
-        fields = ["username", "first_name", "last_name", "email", "assignable_to_tasks"]
+        fields = ["username", "first_name", "last_name", "email", "team", "assignable_to_tasks"]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, actor=None, **kwargs):
+        self.actor = actor
         super().__init__(*args, **kwargs)
         self.fields["email"].required = False
         self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this supervisor."
+        self.fields["team"].queryset = _team_queryset()
+        self.fields["team"].required = True
+        self.fields["team"].label = "Team"
+        if actor and not actor.is_admin:
+            self.fields["team"].widget = forms.HiddenInput()
+            self.fields["team"].required = False
+            self.initial["team"] = actor.team_id
+        else:
+            self.fields["team"].help_text = "Choose which team this supervisor belongs to."
         self.fields["assignable_to_tasks"].label = "Allow fallback tasks to be assigned to this supervisor"
         self.fields["assignable_to_tasks"].help_text = "Turn this off if tasks should never fall back to this supervisor when no worker has enough time available."
+
+    def clean_team(self):
+        if self.actor and not self.actor.is_admin:
+            return self.actor.team
+        team = self.cleaned_data.get("team")
+        if not team:
+            raise forms.ValidationError("Choose a team for this supervisor.")
+        return team
+
+
+class TeamForm(StyledFormMixin, forms.ModelForm):
+    class Meta:
+        model = Team
+        fields = ["name", "description"]
+        widgets = {"description": forms.Textarea(attrs={"rows": 3})}
 
 
 class TaskNoteForm(StyledFormMixin, forms.ModelForm):
@@ -1104,6 +1202,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = RecurringTaskTemplate
         fields = [
+            "team",
             "title",
             "description",
             "priority",
@@ -1123,8 +1222,22 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         ]
         widgets = {"description": forms.Textarea(attrs={"rows": 4})}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, actor=None, **kwargs):
+        self.actor = actor
         super().__init__(*args, **kwargs)
+        selected_team = self._resolve_selected_team()
+        self.fields["team"].queryset = _team_queryset()
+        self.fields["team"].required = True
+        self.fields["team"].label = "Team"
+        if actor and not actor.is_admin:
+            self.fields["team"].widget = forms.HiddenInput()
+            self.fields["team"].required = False
+            self.initial["team"] = actor.team_id
+            selected_team = actor.team
+        else:
+            self.fields["team"].help_text = "Choose which team owns this recurring task."
+            if selected_team:
+                self.initial.setdefault("team", selected_team.pk)
         self.fields["description"].label = "Task details"
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
@@ -1134,11 +1247,12 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
         self.fields["assign_to"].label = "Assign to"
         self.fields["assign_to"].help_text = "Choose the main teammate for this recurring task. Leave blank to rotate the main assignee automatically."
-        self.fields["assign_to"].queryset = _worker_user_queryset()
+        self.fields["assign_to"].queryset = _worker_user_queryset(team=selected_team)
         self.fields["assign_to"].label_from_instance = _user_choice_label
         _configure_additional_assignees_field(
             self.fields["additional_assignees"],
             help_text="Pick any teammates who should always join each run of this recurring task.",
+            team=selected_team,
         )
         _configure_rotation_count_field(
             self.fields["rotating_additional_assignee_count"],
@@ -1160,10 +1274,35 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["active"].label = "Recurring task is active"
         self.fields["active"].help_text = "Turn this off to pause future task creation."
 
+    def _resolve_selected_team(self):
+        if self.actor and not self.actor.is_admin:
+            return self.actor.team
+        if self.is_bound:
+            raw_team_id = self.data.get(self.add_prefix("team"))
+            if raw_team_id:
+                return _team_queryset().filter(pk=raw_team_id).first()
+        for candidate in (self.initial.get("team"), getattr(self.instance, "team", None), getattr(self.actor, "team", None)):
+            if isinstance(candidate, Team):
+                return candidate
+            if candidate:
+                return _team_queryset().filter(pk=candidate).first()
+        return None
+
     def clean(self):
         cleaned_data = super().clean()
+        if self.actor and not self.actor.is_admin:
+            cleaned_data["team"] = self.actor.team
+        team = cleaned_data.get("team")
+        if not team:
+            self.add_error("team", "Choose which team owns this recurring task.")
         assign_to = cleaned_data.get("assign_to")
         additional_assignees = cleaned_data.get("additional_assignees")
+        if assign_to and team and assign_to.team_id != team.id:
+            self.add_error("assign_to", f"{assign_to.display_label} is not on that team.")
+        if additional_assignees:
+            mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
+            if mismatched_teammates:
+                self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
         if assign_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
