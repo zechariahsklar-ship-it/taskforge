@@ -36,13 +36,7 @@
                     <td>{{ team.member_count }}</td>
                     <td>{{ team.task_count }}</td>
                     <td>{{ team.recurring_count }}</td>
-                    <td>
-                        <a href="{% url 'team-edit' team.pk %}">Edit team</a><br>
-                        <form method="post" action="{% url 'team-delete' team.pk %}" onsubmit="return window.confirm('Delete this team? Move all people and work off the team first.');">
-                            {% csrf_token %}
-                            <button type="submit" class="link-button task-delete-button">Delete team</button>
-                        </form>
-                    </td>
+                    <td><a href="{% url 'team-edit' team.pk %}">Edit team</a></td>
                 </tr>
             {% empty %}
                 <tr><td colspan="6">No teams yet.</td></tr>
@@ -60,7 +54,6 @@
                 {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
-                <th>Max Hours/Day</th>
                 <th>Open Tasks</th>
                 <th>Estimated Minutes</th>
                 <th>Actions</th>
@@ -73,7 +66,6 @@
                     {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
-                    <td>{{ item.profile.max_hours_per_day }}</td>
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
@@ -83,7 +75,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student workers yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}7{% else %}6{% endif %}">No student workers yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -97,7 +89,6 @@
                 {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
-                <th>Max Hours/Day</th>
                 <th>Open Tasks</th>
                 <th>Estimated Minutes</th>
                 <th>Actions</th>
@@ -110,7 +101,6 @@
                     {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
-                    <td>{{ item.profile.max_hours_per_day }}</td>
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
@@ -120,7 +110,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student supervisors yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}7{% else %}6{% endif %}">No student supervisors yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>

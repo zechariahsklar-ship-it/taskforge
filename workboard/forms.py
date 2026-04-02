@@ -1133,7 +1133,7 @@ class SupervisorForm(StyledFormMixin, forms.ModelForm):
         else:
             self.fields["team"].help_text = "Choose which team this supervisor belongs to."
         self.fields["assignable_to_tasks"].label = "Allow fallback tasks to be assigned to this supervisor"
-        self.fields["assignable_to_tasks"].help_text = "Turn this off if tasks should never fall back to this supervisor when no worker has enough time available."
+        self.fields["assignable_to_tasks"].help_text = ""
 
     def clean_team(self):
         if self.actor and not self.actor.is_admin:

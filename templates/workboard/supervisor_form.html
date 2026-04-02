@@ -5,7 +5,11 @@
 {% block content %}
 <section class="card narrow">
     <h1>{{ page_title }}</h1>
-    <p>Update supervisor details, password-reset access, and whether tasks can fall back to this supervisor when no worker can take them.</p>
+    {% if supervisor %}
+        <p>Update supervisor details and password-reset access here.</p>
+    {% else %}
+        <p>Create a supervisor account and password access here.</p>
+    {% endif %}
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}

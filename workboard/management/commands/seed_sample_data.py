@@ -47,7 +47,6 @@ class Command(BaseCommand):
                     "display_name": item["display_name"],
                     "email": item["email"],
                     "normal_shift_availability": item["availability"],
-                    "max_hours_per_day": 4,
                     "skill_notes": item["skills"],
                 },
             )

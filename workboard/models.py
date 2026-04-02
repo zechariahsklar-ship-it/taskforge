@@ -150,7 +150,6 @@ class StudentWorkerProfile(models.Model):
     email = models.EmailField(blank=True)
     active_status = models.BooleanField(default=True)
     normal_shift_availability = models.TextField(blank=True)
-    max_hours_per_day = models.DecimalField(max_digits=4, decimal_places=2, default=4)
     skill_notes = models.TextField(blank=True)
 
 

@@ -427,7 +427,6 @@ class TaskAssignmentServiceTests(TestCase):
             display_name=display_name,
             email=f"{username}@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         for weekday in Weekday.values:
             StudentAvailability.objects.create(
@@ -567,21 +566,18 @@ class RecurringTaskGenerationRotationTests(TestCase):
             display_name="Alex Carter",
             email="alex-rotation@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         self.jordan_profile = StudentWorkerProfile.objects.create(
             user=self.jordan,
             display_name="Jordan Lee",
             email="jordan-rotation@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         self.sam_profile = StudentWorkerProfile.objects.create(
             user=self.sam,
             display_name="Sam Patel",
             email="sam-rotation@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         for profile in (self.alex_profile, self.jordan_profile, self.sam_profile):
             for weekday in Weekday.values:
@@ -825,7 +821,6 @@ class TaskCreateDueDateFallbackTests(TestCase):
             display_name="Taylor Worker",
             email="taylor.worker@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         self.client.force_login(self.supervisor)
 
@@ -923,7 +918,6 @@ class TaskScheduledWindowTests(TestCase):
             display_name=user.get_full_name(),
             email=f"{user.username}@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         for weekday in Weekday.values:
             availability = StudentAvailability.objects.create(
@@ -1260,7 +1254,6 @@ class TaskCreateLabelTests(TestCase):
             display_name="Alex Johnson",
             email="alex@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         self.client.force_login(self.supervisor)
 
@@ -1282,6 +1275,7 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, 'name="additional_assignees"', count=1)
         self.assertContains(response, 'name="rotating_additional_assignee_count"')
         self.assertContains(response, 'type="checkbox"', html=False)
+        self.assertContains(response, 'data-recurring-fields hidden', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
         self.assertNotContains(response, "Requested by")
         self.assertNotContains(response, ">alex-worker<", html=False)
@@ -1383,7 +1377,6 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
             display_name=display_name,
             email=f"{username}@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         for weekday in Weekday.values:
             StudentAvailability.objects.create(
@@ -1627,14 +1620,12 @@ class StudentSupervisorPermissionsTests(TestCase):
             display_name="Student Lead",
             email="lead@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         StudentWorkerProfile.objects.create(
             user=self.worker,
             display_name="Board Worker",
             email="worker@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         self.task = Task.objects.create(
             title="Shared board task",
@@ -2022,14 +2013,12 @@ class ScheduleAdjustmentRequestTests(TestCase):
             display_name="Schedule Student",
             email="schedule-student@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
         self.student_supervisor_profile = StudentWorkerProfile.objects.create(
             user=self.student_supervisor,
             display_name="Schedule Lead",
             email="schedule-lead@example.com",
             normal_shift_availability="",
-            max_hours_per_day=4,
         )
 
     def test_student_can_submit_schedule_adjustment_request(self):
@@ -2110,7 +2099,6 @@ class PeopleManagementTests(TestCase):
             display_name="Remove Student",
             email="remove-student@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         self.student_supervisor = User.objects.create_user(username="student-lead", password="password123", role=UserRole.STUDENT_SUPERVISOR)
         self.student_supervisor_profile = StudentWorkerProfile.objects.create(
@@ -2118,7 +2106,6 @@ class PeopleManagementTests(TestCase):
             display_name="Student Lead",
             email="student-lead@example.com",
             normal_shift_availability="Weekdays",
-            max_hours_per_day=4,
         )
         self.task = Task.objects.create(
             title="Assigned to removed student",
@@ -2160,6 +2147,7 @@ class PeopleManagementTests(TestCase):
         self.assertNotContains(response, "Remove supervisor")
         self.assertNotContains(response, "Manage student workers, supervisors, and assignment availability.")
         self.assertNotContains(response, "<th>Availability</th>", html=False)
+        self.assertNotContains(response, "Max Hours/Day")
 
     def test_edit_worker_updates_student_details(self):
         response = self.client.post(
@@ -2577,6 +2565,13 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(user.role, UserRole.SUPERVISOR)
         self.assertEqual(user.email, "")
 
+    def test_supervisor_edit_page_hides_old_fallback_explanation(self):
+        response = self.client.get(reverse("supervisor-edit", args=[self.other_supervisor.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Turn this off if tasks should never fall back to this supervisor when no worker has enough time available.")
+
+
     def test_supervisor_edit_updates_assignment_eligibility(self):
         response = self.client.post(
             reverse("supervisor-edit", args=[self.other_supervisor.pk]),
@@ -2960,6 +2955,18 @@ class TeamHierarchyTests(TestCase):
         self.assertContains(response, reverse("team-create"))
         self.assertContains(response, self.team_alpha.name)
         self.assertContains(response, self.team_beta.name)
+
+    def test_team_delete_moves_to_team_edit_page(self):
+        self.client.force_login(self.admin)
+
+        worker_list_response = self.client.get(reverse("worker-list"))
+        self.assertEqual(worker_list_response.status_code, 200)
+        self.assertNotContains(worker_list_response, "Delete team")
+
+        edit_response = self.client.get(reverse("team-edit", args=[self.team_alpha.pk]))
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertContains(edit_response, "Delete team")
+
 
     def test_admin_can_create_team(self):
         self.client.force_login(self.admin)

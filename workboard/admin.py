@@ -32,7 +32,7 @@ class UserAdmin(DjangoUserAdmin):
 
 @admin.register(StudentWorkerProfile)
 class StudentWorkerProfileAdmin(admin.ModelAdmin):
-    list_display = ("display_name", "email", "active_status", "max_hours_per_day", "user")
+    list_display = ("display_name", "email", "active_status", "user")
     search_fields = ("display_name", "email", "user__username")
 
 

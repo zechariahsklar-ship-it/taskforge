@@ -5,12 +5,26 @@
 {% block content %}
 <section class="card narrow">
     <h1>{{ page_title }}</h1>
-    <p>Create a team so work, people, and recurring tasks can stay separated for each group using TaskForge.</p>
+    {% if team %}
+        <p>Update this team here.</p>
+    {% else %}
+        <p>Create a team so work, people, and recurring tasks can stay separated for each group using TaskForge.</p>
+    {% endif %}
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}
         <button type="submit">{{ submit_label }}</button>
     </form>
+    {% if team %}
+        <div class="task-delete-form">
+            <h2>Delete team</h2>
+            <p class="meta">Use this only when the team no longer has any people or work attached to it.</p>
+            <form method="post" action="{% url 'team-delete' team.pk %}" onsubmit="return window.confirm('Delete this team? Move all people and work off the team first.');">
+                {% csrf_token %}
+                <button type="submit" class="task-delete-button">Delete team</button>
+            </form>
+        </div>
+    {% endif %}
     <div class="inline-form">
         <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
     </div>
