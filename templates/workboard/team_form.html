@@ -3,6 +3,11 @@
 {% block title %}{{ page_title }} | TaskForge{% endblock %}
 
 {% block content %}
+{% if team %}
+<div class="inline-form">
+    <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
+</div>
+{% endif %}
 <section class="card narrow">
     <h1>{{ page_title }}</h1>
     {% if team %}
@@ -25,8 +30,10 @@
             </form>
         </div>
     {% endif %}
-    <div class="inline-form">
-        <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
-    </div>
 </section>
+{% if not team %}
+<div class="inline-form">
+    <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
+</div>
+{% endif %}
 {% endblock %}

@@ -673,7 +673,7 @@ def team_edit_view(request, pk):
         "workboard/team_form.html",
         {
             "form": form,
-            "page_title": f"Edit team: {team.name}",
+            "page_title": f"Edit Team: {team.name}",
             "submit_label": "Save changes",
             "team": team,
         },

@@ -2174,6 +2174,18 @@ class PeopleManagementTests(TestCase):
         self.assertFalse(self.profile.active_status)
         self.assertEqual(self.profile.skill_notes, "Prefers morning tasks")
 
+    def test_edit_pages_hide_optional_email_help_text(self):
+        worker_response = self.client.get(reverse("worker-edit", args=[self.profile.pk]))
+        student_supervisor_response = self.client.get(reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
+        supervisor_response = self.client.get(reverse("supervisor-edit", args=[self.other_supervisor.pk]))
+
+        self.assertEqual(worker_response.status_code, 200)
+        self.assertEqual(student_supervisor_response.status_code, 200)
+        self.assertEqual(supervisor_response.status_code, 200)
+        self.assertNotContains(worker_response, "Optional. Leave blank if you do not want to store an email address for this person.")
+        self.assertNotContains(student_supervisor_response, "Optional. Leave blank if you do not want to store an email address for this person.")
+        self.assertNotContains(supervisor_response, "Optional. Leave blank if you do not want to store an email address for this supervisor.")
+
     def test_edit_schedule_updates_student_weekly_schedule(self):
         response = self.client.post(
             reverse("worker-schedule", args=[self.profile.pk]),

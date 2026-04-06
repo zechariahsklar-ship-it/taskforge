@@ -255,7 +255,9 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
         self.actor = actor
         super().__init__(*args, **kwargs)
         self.fields["email"].required = False
-        self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this person."
+        self.fields["email"].help_text = ""
+        if not getattr(self.instance, "pk", None):
+            self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this person."
         self.fields["skill_notes"].label = "Notes"
         self.fields["skill_notes"].help_text = "Optional notes about strengths, training, or preferences."
         self.fields["team"].queryset = _team_queryset()
@@ -1122,7 +1124,9 @@ class SupervisorForm(StyledFormMixin, forms.ModelForm):
         self.actor = actor
         super().__init__(*args, **kwargs)
         self.fields["email"].required = False
-        self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this supervisor."
+        self.fields["email"].help_text = ""
+        if not getattr(self.instance, "pk", None):
+            self.fields["email"].help_text = "Optional. Leave blank if you do not want to store an email address for this supervisor."
         self.fields["team"].queryset = _team_queryset()
         self.fields["team"].required = True
         self.fields["team"].label = "Team"
