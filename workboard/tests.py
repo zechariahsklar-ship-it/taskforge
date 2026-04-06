@@ -1521,6 +1521,33 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertNotContains(response, '>Schedule</label>', html=False)
         self.assertNotContains(response, '>Status</label>', html=False)
 
+    def test_board_hides_done_tasks_older_than_seven_days(self):
+        Task.objects.create(
+            title="Old completed board task",
+            description="Should move to completed tasks",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_one,
+            completed_at=timezone.make_aware(datetime(2026, 3, 10, 9, 0)),
+            board_order=1,
+        )
+        Task.objects.create(
+            title="Recent completed board task",
+            description="Should stay in Done for now",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_one,
+            completed_at=timezone.make_aware(datetime(2026, 3, 18, 9, 0)),
+            board_order=2,
+        )
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Recent completed board task")
+        self.assertNotContains(response, "Old completed board task")
+
 
 class MyTasksViewOrderingTests(TestCase):
     def setUp(self):
@@ -1608,6 +1635,202 @@ class MyTasksViewOrderingTests(TestCase):
         self.assertNotContains(response, 'name="completion_scope"', html=False)
         self.assertNotContains(response, '>Schedule</label>', html=False)
         self.assertNotContains(response, '>Status</label>', html=False)
+
+    def test_my_tasks_hides_done_tasks_older_than_seven_days(self):
+        Task.objects.create(
+            title="Old completed my task",
+            description="Should move off My Tasks",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.student,
+            completed_at=timezone.make_aware(datetime(2026, 3, 10, 8, 0)),
+            board_order=1,
+        )
+        Task.objects.create(
+            title="Recent completed my task",
+            description="Should stay visible for now",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.student,
+            completed_at=timezone.make_aware(datetime(2026, 3, 18, 8, 0)),
+            board_order=2,
+        )
+        self.client.force_login(self.student)
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Recent completed my task")
+        self.assertNotContains(response, "Old completed my task")
+
+
+class CompletedTasksViewTests(TestCase):
+    def setUp(self):
+        self.team_alpha = Team.objects.create(name="Completed Alpha", description="Alpha completed tasks")
+        self.team_beta = Team.objects.create(name="Completed Beta", description="Beta completed tasks")
+        self.supervisor = User.objects.create_user(
+            username="completed-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            first_name="Alice",
+            last_name="Supervisor",
+            team=self.team_alpha,
+        )
+        self.supervisor_beta = User.objects.create_user(
+            username="completed-beta-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            first_name="Ben",
+            last_name="Beta",
+            team=self.team_beta,
+        )
+        self.student_supervisor = User.objects.create_user(
+            username="completed-student-lead",
+            password="password123",
+            role=UserRole.STUDENT_SUPERVISOR,
+            team=self.team_alpha,
+        )
+        self.worker_one = User.objects.create_user(
+            username="completed-worker-one",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            team=self.team_alpha,
+        )
+        self.worker_two = User.objects.create_user(
+            username="completed-worker-two",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            team=self.team_alpha,
+        )
+        self.worker_beta = User.objects.create_user(
+            username="completed-worker-beta",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            team=self.team_beta,
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.student_supervisor,
+            display_name="Jordan Lead",
+            email="lead@example.com",
+            normal_shift_availability="",
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.worker_one,
+            display_name="Alex Archive",
+            email="alex@example.com",
+            normal_shift_availability="",
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.worker_two,
+            display_name="Jamie Closeout",
+            email="jamie@example.com",
+            normal_shift_availability="",
+        )
+        StudentWorkerProfile.objects.create(
+            user=self.worker_beta,
+            display_name="Beta Worker",
+            email="beta@example.com",
+            normal_shift_availability="",
+        )
+        self.old_task = Task.objects.create(
+            team=self.team_alpha,
+            title="Archive inbox cleanup",
+            description="Completed earlier",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_one,
+            created_by=self.supervisor,
+            estimated_minutes=30,
+            completed_at=timezone.make_aware(datetime(2026, 3, 10, 9, 0)),
+        )
+        self.recent_task = Task.objects.create(
+            team=self.team_alpha,
+            title="Desk closeout",
+            description="Completed yesterday",
+            priority=Priority.HIGH,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_two,
+            created_by=self.supervisor,
+            estimated_minutes=45,
+            completed_at=timezone.make_aware(datetime(2026, 3, 19, 15, 0)),
+        )
+        self.collab_task = Task.objects.create(
+            team=self.team_alpha,
+            title="Mail run follow-up",
+            description="Shared finish",
+            priority=Priority.LOW,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_two,
+            created_by=self.supervisor,
+            estimated_minutes=60,
+            completed_at=timezone.make_aware(datetime(2026, 3, 20, 9, 30)),
+        )
+        self.collab_task.additional_assignees.add(self.worker_one)
+        self.beta_task = Task.objects.create(
+            team=self.team_beta,
+            title="Beta closed task",
+            description="Should stay scoped to beta",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker_beta,
+            created_by=self.supervisor_beta,
+            estimated_minutes=25,
+            completed_at=timezone.make_aware(datetime(2026, 3, 20, 10, 0)),
+        )
+
+    def test_completed_tasks_tab_appears_after_my_tasks(self):
+        self.client.force_login(self.supervisor)
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertLess(content.index(reverse("my-tasks")), content.index(reverse("completed-tasks")))
+
+    def test_supervisor_completed_tasks_page_is_team_scoped_and_newest_first(self):
+        self.client.force_login(self.supervisor)
+
+        response = self.client.get(reverse("completed-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task.title for task in response.context["tasks"]], ["Mail run follow-up", "Desk closeout", "Archive inbox cleanup"])
+        self.assertNotContains(response, "Beta closed task")
+        self.assertContains(response, "Completed tasks")
+        self.assertContains(response, "Completed in last 7 days")
+        self.assertIn("student", response.context["filter_form"].fields)
+
+    def test_student_supervisor_can_filter_team_completed_tasks_by_student(self):
+        self.client.force_login(self.student_supervisor)
+
+        response = self.client.get(reverse("completed-tasks"), {"student": str(self.worker_one.pk)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task.title for task in response.context["tasks"]], ["Mail run follow-up", "Archive inbox cleanup"])
+        self.assertNotContains(response, "Desk closeout")
+        self.assertIn("student", response.context["filter_form"].fields)
+        self.assertContains(response, "Student: Alex Archive")
+
+    def test_student_worker_only_sees_their_completed_tasks(self):
+        self.client.force_login(self.worker_one)
+
+        response = self.client.get(reverse("completed-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task.title for task in response.context["tasks"]], ["Mail run follow-up", "Archive inbox cleanup"])
+        self.assertNotContains(response, "Desk closeout")
+        self.assertNotIn("student", response.context["filter_form"].fields)
+        self.assertEqual(response.context["summary_cards"][0]["value"], 2)
+
+    def test_completed_tasks_search_filters_results(self):
+        self.client.force_login(self.supervisor)
+
+        response = self.client.get(reverse("completed-tasks"), {"q": "Desk"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task.title for task in response.context["tasks"]], ["Desk closeout"])
+        self.assertIn('Search: "Desk"', response.context["active_filters"])
+        self.assertEqual(response.context["task_count"], 1)
 
 
 class StudentSupervisorPermissionsTests(TestCase):
@@ -2998,3 +3221,5 @@ class TeamHierarchyTests(TestCase):
         response = self.client.get(reverse("team-create"))
 
         self.assertEqual(response.status_code, 403)
+
+

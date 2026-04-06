@@ -30,6 +30,7 @@ from .report_views import reports_view
 from .task_views import (
     board_task_move_view,
     board_view,
+    completed_tasks_view,
     dashboard,
     my_tasks_view,
     password_change_view,
@@ -40,3 +41,4 @@ from .task_views import (
     task_intake_review_view,
     task_intake_view,
 )
+

@@ -602,6 +602,24 @@ class TaskBoardFilterForm(StyledFormMixin, forms.Form):
             self.fields.pop("assigned_to")
 
 
+class CompletedTaskFilterForm(StyledFormMixin, forms.Form):
+    q = forms.CharField(required=False, label="Search")
+    student = forms.ModelChoiceField(required=False, queryset=User.objects.none())
+
+    def __init__(self, *args, user=None, include_student=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["q"].label = "Search completed tasks"
+        self.fields["q"].widget.attrs.setdefault("placeholder", "Search by title, details, or teammate")
+
+        if include_student:
+            team = None if (user and user.is_admin) else getattr(user, "team", None)
+            self.fields["student"].queryset = _worker_user_queryset(team=team)
+            self.fields["student"].label = "Student"
+            self.fields["student"].label_from_instance = _user_choice_label
+        else:
+            self.fields.pop("student")
+
+
 class TaskForm(StyledFormMixin, forms.ModelForm):
     scheduled_week_of = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     scheduled_date = forms.DateField(required=False, widget=forms.HiddenInput())
@@ -1364,6 +1382,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
                         self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
 
         return cleaned_data
+
 
 
 

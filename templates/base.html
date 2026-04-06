@@ -19,6 +19,7 @@
             <nav class="site-nav">
                 <a href="{% url 'board' %}">Board</a>
                 <a href="{% url 'my-tasks' %}">My Tasks</a>
+                <a href="{% url 'completed-tasks' %}">Completed Tasks</a>
                 {% if request.user.is_worker_role %}
                     <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
                 {% endif %}
@@ -51,4 +52,5 @@
     </main>
 </body>
 </html>
+
 

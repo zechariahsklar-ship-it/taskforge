@@ -16,6 +16,7 @@ from .audit_service import TaskAuditService
 from .forms import (
     AppPasswordChangeForm,
     TaskBoardFilterForm,
+    CompletedTaskFilterForm,
     RecurringTaskTemplateForm,
     StudentScheduleOverrideForm,
     StudentWorkerProfileForm,
@@ -59,6 +60,8 @@ BOARD_COLUMNS = [
     TaskStatus.REVIEW,
     TaskStatus.DONE,
 ]
+
+COMPLETED_TASK_BOARD_RETENTION_DAYS = 7
 
 WEEKLY_SCHEDULE_FIELDS = [
     ("monday", Weekday.MONDAY),
@@ -632,8 +635,20 @@ def _filter_query_url(view_name: str, **params) -> str:
     return f"{base_url}?{urlencode(cleaned)}"
 
 
+def _completed_task_cutoff(*, now=None):
+    return (now or timezone.now()) - timedelta(days=COMPLETED_TASK_BOARD_RETENTION_DAYS)
+
+
+def _exclude_stale_done_tasks(queryset, *, now=None):
+    return queryset.exclude(status=TaskStatus.DONE, completed_at__lt=_completed_task_cutoff(now=now))
+
+
 def _task_filter_form(request, *, include_assignee: bool):
     return TaskBoardFilterForm(request.GET or None, user=request.user, include_assignee=include_assignee)
+
+
+def _completed_task_filter_form(request, *, include_student: bool):
+    return CompletedTaskFilterForm(request.GET or None, user=request.user, include_student=include_student)
 
 
 def _active_task_filter_labels(filter_form: TaskBoardFilterForm) -> list[str]:
@@ -652,6 +667,19 @@ def _active_task_filter_labels(filter_form: TaskBoardFilterForm) -> list[str]:
     assigned_to = cleaned.get("assigned_to")
     if assigned_to:
         labels.append(f"Teammate: {assigned_to.display_label}")
+    return labels
+
+
+def _active_completed_task_filter_labels(filter_form: CompletedTaskFilterForm) -> list[str]:
+    if not filter_form.is_bound or not filter_form.is_valid():
+        return []
+    cleaned = filter_form.cleaned_data
+    labels = []
+    if cleaned.get("q"):
+        labels.append(f'Search: "{cleaned["q"]}"')
+    student = cleaned.get("student")
+    if student:
+        labels.append(f"Student: {student.display_label}")
     return labels
 
 
@@ -708,6 +736,86 @@ def _apply_task_board_filters(queryset, filter_form: TaskBoardFilterForm):
     return filtered.distinct(), _active_task_filter_labels(filter_form)
 
 
+def _completed_task_search_filter(query_text: str) -> Q:
+    return (
+        Q(title__icontains=query_text)
+        | Q(description__icontains=query_text)
+        | Q(raw_message__icontains=query_text)
+        | Q(respond_to_text__icontains=query_text)
+        | Q(assigned_to__first_name__icontains=query_text)
+        | Q(assigned_to__last_name__icontains=query_text)
+        | Q(assigned_to__username__icontains=query_text)
+        | Q(assigned_to__worker_profile__display_name__icontains=query_text)
+        | Q(additional_assignees__first_name__icontains=query_text)
+        | Q(additional_assignees__last_name__icontains=query_text)
+        | Q(additional_assignees__username__icontains=query_text)
+        | Q(additional_assignees__worker_profile__display_name__icontains=query_text)
+        | Q(rotating_additional_assignees__first_name__icontains=query_text)
+        | Q(rotating_additional_assignees__last_name__icontains=query_text)
+        | Q(rotating_additional_assignees__username__icontains=query_text)
+        | Q(rotating_additional_assignees__worker_profile__display_name__icontains=query_text)
+        | Q(rotating_additional_assignee__first_name__icontains=query_text)
+        | Q(rotating_additional_assignee__last_name__icontains=query_text)
+        | Q(rotating_additional_assignee__username__icontains=query_text)
+        | Q(rotating_additional_assignee__worker_profile__display_name__icontains=query_text)
+    )
+
+
+def _apply_completed_task_filters(queryset, filter_form: CompletedTaskFilterForm):
+    if not filter_form.is_bound or not filter_form.is_valid():
+        return queryset, []
+
+    cleaned = filter_form.cleaned_data
+    filtered = queryset
+
+    query_text = (cleaned.get("q") or "").strip()
+    if query_text:
+        filtered = filtered.filter(_completed_task_search_filter(query_text))
+
+    student = cleaned.get("student")
+    if student:
+        filtered = filtered.filter(_task_membership_filter(student))
+
+    return filtered.distinct(), _active_completed_task_filter_labels(filter_form)
+
+
+def _visible_completed_task_queryset(user: User):
+    queryset = _team_scoped_task_queryset(user).filter(status=TaskStatus.DONE)
+    if not user.can_view_full_board:
+        queryset = queryset.filter(_task_membership_filter(user))
+    return queryset.distinct()
+
+
+def _format_estimated_time_summary(total_minutes) -> str:
+    total_minutes = int(total_minutes or 0)
+    if total_minutes == 0:
+        return "0 min"
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours} hr{'s' if hours != 1 else ''} {minutes} min"
+    if hours:
+        return f"{hours} hr{'s' if hours != 1 else ''}"
+    return f"{minutes} min"
+
+
+def _format_completion_date(value) -> str:
+    if not value:
+        return "No tasks yet"
+    local_value = timezone.localtime(value)
+    return f"{local_value.strftime('%b')} {local_value.day}, {local_value.year}"
+
+
+def _completed_task_summary_cards(queryset):
+    summary = queryset.aggregate(total_estimated_minutes=Sum("estimated_minutes"), latest_completion=Max("completed_at"))
+    recent_count = queryset.filter(completed_at__gte=_completed_task_cutoff()).count()
+    return [
+        {"label": "Completed tasks", "value": queryset.count()},
+        {"label": f"Completed in last {COMPLETED_TASK_BOARD_RETENTION_DAYS} days", "value": recent_count},
+        {"label": "Estimated time", "value": _format_estimated_time_summary(summary["total_estimated_minutes"])},
+        {"label": "Most recent completion", "value": _format_completion_date(summary["latest_completion"])},
+    ]
+
+
 def _build_due_today_warning(*, task_queryset, current_view: str):
     today = timezone.localdate()
     due_today_count = (
@@ -737,7 +845,7 @@ def board_view(request):
     tasks = _team_scoped_task_queryset(request.user)
     if not request.user.can_view_full_board:
         tasks = tasks.filter(_task_membership_filter(request.user))
-    visible_tasks = tasks.distinct()
+    visible_tasks = _exclude_stale_done_tasks(tasks.distinct())
     filter_form = _task_filter_form(request, include_assignee=request.user.can_view_full_board)
     filtered_tasks, active_filters = _apply_task_board_filters(visible_tasks, filter_form)
     ordered_tasks = _ordered_board_tasks(filtered_tasks)
@@ -806,7 +914,7 @@ def my_tasks_view(request):
     visibility_filter = _task_membership_filter(request.user)
     if request.user.is_supervisor:
         visibility_filter |= Q(status=TaskStatus.WAITING)
-    visible_tasks = _team_scoped_task_queryset(request.user).filter(visibility_filter).distinct()
+    visible_tasks = _exclude_stale_done_tasks(_team_scoped_task_queryset(request.user).filter(visibility_filter).distinct())
     filter_form = _task_filter_form(request, include_assignee=False)
     filtered_tasks, active_filters = _apply_task_board_filters(visible_tasks, filter_form)
     ordered_tasks = _ordered_board_tasks(filtered_tasks)
@@ -820,6 +928,28 @@ def my_tasks_view(request):
             "active_filters": active_filters,
             "task_count": len(ordered_tasks),
             "due_today_warning": _build_due_today_warning(task_queryset=visible_tasks, current_view="my-tasks"),
+        },
+    )
+
+
+@app_login_required
+def completed_tasks_view(request):
+    filter_form = _completed_task_filter_form(request, include_student=request.user.can_view_full_board)
+    visible_tasks = _visible_completed_task_queryset(request.user)
+    filtered_tasks, active_filters = _apply_completed_task_filters(visible_tasks, filter_form)
+    filtered_task_ids = list(filtered_tasks.values_list("pk", flat=True))
+    completed_tasks = _task_board_queryset().filter(pk__in=filtered_task_ids)
+    ordered_tasks = list(completed_tasks.order_by(F("completed_at").desc(nulls_last=True), "-updated_at", "-pk"))
+    return render(
+        request,
+        "workboard/completed_tasks.html",
+        {
+            "tasks": ordered_tasks,
+            "filter_form": filter_form,
+            "active_filters": active_filters,
+            "task_count": len(ordered_tasks),
+            "summary_cards": _completed_task_summary_cards(completed_tasks),
+            "retention_days": COMPLETED_TASK_BOARD_RETENTION_DAYS,
         },
     )
 
@@ -1213,3 +1343,8 @@ def task_delete_view(request, pk):
     _close_status_gap(_board_bucket_status(previous_status), exclude_pk=0, team=task.team)
     messages.success(request, f'Task "{delete_title}" deleted.')
     return redirect("board")
+
+
+
+
+

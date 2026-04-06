@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Completed Tasks | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Completed tasks</h1>
+        <p>Tasks leave the Done column after {{ retention_days }} days and stay searchable here from newest to oldest.</p>
+    </div>
+</section>
+<section class="card board-filter-card">
+    <form method="get" class="stack">
+        <div class="board-filter-grid board-filter-grid-compact">
+            <p>
+                <label for="{{ filter_form.q.id_for_label }}">{{ filter_form.q.label }}</label>
+                {{ filter_form.q }}
+            </p>
+            {% if filter_form.student %}
+                <p>
+                    <label for="{{ filter_form.student.id_for_label }}">{{ filter_form.student.label }}</label>
+                    {{ filter_form.student }}
+                </p>
+            {% endif %}
+        </div>
+        <div class="inline-form board-filter-actions">
+            <button type="submit">Apply filters</button>
+            <a class="button-link button-link-secondary" href="{% url 'completed-tasks' %}">Clear</a>
+            <p class="meta board-filter-summary">
+                Showing {{ task_count }} completed task{{ task_count|pluralize }}{% if active_filters %} | {{ active_filters|join:", " }}{% endif %}
+            </p>
+        </div>
+    </form>
+</section>
+<section class="report-metric-grid">
+    {% for card in summary_cards %}
+        <article class="card report-metric-card">
+            <p class="meta">{{ card.label }}</p>
+            <h2>{{ card.value }}</h2>
+        </article>
+    {% endfor %}
+</section>
+<section class="table-card">
+    <div class="split-heading">
+        <div>
+            <h2>Completed task history</h2>
+            <p class="meta">The list and metrics update with your current search and filters.</p>
+        </div>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Completed</th>
+                <th>Task</th>
+                <th>Assignees</th>
+                <th>Priority</th>
+                <th>Estimate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in tasks %}
+                <tr>
+                    <td>{% if task.completed_at %}{{ task.completed_at|date:"M j, Y g:i A" }}{% else %}Earlier completion{% endif %}</td>
+                    <td>
+                        <a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a>
+                        <p class="meta">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
+                    </td>
+                    <td>{{ task.assignee_labels }}</td>
+                    <td>{{ task.get_priority_display }}</td>
+                    <td>{% if task.estimated_minutes %}{{ task.estimated_minutes }} min{% else %}TBD{% endif %}</td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="5" class="empty-state">No completed tasks match the current filters.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

@@ -9,6 +9,7 @@ urlpatterns = [
     path("board/tasks/<int:pk>/move/", views.board_task_move_view, name="board-task-move"),
     path("account/password/", views.password_change_view, name="password-change"),
     path("tasks/mine/", views.my_tasks_view, name="my-tasks"),
+    path("tasks/completed/", views.completed_tasks_view, name="completed-tasks"),
     path("schedule-adjustment/", views.schedule_adjustment_request_view, name="schedule-adjustment-request"),
     path("schedule-adjustments/", views.schedule_adjustment_request_list_view, name="schedule-adjustment-requests"),
     path("tasks/intake/", views.task_intake_view, name="task-intake"),
@@ -41,3 +42,4 @@ urlpatterns = [
     path("workers/supervisors/<int:pk>/edit/", views.supervisor_edit_view, name="supervisor-edit"),
     path("workers/supervisors/<int:pk>/delete/", views.supervisor_delete_view, name="supervisor-delete"),
 ]
+
