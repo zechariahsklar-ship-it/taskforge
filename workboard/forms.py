@@ -760,6 +760,10 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].label = "Day of month to repeat on"
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
+        for field_name in ("team", "assigned_to", "respond_to_text", "recurring_task"):
+            self.fields[field_name].help_text = ""
+        self.fields["additional_assignees"].help_text = ""
+
     def day_rows(self):
         return [
             {
@@ -1222,9 +1226,9 @@ class TaskManualForm(TaskForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["description"].label = "Task details"
-        self.fields["description"].help_text = "Describe the work that needs to be done."
+        self.fields["description"].help_text = ""
         self.fields["due_date"].label = "Due date"
-        self.fields["due_date"].help_text = "Leave blank if this can be scheduled from priority."
+        self.fields["due_date"].help_text = ""
 
 
 class TaskUpdateForm(StyledFormMixin, forms.ModelForm):

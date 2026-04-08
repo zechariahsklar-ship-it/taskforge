@@ -62,12 +62,19 @@
             {% endif %}
         {% endfor %}
 
-        <section class="review-field recurring-task-panel">
-            <div class="stack">
-                <div>
-                    <h2>Scheduled work window</h2>
-                    <p class="meta">Choose any Monday through Friday times this task can be worked. TaskForge uses these windows to find teammates who have availability and to place the task inside those hours.</p>
-                </div>
+        <section class="review-field recurring-task-panel collapsible-panel">
+            <button
+                type="button"
+                class="collapsible-panel-toggle"
+                data-collapsible-toggle
+                data-task-window-toggle
+                aria-expanded="{% if form.scheduled_window_segments.errors or form.scheduled_date.errors %}true{% else %}false{% endif %}"
+                aria-controls="task-window-panel"
+            >
+                <span class="collapsible-panel-title">Scheduled work window</span>
+                <span class="collapsible-panel-arrow" aria-hidden="true"></span>
+            </button>
+            <div id="task-window-panel" class="stack" data-collapsible-body data-task-window-fields{% if not form.scheduled_window_segments.errors and not form.scheduled_date.errors %} hidden{% endif %}>
                 {% if form.scheduled_window_segments.errors %}
                     <div class="meta">{{ form.scheduled_window_segments.errors }}</div>
                 {% endif %}
@@ -78,18 +85,29 @@
             </div>
         </section>
 
-        <section class="review-field recurring-task-panel">
-            <div class="split-heading">
-                <div>
-                    <label for="{{ form.recurring_task.id_for_label }}">{{ form.recurring_task.label }}</label>
-                    {% if form.recurring_task.help_text %}<p class="meta">{{ form.recurring_task.help_text }}</p>{% endif %}
-                </div>
-                {{ form.recurring_task }}
+        <section class="review-field recurring-task-panel collapsible-panel" data-recurring-section>
+            <div class="split-heading collapsible-panel-header">
+                <button
+                    type="button"
+                    class="collapsible-panel-toggle"
+                    data-collapsible-toggle
+                    data-recurring-toggle
+                    aria-expanded="{% if form.recurring_task.value or form.recurring_task.errors or form.recurrence_pattern.errors or form.recurrence_interval.errors or form.recurrence_day_of_week.errors or form.recurrence_day_of_month.errors %}true{% else %}false{% endif %}"
+                    aria-controls="recurring-task-panel"
+                    {% if not form.recurring_task.value and not form.recurring_task.errors and not form.recurrence_pattern.errors and not form.recurrence_interval.errors and not form.recurrence_day_of_week.errors and not form.recurrence_day_of_month.errors %}disabled{% endif %}
+                >
+                    <span class="collapsible-panel-title">{{ form.recurring_task.label }}</span>
+                    <span class="collapsible-panel-arrow" aria-hidden="true"></span>
+                </button>
+                <label class="inline-checkbox recurring-section-check" for="{{ form.recurring_task.id_for_label }}">
+                    {{ form.recurring_task }}
+                    <span>Enable</span>
+                </label>
             </div>
             {% if form.recurring_task.errors %}<div class="meta">{{ form.recurring_task.errors }}</div>{% endif %}
 
-            <div class="stack" data-recurring-fields{% if not form.recurring_task.value %} hidden{% endif %}>
-                <div class="stack" data-recurring-options>
+            <div id="recurring-task-panel" class="stack" data-collapsible-body data-recurring-fields{% if not form.recurring_task.value and not form.recurring_task.errors and not form.recurrence_pattern.errors and not form.recurrence_interval.errors and not form.recurrence_day_of_week.errors and not form.recurrence_day_of_month.errors %} hidden{% endif %}>
+                <div class="stack" data-recurring-options{% if not form.recurring_task.value %} hidden{% endif %}>
                     <p>
                         <label for="{{ form.recurrence_pattern.id_for_label }}">{{ form.recurrence_pattern.label }}</label>
                         {{ form.recurrence_pattern }}
@@ -122,17 +140,36 @@
 </section>
 <script>
     (function () {
+        const taskWindowToggle = document.querySelector('[data-task-window-toggle]');
+        const taskWindowFields = document.querySelector('[data-task-window-fields]');
+        const recurringSection = document.querySelector('[data-recurring-section]');
         const recurringCheckbox = document.getElementById('{{ form.recurring_task.id_for_label }}');
         const recurrencePattern = document.getElementById('{{ form.recurrence_pattern.id_for_label }}');
-        const recurringFields = document.querySelector('[data-recurring-fields]');
-        const recurringOptions = document.querySelector('[data-recurring-options]');
+        const recurringToggle = recurringSection ? recurringSection.querySelector('[data-recurring-toggle]') : null;
+        const recurringFields = recurringSection ? recurringSection.querySelector('[data-recurring-fields]') : null;
+        const recurringOptions = recurringSection ? recurringSection.querySelector('[data-recurring-options]') : null;
         const weeklyField = document.querySelector('[data-recurring-weekly]');
         const monthlyField = document.querySelector('[data-recurring-monthly]');
         const recurringWeekday = document.getElementById('{{ form.recurrence_day_of_week.id_for_label }}');
         const taskWindowPicker = document.getElementById('task-window-picker');
-        if (!recurringCheckbox || !recurrencePattern || !recurringFields || !recurringOptions || !weeklyField || !monthlyField) {
+
+        function setSectionExpanded(toggle, body, expanded) {
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            body.hidden = !expanded;
+        }
+
+        if (taskWindowToggle && taskWindowFields) {
+            taskWindowToggle.addEventListener('click', function () {
+                const expanded = taskWindowToggle.getAttribute('aria-expanded') === 'true';
+                setSectionExpanded(taskWindowToggle, taskWindowFields, !expanded);
+            });
+        }
+
+        if (!recurringCheckbox || !recurrencePattern || !recurringToggle || !recurringFields || !recurringOptions || !weeklyField || !monthlyField) {
             return;
         }
+
+        let recurringExpanded = recurringToggle.getAttribute('aria-expanded') === 'true';
 
         function syncRecurringWeekday() {
             if (!recurringWeekday || recurrencePattern.value !== 'weekly' || !taskWindowPicker) {
@@ -145,17 +182,32 @@
             recurringWeekday.value = scheduledCards[0].dataset.weekday || '';
         }
 
+        // Hiding a panel only changes visibility, so any edits stay in the form.
         function updateRecurringVisibility() {
             const enabled = recurringCheckbox.checked;
             const pattern = recurrencePattern.value;
-            recurringFields.hidden = !enabled;
+            recurringToggle.disabled = !enabled;
+            if (!enabled) {
+                recurringExpanded = false;
+            }
+            setSectionExpanded(recurringToggle, recurringFields, enabled && recurringExpanded);
             recurringOptions.hidden = !enabled;
             weeklyField.hidden = !enabled || pattern !== 'weekly';
             monthlyField.hidden = !enabled || pattern !== 'monthly';
             syncRecurringWeekday();
         }
 
-        recurringCheckbox.addEventListener('change', updateRecurringVisibility);
+        recurringToggle.addEventListener('click', function () {
+            if (recurringToggle.disabled) {
+                return;
+            }
+            recurringExpanded = recurringToggle.getAttribute('aria-expanded') !== 'true';
+            updateRecurringVisibility();
+        });
+        recurringCheckbox.addEventListener('change', function () {
+            recurringExpanded = recurringCheckbox.checked;
+            updateRecurringVisibility();
+        });
         recurrencePattern.addEventListener('change', updateRecurringVisibility);
         if (taskWindowPicker) {
             taskWindowPicker.addEventListener('taskforge:schedule-change', syncRecurringWeekday);

@@ -963,6 +963,8 @@ class TaskScheduledWindowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Scheduled work window")
+        self.assertContains(response, 'data-task-window-toggle', html=False)
+        self.assertContains(response, 'data-task-window-fields hidden', html=False)
         self.assertNotContains(response, "Show week of")
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_4"')
@@ -1320,11 +1322,67 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, 'name="additional_assignees"', count=1)
         self.assertContains(response, 'name="rotating_additional_assignee_count"')
         self.assertContains(response, 'type="checkbox"', html=False)
+        self.assertContains(response, 'data-recurring-toggle', html=False)
         self.assertContains(response, 'data-recurring-fields hidden', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
         self.assertNotContains(response, "Requested by")
         self.assertNotContains(response, ">alex-worker<", html=False)
         self.assertNotContains(response, ">create-label-supervisor<", html=False)
+
+    def test_task_create_hides_extra_helper_copy(self):
+        response = self.client.get(reverse("task-create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Choose which team owns this task.")
+        self.assertNotContains(response, "Describe the work that needs to be done.")
+        self.assertNotContains(response, "Leave blank if this can be scheduled from priority.")
+        self.assertNotContains(response, "Person or office to notify after the task is complete")
+        self.assertNotContains(response, "Choose the main teammate for this task.")
+        self.assertNotContains(response, "Pick any teammates who should always be added to this task.")
+        self.assertNotContains(response, "Choose any Monday through Friday times this task can be worked. TaskForge uses these windows to find teammates who have availability and to place the task inside those hours.")
+        self.assertNotContains(response, "Turn this on only if this task should repeat automatically.")
+
+    def test_task_edit_hides_extra_helper_copy(self):
+        task = Task.objects.create(
+            title="Edit helper text task",
+            description="Testing edit helper text cleanup",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+        )
+
+        response = self.client.get(reverse("task-edit", args=[task.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Choose which team owns this task.")
+        self.assertNotContains(response, "Describe the work that needs to be done.")
+        self.assertNotContains(response, "Leave blank if this can be scheduled from priority.")
+        self.assertNotContains(response, "Person or office to notify after the task is complete")
+        self.assertNotContains(response, "Choose the main teammate for this task.")
+        self.assertNotContains(response, "Pick any teammates who should always be added to this task.")
+        self.assertNotContains(response, "Choose any Monday through Friday times this task can be worked. TaskForge uses these windows to find teammates who have availability and to place the task inside those hours.")
+        self.assertNotContains(response, "Turn this on only if this task should repeat automatically.")
+
+    def test_task_edit_with_existing_recurring_task_keeps_recurring_panel_available(self):
+        task = Task.objects.create(
+            title="Existing recurring task",
+            description="Testing recurring task panel",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.FRIDAY,
+        )
+
+        response = self.client.get(reverse("task-edit", args=[task.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-recurring-toggle', html=False)
+        self.assertNotContains(response, 'data-recurring-fields hidden', html=False)
 
 
 class TaskVisibilityAndAdditionalAssigneeTests(TestCase):

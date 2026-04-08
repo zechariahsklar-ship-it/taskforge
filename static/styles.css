@@ -377,6 +377,77 @@ td {
     margin-bottom: 0.5rem;
 }
 
+.collapsible-panel {
+    display: grid;
+    gap: 1rem;
+}
+
+.collapsible-panel-header {
+    margin-bottom: 0;
+}
+
+.collapsible-panel-toggle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    box-shadow: none;
+    text-align: left;
+}
+
+.collapsible-panel-toggle:hover,
+.collapsible-panel-toggle:focus-visible {
+    background: transparent;
+}
+
+.collapsible-panel-toggle:focus-visible {
+    outline: 2px solid #4d78a5;
+    outline-offset: 4px;
+}
+
+.collapsible-panel-toggle[disabled] {
+    opacity: 0.65;
+}
+
+.collapsible-panel-toggle[disabled],
+.collapsible-panel-toggle[disabled]:hover,
+.collapsible-panel-toggle[disabled]:focus-visible {
+    cursor: not-allowed;
+    background: transparent;
+}
+
+.collapsible-panel-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.collapsible-panel-arrow {
+    flex: 0 0 auto;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.2s ease;
+}
+
+.collapsible-panel-toggle[aria-expanded="true"] .collapsible-panel-arrow {
+    transform: rotate(45deg);
+}
+
+.recurring-section-check {
+    flex-shrink: 0;
+}
+
+.recurring-section-check span {
+    white-space: nowrap;
+}
+
 .assignee-choice-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
