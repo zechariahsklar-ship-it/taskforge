@@ -605,6 +605,11 @@ tr:hover td {
     gap: 1rem;
 }
 
+.table-action-links {
+    display: grid;
+    gap: 0.35rem;
+}
+
 .inline-form {
     display: flex;
     gap: 0.75rem;

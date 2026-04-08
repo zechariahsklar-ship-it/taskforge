@@ -1,0 +1,76 @@
+{% with day_rows=picker_form.day_rows %}
+<div{% if picker_id %} id="{{ picker_id }}"{% endif %} class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
+    <div class="weekly-schedule-hidden-fields" hidden aria-hidden="true">
+        {% for hidden in picker_form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+    </div>
+    <div class="weekly-schedule-toolbar{% if hide_picker_header %} is-headerless{% endif %}">
+        {% if not hide_picker_header %}
+            <div>
+                <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
+                <p>{{ picker_help_text|default:"Click or drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Click or drag across a blue block again to erase that range." }}</p>
+            </div>
+        {% endif %}
+        <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>{{ clear_all_label|default:"Clear all" }}</button>
+    </div>
+    <div class="weekly-schedule-summary-grid">
+        {% for row in day_rows %}
+            <article class="weekly-schedule-summary-card{% if row.override_entries %} is-temporary-override{% endif %}" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
+                <div class="weekly-schedule-summary-head">
+                    <h3>{{ row.label }}</h3>
+                    {% if show_day_actions != False %}
+                        <div class="weekly-schedule-day-actions">
+                            {% if day_rows|length > 1 %}
+                                <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="weekdays">Weekdays</button>
+                                <button type="button" class="link-button weekly-schedule-copy-day" data-copy-day="{{ row.prefix }}" data-copy-scope="all">All</button>
+                            {% endif %}
+                            <button type="button" class="link-button weekly-schedule-clear-day" data-clear-day="{{ row.prefix }}">Clear</button>
+                        </div>
+                    {% endif %}
+                </div>
+                {% if row.override_entries %}
+                    <div class="meta weekly-schedule-override-summary">
+                        {% for entry in row.override_entries %}
+                            <p class="weekly-schedule-override-entry">
+                                <span class="weekly-schedule-override-date">{{ entry.date_label }}</span>
+                                <span class="weekly-schedule-override-details">{{ entry.summary_label }}</span>
+                            </p>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
+                {% endif %}
+                {% if row.segments.errors %}
+                    <div class="weekly-schedule-errors">
+                        {% for error in row.segments.errors %}<div class="meta">{{ error }}</div>{% endfor %}
+                    </div>
+                {% endif %}
+            </article>
+        {% endfor %}
+    </div>
+    <div class="weekly-calendar-frame">
+        <div class="weekly-calendar-grid">
+            <div class="weekly-calendar-corner">Time</div>
+            {% for row in day_rows %}
+                <div class="weekly-calendar-header">{{ row.label }}</div>
+            {% endfor %}
+            {% for slot in picker_form.calendar_slots %}
+                <div class="weekly-calendar-time{% if not slot.label %} weekly-calendar-time-half{% endif %}">{% if slot.label %}{{ slot.label }}{% endif %}</div>
+                {% for row in day_rows %}
+                    <button
+                        type="button"
+                        class="weekly-calendar-cell"
+                        data-day="{{ row.prefix }}"
+                        data-slot-index="{{ slot.index }}"
+                        data-slot-value="{{ slot.value }}"
+                        data-slot-end="{{ slot.end_value }}"
+                        aria-label="{{ row.label }} {{ slot.full_label }}"
+                        title="{{ row.label }} {{ slot.full_label }}"
+                    ></button>
+                {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endwith %}

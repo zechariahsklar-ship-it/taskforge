@@ -18,6 +18,7 @@
             {{ hidden }}
         {% endfor %}
 
+        {# Render the custom assignment, schedule, and cadence panels below so the shared field loop stays small and predictable. #}
         {% for field in form %}
             {% if field.name == "assign_to" %}
                 <p>
@@ -51,7 +52,7 @@
                         </p>
                     </div>
                 </section>
-            {% elif field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "day_of_week" and field.name != "day_of_month" %}
+            {% elif field.name not in form.non_rendered_field_names %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -135,6 +136,7 @@
         }
 
         function updateRecurringVisibility() {
+            // Only show the cadence-specific controls that matter for the current pattern.
             const pattern = recurrencePattern.value;
             recurringOptions.hidden = false;
             weeklyField.hidden = pattern !== 'weekly';

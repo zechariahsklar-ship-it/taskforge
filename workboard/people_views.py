@@ -17,8 +17,30 @@ from .forms import (
     TeamForm,
     WeeklyAvailabilityForm,
 )
-from .models import RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestBlock, ScheduleAdjustmentRequestStatus, StudentScheduleOverride, StudentScheduleOverrideBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole
-from .task_views import _save_schedule_override, _save_weekly_schedule, _scope_queryset_to_user_team, _serialize_blocks_for_initial, _weekly_schedule_initial, admin_required, app_login_required, supervisor_required
+from .models import (
+    RecurringTaskTemplate,
+    ScheduleAdjustmentRequest,
+    ScheduleAdjustmentRequestBlock,
+    ScheduleAdjustmentRequestStatus,
+    StudentScheduleOverride,
+    StudentScheduleOverrideBlock,
+    StudentWorkerProfile,
+    Task,
+    TaskStatus,
+    Team,
+    User,
+    UserRole,
+)
+from .task_views import (
+    _save_schedule_override,
+    _save_weekly_schedule,
+    _scope_queryset_to_user_team,
+    _serialize_blocks_for_initial,
+    _weekly_schedule_initial,
+    admin_required,
+    app_login_required,
+    supervisor_required,
+)
 
 
 def _scoped_worker_profiles(user):
@@ -135,14 +157,39 @@ def _queue_temporary_password_notice(request, *, display_name: str, password: st
     )
 
 
+def _username_error_message(username: str, *, exclude_user: User | None = None) -> str:
+    if not username:
+        return "Username is required."
+    queryset = User.objects.all()
+    if exclude_user is not None:
+        queryset = queryset.exclude(pk=exclude_user.pk)
+    if queryset.filter(username=username).exists():
+        return "That username is already in use."
+    return ""
+
+
+def _reassignment_destination_label(user: User | None) -> str:
+    return user.display_label if user else "the team board"
+
+
+def _reassign_owned_work_for_removed_user(removed_user: User, *, reassignment_user: User | None) -> None:
+    Task.objects.filter(assigned_to=removed_user).update(assigned_to=reassignment_user, updated_at=timezone.now())
+    RecurringTaskTemplate.objects.filter(assign_to=removed_user).update(assign_to=reassignment_user, updated_at=timezone.now())
+
+
+def _remove_worker_from_collaboration_slots(removed_user: User) -> None:
+    Task.objects.filter(rotating_additional_assignee=removed_user).update(rotating_additional_assignee=None, updated_at=timezone.now())
+    Task.additional_assignees.through.objects.filter(user_id=removed_user.pk).delete()
+    Task.rotating_additional_assignees.through.objects.filter(user_id=removed_user.pk).delete()
+    RecurringTaskTemplate.additional_assignees.through.objects.filter(user_id=removed_user.pk).delete()
+
+
 def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: StudentWorkerProfileForm, post_data, *, actor: User) -> bool:
     user = profile.user
     username = post_data.get("username", "").strip()
-    if not username:
-        worker_form.add_error(None, "Username is required.")
-        return False
-    if User.objects.exclude(pk=user.pk).filter(username=username).exists():
-        worker_form.add_error(None, "That username is already in use.")
+    username_error = _username_error_message(username, exclude_user=user)
+    if username_error:
+        worker_form.add_error(None, username_error)
         return False
 
     user.username = username
@@ -180,11 +227,9 @@ def _create_worker_profile_account(
     }
     if request.method == "POST":
         account = _posted_account_details(request.POST)
-        if not account["username"]:
-            messages.error(request, "Username is required.")
-            return render(request, "workboard/worker_form.html", context)
-        if User.objects.filter(username=account["username"]).exists():
-            messages.error(request, "That username is already in use.")
+        username_error = _username_error_message(account["username"])
+        if username_error:
+            messages.error(request, username_error)
             return render(request, "workboard/worker_form.html", context)
         if form.is_valid() and weekly_form.is_valid():
             password, generated_password = _resolved_account_password(account)
@@ -517,11 +562,9 @@ def supervisor_create_view(request):
     context = {"form": form, "page_title": "Add supervisor", "submit_label": "Create supervisor"}
     if request.method == "POST":
         account = _posted_account_details(request.POST)
-        if not account["username"]:
-            messages.error(request, "Username is required.")
-            return render(request, "workboard/supervisor_form.html", context)
-        if User.objects.filter(username=account["username"]).exists():
-            messages.error(request, "That username is already in use.")
+        username_error = _username_error_message(account["username"])
+        if username_error:
+            messages.error(request, username_error)
             return render(request, "workboard/supervisor_form.html", context)
         password, generated_password = _resolved_account_password(account)
         user = User.objects.create_user(
@@ -575,17 +618,19 @@ def worker_profile_delete_view(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required.")
 
-    worker = get_object_or_404(_scoped_users(request.user, User.objects.select_related("worker_profile").filter(role__in=UserRole.worker_roles())), pk=pk)
+    worker = get_object_or_404(
+        _scoped_users(request.user, User.objects.select_related("worker_profile").filter(role__in=UserRole.worker_roles())),
+        pk=pk,
+    )
     reassignment_user = _reassignment_user_for_removed_account(request.user, worker)
-    Task.objects.filter(assigned_to=worker).update(assigned_to=reassignment_user, updated_at=timezone.now())
-    Task.objects.filter(rotating_additional_assignee=worker).update(rotating_additional_assignee=None, updated_at=timezone.now())
-    Task.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
-    Task.rotating_additional_assignees.through.objects.filter(user_id=worker.pk).delete()
-    RecurringTaskTemplate.objects.filter(assign_to=worker).update(assign_to=reassignment_user, updated_at=timezone.now())
-    RecurringTaskTemplate.additional_assignees.through.objects.filter(user_id=worker.pk).delete()
+    _reassign_owned_work_for_removed_user(worker, reassignment_user=reassignment_user)
+    _remove_worker_from_collaboration_slots(worker)
     worker_name = worker.display_label
     worker.delete()
-    messages.success(request, f"Removed {worker_name}. Any assigned tasks were reassigned to {reassignment_user.display_label if reassignment_user else 'the team board'}.")
+    messages.success(
+        request,
+        f"Removed {worker_name}. Any assigned tasks were reassigned to {_reassignment_destination_label(reassignment_user)}.",
+    )
     return redirect("worker-list")
 
 
@@ -600,11 +645,13 @@ def supervisor_delete_view(request, pk):
         return redirect("worker-list")
 
     reassignment_user = _reassignment_user_for_removed_account(request.user, supervisor)
-    Task.objects.filter(assigned_to=supervisor).update(assigned_to=reassignment_user, updated_at=timezone.now())
-    RecurringTaskTemplate.objects.filter(assign_to=supervisor).update(assign_to=reassignment_user, updated_at=timezone.now())
+    _reassign_owned_work_for_removed_user(supervisor, reassignment_user=reassignment_user)
     supervisor_name = supervisor.display_label
     supervisor.delete()
-    messages.success(request, f"Removed {supervisor_name}. Any assigned tasks were reassigned to {reassignment_user.display_label if reassignment_user else 'the team board'}.")
+    messages.success(
+        request,
+        f"Removed {supervisor_name}. Any assigned tasks were reassigned to {_reassignment_destination_label(reassignment_user)}.",
+    )
     return redirect("worker-list")
 
 

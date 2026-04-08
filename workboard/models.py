@@ -1,3 +1,4 @@
+from calendar import monthrange
 from datetime import date, timedelta
 
 from django.contrib.auth.models import AbstractUser
@@ -15,6 +16,14 @@ def _format_time_window(start_time, end_time):
 
 def _format_calendar_date(value):
     return f"{value.strftime('%b')} {value.day}, {value.year}"
+
+
+def _rotation_count_label(count):
+    return f"Rotation x{count or 1}"
+
+
+def _rotation_user_label(user):
+    return f"{user.display_label} (rotation)"
 
 
 def _ordered_block_summary(block_manager):
@@ -97,7 +106,20 @@ class Team(models.Model):
 
     @classmethod
     def get_default_team(cls):
-        return cls.objects.get_or_create(name="General", defaults={"description": "Default team for existing TaskForge data."})[0]
+        return cls.objects.get_or_create(
+            name="General",
+            defaults={"description": "Default team for existing TaskForge data."},
+        )[0]
+
+
+def _resolved_team_or_default(*candidates):
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        team = candidate if isinstance(candidate, Team) else getattr(candidate, "team", None)
+        if team is not None:
+            return team
+    return Team.get_default_team()
 
 
 class User(AbstractUser):
@@ -108,7 +130,7 @@ class User(AbstractUser):
 
     def save(self, *args, **kwargs):
         if not self.team_id and not self.is_superuser:
-            self.team = Team.get_default_team()
+            self.team = _resolved_team_or_default()
         super().save(*args, **kwargs)
 
     @property
@@ -285,7 +307,7 @@ class ScheduleAdjustmentRequest(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.team_id:
-            self.team = self.profile.user.team or self.requested_by.team or Team.get_default_team()
+            self.team = _resolved_team_or_default(self.profile.user, self.requested_by)
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -360,9 +382,18 @@ class RecurringTaskTemplate(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.team_id:
-            self.team = (self.requested_by.team if self.requested_by_id else None) or (self.assign_to.team if self.assign_to_id else None) or Team.get_default_team()
+            self.team = _resolved_team_or_default(
+                self.requested_by if self.requested_by_id else None,
+                self.assign_to if self.assign_to_id else None,
+            )
         if self.display_order is None:
-            max_order = RecurringTaskTemplate.objects.exclude(pk=self.pk).filter(team=self.team).aggregate(max_order=models.Max("display_order")).get("max_order") or 0
+            max_order = (
+                RecurringTaskTemplate.objects.exclude(pk=self.pk)
+                .filter(team=self.team)
+                .aggregate(max_order=models.Max("display_order"))
+                .get("max_order")
+                or 0
+            )
             self.display_order = max_order + 1
         super().save(*args, **kwargs)
 
@@ -379,9 +410,9 @@ class RecurringTaskTemplate(models.Model):
     def additional_assignee_labels(self):
         labels = [user.display_label for user in self.additional_assignees.all()]
         if self.rotating_additional_assignee_count:
-            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
+            labels.append(_rotation_count_label(self.rotating_additional_assignee_count))
         elif self.rotate_additional_assignee:
-            labels.append("Rotation x1")
+            labels.append(_rotation_count_label(1))
         return ", ".join(labels) if labels else "None"
 
     def advance_next_run_date(self):
@@ -390,12 +421,11 @@ class RecurringTaskTemplate(models.Model):
         elif self.recurrence_pattern == RecurrencePattern.WEEKLY:
             self.next_run_date = self.next_run_date + timedelta(weeks=self.recurrence_interval)
         else:
-            month = self.next_run_date.month - 1 + self.recurrence_interval
-            year = self.next_run_date.year + month // 12
-            month = month % 12 + 1
+            month_index = self.next_run_date.month - 1 + self.recurrence_interval
+            year = self.next_run_date.year + month_index // 12
+            month = month_index % 12 + 1
             day = self.day_of_month or self.next_run_date.day
-            last_day = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
-            self.next_run_date = date(year, month, min(day, last_day))
+            self.next_run_date = date(year, month, min(day, monthrange(year, month)[1]))
 
 
 class Task(models.Model):
@@ -479,12 +509,11 @@ class Task(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.team_id:
-            self.team = (
-                (self.recurring_template.team if self.recurring_template_id else None)
-                or (self.created_by.team if self.created_by_id else None)
-                or (self.requested_by.team if self.requested_by_id else None)
-                or (self.assigned_to.team if self.assigned_to_id else None)
-                or Team.get_default_team()
+            self.team = _resolved_team_or_default(
+                self.recurring_template.team if self.recurring_template_id else None,
+                self.created_by if self.created_by_id else None,
+                self.requested_by if self.requested_by_id else None,
+                self.assigned_to if self.assigned_to_id else None,
             )
         super().save(*args, **kwargs)
 
@@ -493,6 +522,8 @@ class Task(models.Model):
 
     @property
     def scheduled_window_display(self):
+        # Prefer persisted multi-block schedule rows, then fall back to the
+        # legacy single-window fields when older tasks do not have blocks yet.
         scheduled_blocks = list(self.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk"))
         if scheduled_blocks:
             grouped_labels = {}
@@ -532,27 +563,27 @@ class Task(models.Model):
                 seen_ids.add(user.pk)
         for user in self.rotating_additional_assignees.all():
             if user.pk not in seen_ids:
-                labels.append(f"{user.display_label} (rotation)")
+                labels.append(_rotation_user_label(user))
                 seen_ids.add(user.pk)
         if self.rotating_additional_assignee and self.rotating_additional_assignee_id not in seen_ids:
-            labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
+            labels.append(_rotation_user_label(self.rotating_additional_assignee))
             seen_ids.add(self.rotating_additional_assignee_id)
         if not any(label.endswith("(rotation)") for label in labels) and self.rotating_additional_assignee_count:
-            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
+            labels.append(_rotation_count_label(self.rotating_additional_assignee_count))
         return ", ".join(labels) if labels else "Unassigned"
 
     @property
     def additional_assignee_labels(self):
         labels = [user.display_label for user in self.additional_assignees.all()]
-        rotating_labels = [f"{user.display_label} (rotation)" for user in self.rotating_additional_assignees.all()]
+        rotating_labels = [_rotation_user_label(user) for user in self.rotating_additional_assignees.all()]
         if rotating_labels:
             labels.extend(rotating_labels)
         elif self.rotating_additional_assignee:
-            labels.append(f"{self.rotating_additional_assignee.display_label} (rotation)")
+            labels.append(_rotation_user_label(self.rotating_additional_assignee))
         elif self.rotating_additional_assignee_count:
-            labels.append(f"Rotation x{self.rotating_additional_assignee_count}")
+            labels.append(_rotation_count_label(self.rotating_additional_assignee_count))
         elif self.rotate_additional_assignee:
-            labels.append("Rotation x1")
+            labels.append(_rotation_count_label(1))
         return ", ".join(labels) if labels else "None"
 
 

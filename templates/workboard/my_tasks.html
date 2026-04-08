@@ -3,6 +3,7 @@
 {% block title %}My Tasks | TaskForge{% endblock %}
 
 {% block content %}
+<!-- Reuse the board move endpoint so My Tasks stays in sync with the main board. -->
 <div id="my-tasks-dnd-config" data-move-url-template="{% url 'board-task-move' 0 %}"></div>
 <section class="page-heading">
     <h1>My tasks</h1>
@@ -93,6 +94,7 @@
             return '';
         }
 
+        // Match the board's locally saved column order so both screens feel consistent.
         function restoreBucketOrder() {
             const raw = window.localStorage.getItem(columnStorageKey);
             if (!raw) {
@@ -160,6 +162,7 @@
             return next;
         }
 
+        // Save the new status and position after the task is dropped into a bucket.
         async function moveTask(card, bucket) {
             const taskId = card.dataset.taskId;
             const status = bucket.dataset.columnStatus;

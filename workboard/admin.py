@@ -25,8 +25,18 @@ class TeamAdmin(admin.ModelAdmin):
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
-    fieldsets = DjangoUserAdmin.fieldsets + (("Role", {"fields": ("role", "team", "must_change_password", "assignable_to_tasks")}),)
-    list_display = ("username", "email", "role", "team", "must_change_password", "assignable_to_tasks", "is_staff")
+    fieldsets = DjangoUserAdmin.fieldsets + (
+        ("Role", {"fields": ("role", "team", "must_change_password", "assignable_to_tasks")}),
+    )
+    list_display = (
+        "username",
+        "email",
+        "role",
+        "team",
+        "must_change_password",
+        "assignable_to_tasks",
+        "is_staff",
+    )
     list_filter = ("role", "team", "must_change_password", "assignable_to_tasks", "is_staff")
 
 
@@ -70,7 +80,15 @@ class TaskAuditEventInline(admin.TabularInline):
 
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
-    list_display = ("title", "team", "priority", "status", "assigned_to", "due_date", "recurring_task")
+    list_display = (
+        "title",
+        "team",
+        "priority",
+        "status",
+        "assigned_to",
+        "due_date",
+        "recurring_task",
+    )
     list_filter = ("team", "priority", "status", "recurring_task")
     search_fields = ("title", "description", "raw_message")
     filter_horizontal = ("additional_assignees",)

@@ -4,6 +4,7 @@
 {% block page_shell_class %}page-shell-board{% endblock %}
 
 {% block content %}
+<!-- Keep the drag-and-drop endpoint in markup so the script can stay generic. -->
 <div id="board-dnd-config" data-move-url-template="{% url 'board-task-move' 0 %}"></div>
 <section class="page-heading">
     <h1>Task board</h1>
@@ -99,6 +100,7 @@
             return '';
         }
 
+        // Persist each person's preferred column order in this browser only.
         function persistColumnOrder() {
             const order = Array.from(board.querySelectorAll('.board-column')).map((column) => column.dataset.columnStatus);
             window.localStorage.setItem(columnStorageKey, JSON.stringify(order));
@@ -170,6 +172,7 @@
             return next;
         }
 
+        // Save the visual move back to Django after the card has been dropped.
         async function moveTask(card, column) {
             const taskId = card.dataset.taskId;
             const status = column.dataset.columnStatus;

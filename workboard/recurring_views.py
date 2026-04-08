@@ -71,7 +71,7 @@ def recurring_template_run_now_view(request, pk):
 
     template = get_object_or_404(_scoped_recurring_templates(request.user), pk=pk)
     run_date = template.next_run_date
-    task, outcome = RecurringTaskService.run_template(template, run_date=run_date, force=True)
+    task, outcome = RecurringTaskService.run_template(template, run_date=run_date)
     if outcome == "skipped":
         messages.warning(request, "This recurring task already has an open run on the board. Finish it before running it again.")
         return redirect("recurring-detail", pk=template.pk)

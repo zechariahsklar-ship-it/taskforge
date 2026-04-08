@@ -199,6 +199,7 @@
             return null;
         }
 
+        // Use lightweight POST requests so checklist toggles and reordering stay fast.
         async function postChecklistAction(formData) {
             const response = await fetch(taskDetailUrl, {
                 method: 'POST',
@@ -214,6 +215,7 @@
             return response;
         }
 
+        // Persist the current DOM order after drag-and-drop finishes.
         async function persistChecklistOrder() {
             const formData = new URLSearchParams();
             formData.set('action', 'checklist_reorder');

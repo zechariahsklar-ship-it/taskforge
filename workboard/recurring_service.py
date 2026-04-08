@@ -63,6 +63,53 @@ class RecurringTaskService:
         return rotating_ids
 
     @staticmethod
+    def _scheduled_run_date(template: RecurringTaskTemplate, run_date: date) -> date | None:
+        if template.scheduled_start_time and template.scheduled_end_time:
+            return run_date
+        return None
+
+    @staticmethod
+    def _next_new_task_order(*, team) -> int:
+        return (
+            Task.objects.filter(status=TaskStatus.NEW, team=team)
+            .aggregate(max_order=Max('board_order'))
+            .get('max_order')
+            or 0
+        ) + 1
+
+    @staticmethod
+    def _apply_template_to_task(task: Task, template: RecurringTaskTemplate, *, run_date: date, assignee: User | None, rotating_assignees: list[User], board_order: int) -> Task:
+        task.team = template.team
+        task.title = template.title
+        task.description = template.description
+        task.priority = template.priority
+        task.status = TaskStatus.NEW
+        task.due_date = run_date
+        task.scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
+        task.scheduled_start_time = template.scheduled_start_time
+        task.scheduled_end_time = template.scheduled_end_time
+        task.estimated_minutes = template.estimated_minutes
+        task.assigned_to = assignee
+        task.requested_by = template.requested_by
+        task.recurring_task = True
+        task.recurring_template = template
+        task.recurrence_pattern = template.recurrence_pattern
+        task.recurrence_interval = template.recurrence_interval
+        task.recurrence_day_of_week = template.day_of_week
+        task.recurrence_day_of_month = template.day_of_month
+        task.rotating_additional_assignee_count = template.rotating_additional_assignee_count
+        task.rotate_additional_assignee = template.rotating_additional_assignee_count > 0
+        task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
+        task.board_order = board_order
+        task.completed_at = None
+        return task
+
+    @staticmethod
+    def _sync_generated_task_memberships(task: Task, *, fixed_additional_ids: list[int], rotating_assignees: list[User]) -> None:
+        task.additional_assignees.set(fixed_additional_ids)
+        task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
+
+    @staticmethod
     def preview_next_run(template: RecurringTaskTemplate, *, run_date: date | None = None) -> RecurringRunPreview:
         run_date = run_date or template.next_run_date
         last_generated_task = RecurringTaskService._last_generated_task(template)
@@ -71,7 +118,7 @@ class RecurringTaskService:
         assigned_to = template.assign_to
         assignee_summary = ''
         exclude_task_id = last_generated_task.pk if last_generated_task else None
-        scheduled_date = run_date if template.scheduled_start_time and template.scheduled_end_time else None
+        scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
 
         if assigned_to:
             if scheduled_date and not TaskAssignmentService.user_is_available_for_window(
@@ -124,80 +171,50 @@ class RecurringTaskService:
         )
 
     @staticmethod
-    def run_template(template: RecurringTaskTemplate, *, run_date: date | None = None, force: bool = False):
+    def run_template(template: RecurringTaskTemplate, *, run_date: date | None = None):
         run_date = run_date or template.next_run_date
         last_generated_task = RecurringTaskService._last_generated_task(template)
         if last_generated_task and last_generated_task.status != TaskStatus.DONE:
             return None, 'skipped'
 
         preview = RecurringTaskService.preview_next_run(template, run_date=run_date)
-        next_order = (
-            Task.objects.filter(status=TaskStatus.NEW, team=template.team)
-            .aggregate(max_order=Max('board_order'))
-            .get('max_order')
-            or 0
-        ) + 1
+        next_order = RecurringTaskService._next_new_task_order(team=template.team)
         rotating_assignees = preview.rotating_assignees
 
         if last_generated_task:
-            task = last_generated_task
-            task.team = template.team
-            task.title = template.title
-            task.description = template.description
-            task.priority = template.priority
-            task.status = TaskStatus.NEW
-            task.due_date = run_date
-            task.scheduled_date = run_date if template.scheduled_start_time and template.scheduled_end_time else None
-            task.scheduled_start_time = template.scheduled_start_time
-            task.scheduled_end_time = template.scheduled_end_time
-            task.estimated_minutes = template.estimated_minutes
-            task.assigned_to = preview.assignee
-            task.requested_by = template.requested_by
-            task.recurring_task = True
-            task.recurring_template = template
-            task.recurrence_pattern = template.recurrence_pattern
-            task.recurrence_interval = template.recurrence_interval
-            task.recurrence_day_of_week = template.day_of_week
-            task.recurrence_day_of_month = template.day_of_month
-            task.rotating_additional_assignee_count = template.rotating_additional_assignee_count
-            task.rotate_additional_assignee = template.rotating_additional_assignee_count > 0
-            task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
-            task.board_order = next_order
-            task.completed_at = None
+            # Reopen the last completed run in place so its checklist and audit trail stay attached.
+            task = RecurringTaskService._apply_template_to_task(
+                last_generated_task,
+                template,
+                run_date=run_date,
+                assignee=preview.assignee,
+                rotating_assignees=rotating_assignees,
+                board_order=next_order,
+            )
             task.save()
-            task.additional_assignees.set(preview.fixed_additional_ids)
-            task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
+            RecurringTaskService._sync_generated_task_memberships(
+                task,
+                fixed_additional_ids=preview.fixed_additional_ids,
+                rotating_assignees=rotating_assignees,
+            )
             task.checklist_items.update(is_completed=False)
             TaskAuditService.record_recurring_reopened(task, summary=f'Prepared recurring task for {run_date.isoformat()}.')
             outcome = 'reopened'
         else:
-            task = Task.objects.create(
-                team=template.team,
-                title=template.title,
-                description=template.description,
-                priority=template.priority,
-                status=TaskStatus.NEW,
-                due_date=run_date,
-                scheduled_date=run_date if template.scheduled_start_time and template.scheduled_end_time else None,
-                scheduled_start_time=template.scheduled_start_time,
-                scheduled_end_time=template.scheduled_end_time,
-                estimated_minutes=template.estimated_minutes,
-                assigned_to=preview.assignee,
-                rotating_additional_assignee_count=template.rotating_additional_assignee_count,
-                rotating_additional_assignee=rotating_assignees[0] if rotating_assignees else None,
-                requested_by=template.requested_by,
-                recurring_task=True,
-                recurring_template=template,
-                recurrence_pattern=template.recurrence_pattern,
-                recurrence_interval=template.recurrence_interval,
-                recurrence_day_of_week=template.day_of_week,
-                recurrence_day_of_month=template.day_of_month,
-                rotate_additional_assignee=template.rotating_additional_assignee_count > 0,
+            task = RecurringTaskService._apply_template_to_task(
+                Task(),
+                template,
+                run_date=run_date,
+                assignee=preview.assignee,
+                rotating_assignees=rotating_assignees,
                 board_order=next_order,
             )
-            if preview.fixed_additional_ids:
-                task.additional_assignees.set(preview.fixed_additional_ids)
-            task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
+            task.save()
+            RecurringTaskService._sync_generated_task_memberships(
+                task,
+                fixed_additional_ids=preview.fixed_additional_ids,
+                rotating_assignees=rotating_assignees,
+            )
             TaskAuditService.record_recurring_reopened(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
             outcome = 'created'
 

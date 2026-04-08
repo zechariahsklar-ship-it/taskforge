@@ -42,6 +42,22 @@ class ParsedTaskData:
 
 class TaskParsingService:
     @staticmethod
+    def _attachment_names(attachments=None) -> list[str]:
+        return [getattr(item, "original_name", getattr(item, "name", "attachment")) for item in (attachments or [])]
+
+    @staticmethod
+    def _append_attachment_notes(parsed: ParsedTaskData, attachment_names: list[str]) -> ParsedTaskData:
+        if not attachment_names:
+            return parsed
+        parsed.assignment_rationale.append(
+            f"{len(attachment_names)} attachment(s) were preserved for the workflow. The current live parser uses the message text and attachment names; binary image analysis can be added next."
+        )
+        parsed.parser_warnings.append(
+            "Attachments were stored, but the parser currently uses message text and attachment names only."
+        )
+        return parsed
+
+    @staticmethod
     def parser_settings() -> dict:
         return {
             "use_mock_parser": os.getenv("USE_MOCK_TASK_PARSER", "True").lower() == "true",
@@ -53,7 +69,7 @@ class TaskParsingService:
     @staticmethod
     def parse_request(raw_message: str, attachments=None, fallback_supervisor=None) -> ParsedTaskData:
         settings = TaskParsingService.parser_settings()
-        attachment_names = [getattr(item, "original_name", getattr(item, "name", "attachment")) for item in (attachments or [])]
+        attachment_names = TaskParsingService._attachment_names(attachments)
         confidence_override = None
 
         if not settings["use_mock_parser"] and settings["openai_api_key"]:
@@ -73,11 +89,7 @@ class TaskParsingService:
                 parsed.parser_warnings.append("OPENAI_API_KEY is missing, so the app used the mock parser.")
             parsed.assignment_rationale.append(f"Parser mode: mock using model setting `{settings['model']}`.")
 
-        if attachment_names:
-            parsed.assignment_rationale.append(
-                f"{len(attachment_names)} attachment(s) were preserved for the workflow. The current live parser uses the message text and attachment names; binary image analysis can be added next."
-            )
-            parsed.parser_warnings.append("Attachments were stored, but the parser currently uses message text and attachment names only.")
+        parsed = TaskParsingService._append_attachment_notes(parsed, attachment_names)
         parsed = TaskParsingService._apply_priority_and_due_date_fallbacks(parsed)
         parsed = TaskParsingService._apply_due_date_rules(parsed)
         parsed.respond_to_text = TaskParsingService._normalize_notify_contact(parsed.respond_to_text)
@@ -142,6 +154,8 @@ class TaskParsingService:
 
     @staticmethod
     def _build_estimate_feedback_examples(limit: int = 5) -> str:
+        # Feed the live parser a few recent human corrections so estimate guesses
+        # stay grounded in how this team actually sizes work.
         feedback_items = list(TaskEstimateFeedback.objects.exclude(raw_message="").order_by("-created_at")[:limit])
         if not feedback_items:
             return ""
@@ -493,6 +507,8 @@ class TaskParsingService:
 
     @staticmethod
     def _apply_due_date_rules(parsed: ParsedTaskData) -> ParsedTaskData:
+        # First respect any parsed date, then fall back to the priority-based rule
+        # when the message never confirmed one.
         parsed_due_date = TaskParsingService._parse_due_date(parsed.due_date)
         if parsed_due_date:
             parsed.due_date_original = str(parsed_due_date)

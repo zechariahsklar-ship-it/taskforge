@@ -471,6 +471,27 @@ def _sync_task_recurring_template(task: Task) -> Task:
     return task
 
 
+# When an edit changes the allowed work window, the previous assignee may no
+# longer fit. Hand the task back to the scheduler instead of blocking the save.
+def _reassign_task_assignee_for_updated_schedule(*, form, request_user: User, task: Task, task_window_blocks):
+    if not form.reassign_unavailable_assignee or task.assigned_to:
+        return ""
+
+    suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
+        due_date=task.due_date,
+        estimated_minutes=task.estimated_minutes,
+        fallback_supervisor=request_user,
+        scheduled_date=task.scheduled_date,
+        scheduled_start_time=task.scheduled_start_time,
+        scheduled_end_time=task.scheduled_end_time,
+        task_window_blocks=task_window_blocks,
+        exclude_task_id=task.pk,
+        team=task.team,
+    )
+    task.assigned_to = suggested_user
+    return form.reassigned_assignee_label
+
+
 def _backfill_orphan_recurring_tasks(*, user: User | None = None) -> None:
     orphan_tasks = (
         Task.objects.filter(recurring_task=True, recurring_template__isnull=True)
@@ -1304,20 +1325,12 @@ def task_edit_view(request, pk):
             updated_task.team = form.cleaned_data["team"]
             updated_task = _ensure_task_due_date(updated_task)
             updated_task = _append_task_to_status(updated_task, previous_status=previous_status, previous_team_id=previous_team_id)
-            reassigned_from = form.reassigned_assignee_label if form.reassign_unavailable_assignee else ""
-            if form.reassign_unavailable_assignee and not updated_task.assigned_to:
-                suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
-                    due_date=updated_task.due_date,
-                    estimated_minutes=updated_task.estimated_minutes,
-                    fallback_supervisor=request.user,
-                    scheduled_date=updated_task.scheduled_date,
-                    scheduled_start_time=updated_task.scheduled_start_time,
-                    scheduled_end_time=updated_task.scheduled_end_time,
-                    task_window_blocks=task_window_blocks,
-                    exclude_task_id=updated_task.pk,
-                    team=updated_task.team,
-                )
-                updated_task.assigned_to = suggested_user
+            reassigned_from = _reassign_task_assignee_for_updated_schedule(
+                form=form,
+                request_user=request.user,
+                task=updated_task,
+                task_window_blocks=task_window_blocks,
+            )
             if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                 updated_task.mark_complete()
             elif updated_task.status != TaskStatus.DONE:

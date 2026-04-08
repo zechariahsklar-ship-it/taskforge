@@ -1,4 +1,4 @@
-from .services import TaskParsingService
+from .services import TaskParsingService  # Stable patch target for tests and local integrations.
 
 from .help_views import admin_guide_view
 from .people_views import (

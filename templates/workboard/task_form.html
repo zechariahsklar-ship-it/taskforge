@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% load static %}
 
 {% block title %}{{ page_title }} | TaskForge{% endblock %}
 
@@ -15,7 +14,7 @@
         {% endif %}
 
         {% for hidden in form.hidden_fields %}
-            {% if hidden.name != "scheduled_week_of" and hidden.name != "scheduled_date" and hidden.name != "scheduled_start_time" and hidden.name != "scheduled_end_time" and hidden.name != "scheduled_window_segments" and hidden.name != "scheduled_window_start" and hidden.name != "scheduled_window_end" and hidden.name != "scheduled_window_hours" and hidden.name != "task_window_day_0_segments" and hidden.name != "task_window_day_1_segments" and hidden.name != "task_window_day_2_segments" and hidden.name != "task_window_day_3_segments" and hidden.name != "task_window_day_4_segments" %}
+            {% if hidden.name not in form.non_rendered_hidden_field_names %}
                 {{ hidden }}
             {% endif %}
         {% endfor %}
@@ -53,7 +52,7 @@
                         </p>
                     </div>
                 </section>
-            {% elif field.name != "scheduled_week_of" and field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "task_window_day_0_segments" and field.name != "task_window_day_1_segments" and field.name != "task_window_day_2_segments" and field.name != "task_window_day_3_segments" and field.name != "task_window_day_4_segments" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+            {% elif field.name not in form.non_rendered_field_names %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -63,7 +62,7 @@
             {% endif %}
         {% endfor %}
 
-        <section class="review-field recurring-task-panel" data-task-window-picker>
+        <section class="review-field recurring-task-panel">
             <div class="stack">
                 <div>
                     <h2>Scheduled work window</h2>

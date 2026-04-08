@@ -64,14 +64,47 @@ TASK_DUE_SCOPE_CHOICES = [
 ]
 
 WEEKDAY_SELECT_CHOICES = [("", "Select a weekday"), *Weekday.choices]
+TASK_WINDOW_SEGMENT_FIELD_NAMES = tuple(prefix + "_segments" for prefix, _, _ in TASK_WINDOW_DAY_CONFIG)
+TASK_WINDOW_HIDDEN_FIELD_NAMES = (
+    "scheduled_week_of",
+    "scheduled_date",
+    "scheduled_start_time",
+    "scheduled_end_time",
+    "scheduled_window_segments",
+    "scheduled_window_start",
+    "scheduled_window_end",
+    "scheduled_window_hours",
+    *TASK_WINDOW_SEGMENT_FIELD_NAMES,
+)
+TASK_FORM_NON_RENDERED_FIELD_NAMES = (
+    *TASK_WINDOW_HIDDEN_FIELD_NAMES,
+    "additional_assignees",
+    "rotating_additional_assignee_count",
+    "recurring_task",
+    "recurrence_pattern",
+    "recurrence_interval",
+    "recurrence_day_of_week",
+    "recurrence_day_of_month",
+)
+TASK_INTAKE_REVIEW_NON_RENDERED_FIELD_NAMES = (
+    "raw_due_text",
+    "due_date",
+    *TASK_FORM_NON_RENDERED_FIELD_NAMES,
+)
+RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES = (
+    "scheduled_start_time",
+    "scheduled_end_time",
+    "additional_assignees",
+    "rotating_additional_assignee_count",
+    "recurrence_pattern",
+    "recurrence_interval",
+    "day_of_week",
+    "day_of_month",
+)
 
 
 def _format_time_label(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
-
-
-def _format_short_date_label(value: date) -> str:
-    return f"{value.strftime('%a')} {value.strftime('%b')} {value.day}"
 
 
 SCHEDULE_DAY_START_MINUTES = 7 * 60
@@ -165,7 +198,9 @@ class StyledFormMixin:
 class HalfHourTimeField(forms.TimeField):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("required", False)
-        kwargs.setdefault("input_formats", ["%H:%M"])
+        # Hidden edit fields render existing times with seconds, while the picker
+        # writes back plain HH:MM values after the user changes the schedule.
+        kwargs.setdefault("input_formats", ["%H:%M", "%H:%M:%S"])
         kwargs.setdefault("widget", HalfHourSelect())
         super().__init__(*args, **kwargs)
 
@@ -179,6 +214,7 @@ def _window_minutes(start_value: time, end_value: time) -> int:
     start_dt = datetime.combine(datetime.today(), start_value)
     end_dt = datetime.combine(datetime.today(), end_value)
     return int((end_dt - start_dt).total_seconds() // 60)
+
 
 def _schedule_block_within_workday(start_value: time, end_value: time) -> bool:
     return start_value >= SCHEDULE_DAY_START_TIME and end_value <= SCHEDULE_DAY_END_TIME
@@ -624,6 +660,8 @@ class CompletedTaskFilterForm(StyledFormMixin, forms.Form):
 
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
+    # Keep a hidden week anchor so the weekday-only scheduler can still resolve
+    # selected Monday-Friday windows into concrete dates for availability checks.
     scheduled_week_of = forms.DateField(required=False, widget=forms.HiddenInput())
     scheduled_date = forms.DateField(required=False, widget=forms.HiddenInput())
     scheduled_start_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
@@ -709,8 +747,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         )
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self._task_window_week_start = self._resolve_task_window_week_start()
-        self.initial["scheduled_week_of"] = self._task_window_week_start
+        self._set_task_window_week_start(self._resolve_task_window_week_start())
         self._initialize_task_window_fields()
         self.fields["recurring_task"].label = "Repeats on a schedule"
         self.fields["recurring_task"].help_text = "Turn this on only if this task should repeat automatically."
@@ -738,8 +775,20 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     def calendar_slots(self):
         return WEEKLY_CALENDAR_SLOTS
 
+    @property
+    def non_rendered_hidden_field_names(self):
+        return TASK_WINDOW_HIDDEN_FIELD_NAMES
+
+    @property
+    def non_rendered_field_names(self):
+        return TASK_FORM_NON_RENDERED_FIELD_NAMES
+
+    @property
+    def intake_review_non_rendered_field_names(self):
+        return TASK_INTAKE_REVIEW_NON_RENDERED_FIELD_NAMES
+
     def scheduled_task_window_map(self):
-        return self.cleaned_data.get("task_schedule_blocks_by_date", {}) if hasattr(self, "cleaned_data") else {}
+        return getattr(self, "cleaned_data", {}).get("task_schedule_blocks_by_date", {})
 
     def _resolve_selected_team(self):
         if self.actor and not self.actor.is_admin:
@@ -777,6 +826,37 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 return _start_of_week(candidate)
         return _start_of_week(timezone.localdate())
 
+    def _set_task_window_week_start(self, reference_date):
+        self._task_window_week_start = _start_of_week(reference_date)
+        self.initial["scheduled_week_of"] = self._task_window_week_start
+
+    def _task_window_prefix_for_date(self, scheduled_date):
+        return next(
+            (configured_prefix for configured_prefix, _, weekday in TASK_WINDOW_DAY_CONFIG if int(weekday) == scheduled_date.weekday()),
+            None,
+        )
+
+    def _set_initial_task_window_summary(self, *, scheduled_date, blocks, total_minutes):
+        summary = self._task_window_summary_values(
+            scheduled_date=scheduled_date,
+            blocks=blocks,
+            total_minutes=total_minutes,
+        )
+        self._set_task_window_week_start(summary["scheduled_week_of"])
+        self.initial.update({key: value for key, value in summary.items() if key != "scheduled_week_of"})
+
+    def _task_window_summary_values(self, *, scheduled_date, blocks, total_minutes):
+        return {
+            "scheduled_week_of": _start_of_week(scheduled_date),
+            "scheduled_date": scheduled_date,
+            "scheduled_start_time": blocks[0][0],
+            "scheduled_end_time": blocks[0][1],
+            "scheduled_window_segments": _serialize_schedule_segments(blocks),
+            "scheduled_window_start": blocks[0][0],
+            "scheduled_window_end": blocks[-1][1],
+            "scheduled_window_hours": Decimal(total_minutes) / Decimal("60"),
+        }
+
     def _initialize_task_window_fields(self):
         if self.is_bound:
             return
@@ -801,15 +881,11 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 _window_minutes(block.start_time, block.end_time)
                 for block in scheduled_blocks
             )
-            self._task_window_week_start = _start_of_week(earliest_date)
-            self.initial["scheduled_week_of"] = self._task_window_week_start
-            self.initial["scheduled_date"] = earliest_date
-            self.initial["scheduled_start_time"] = earliest_blocks[0][0]
-            self.initial["scheduled_end_time"] = earliest_blocks[0][1]
-            self.initial["scheduled_window_segments"] = _serialize_schedule_segments(earliest_blocks)
-            self.initial["scheduled_window_start"] = earliest_blocks[0][0]
-            self.initial["scheduled_window_end"] = earliest_blocks[-1][1]
-            self.initial["scheduled_window_hours"] = Decimal(total_minutes) / Decimal("60")
+            self._set_initial_task_window_summary(
+                scheduled_date=earliest_date,
+                blocks=earliest_blocks,
+                total_minutes=total_minutes,
+            )
             return
 
         scheduled_date = self.initial.get("scheduled_date") or getattr(self.instance, "scheduled_date", None)
@@ -820,22 +896,17 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         if not (scheduled_date and start_value and end_value):
             return
 
-        self._task_window_week_start = _start_of_week(scheduled_date)
-        self.initial["scheduled_week_of"] = self._task_window_week_start
-
-        prefix = next(
-            (configured_prefix for configured_prefix, _, weekday in TASK_WINDOW_DAY_CONFIG if int(weekday) == scheduled_date.weekday()),
-            None,
-        )
+        prefix = self._task_window_prefix_for_date(scheduled_date)
         if not prefix:
             return
 
         blocks = [(start_value, end_value)]
         self.initial[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
-        self.initial["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
-        self.initial["scheduled_window_start"] = start_value
-        self.initial["scheduled_window_end"] = end_value
-        self.initial["scheduled_window_hours"] = Decimal(_window_minutes(start_value, end_value)) / Decimal("60")
+        self._set_initial_task_window_summary(
+            scheduled_date=scheduled_date,
+            blocks=blocks,
+            total_minutes=_window_minutes(start_value, end_value),
+        )
 
     def _parse_task_window_segments(self, raw_value):
         if not raw_value:
@@ -896,6 +967,8 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 return None
             if blocks:
                 work_date = week_start + timedelta(days=int(weekday))
+                # When a task has no due date yet, treat the chosen weekday as the
+                # next upcoming work window so capacity checks stay future-facing.
                 if not cleaned_data.get("due_date") and work_date < today:
                     work_date += timedelta(days=7)
                 selected_days.append((work_date, blocks, int(weekday)))
@@ -980,14 +1053,13 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         cleaned_data["task_schedule_blocks"] = task_schedule_blocks
         cleaned_data["task_schedule_blocks_by_date"] = task_schedule_blocks_by_date
         cleaned_data["task_schedule_weekdays"] = task_schedule_weekdays
-        cleaned_data["scheduled_date"] = earliest_date
-        cleaned_data["scheduled_start_time"] = earliest_blocks[0][0]
-        cleaned_data["scheduled_end_time"] = earliest_blocks[0][1]
-        cleaned_data["scheduled_window_segments"] = _serialize_schedule_segments(earliest_blocks)
-        cleaned_data["scheduled_window_start"] = earliest_blocks[0][0]
-        cleaned_data["scheduled_window_end"] = earliest_blocks[-1][1]
-        cleaned_data["scheduled_window_hours"] = Decimal(total_minutes) / Decimal("60")
-        cleaned_data["scheduled_week_of"] = _start_of_week(earliest_date)
+        cleaned_data.update(
+            self._task_window_summary_values(
+                scheduled_date=earliest_date,
+                blocks=earliest_blocks,
+                total_minutes=total_minutes,
+            )
+        )
 
         if cleaned_data.get("due_date"):
             if latest_date and latest_date > cleaned_data["due_date"]:
@@ -1030,6 +1102,8 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 and self.instance.assigned_to_id == assigned_to.pk
             )
             if preserved_existing_assignee:
+                # On edit, release the old assignee back to the scheduler instead of
+                # blocking the save when the new time window no longer fits.
                 cleaned_data["assigned_to"] = None
                 self.reassign_unavailable_assignee = True
                 self.reassigned_assignee_label = assigned_to.display_label
@@ -1325,6 +1399,10 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["next_run_date"].help_text = "The next date the app will create this task."
         self.fields["active"].label = "Recurring task is active"
         self.fields["active"].help_text = "Turn this off to pause future task creation."
+
+    @property
+    def non_rendered_field_names(self):
+        return RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES
 
     def _resolve_selected_team(self):
         if self.actor and not self.actor.is_admin:

@@ -9,11 +9,19 @@ from .models import RecurringTaskTemplate, StudentWorkerProfile, Task, TaskAudit
 from .task_views import _scope_queryset_to_user_team, supervisor_required
 
 
+def _current_week_bounds(today):
+    week_start = today - timedelta(days=today.weekday())
+    return week_start, week_start + timedelta(days=6)
+
+
+def _hours_from_minutes(minutes):
+    return round(minutes / 60, 1)
+
+
 @supervisor_required
 def reports_view(request):
     today = timezone.localdate()
-    week_start = today - timedelta(days=today.weekday())
-    week_end = week_start + timedelta(days=6)
+    week_start, week_end = _current_week_bounds(today)
 
     visible_tasks = _scope_queryset_to_user_team(Task.objects.all(), request.user)
     open_tasks = visible_tasks.exclude(status=TaskStatus.DONE)
@@ -59,8 +67,8 @@ def reports_view(request):
                 "profile": profile,
                 "open_tasks": open_work.count(),
                 "open_estimated_minutes": open_estimated_minutes,
-                "open_estimated_hours": round(open_estimated_minutes / 60, 1),
-                "scheduled_hours": round(scheduled_minutes / 60, 1),
+                "open_estimated_hours": _hours_from_minutes(open_estimated_minutes),
+                "scheduled_hours": _hours_from_minutes(scheduled_minutes),
                 "completed_this_week": completed_count,
                 "load_percent": round((open_estimated_minutes / scheduled_minutes) * 100) if scheduled_minutes else None,
             }
@@ -72,7 +80,7 @@ def reports_view(request):
         {"label": "Waiting / blocked", "value": waiting_open},
         {"label": "Active recurring templates", "value": active_recurring_templates},
         {"label": "Recurring runs this week", "value": recurring_runs_this_week},
-        {"label": "Scheduled hours this week", "value": round(total_scheduled_minutes / 60, 1)},
+        {"label": "Scheduled hours this week", "value": _hours_from_minutes(total_scheduled_minutes)},
     ]
 
     return render(
@@ -85,6 +93,6 @@ def reports_view(request):
             "summary_cards": summary_cards,
             "workload_rows": workload_rows,
             "recurring_due_soon": recurring_due_soon,
-            "total_assigned_hours": round(total_assigned_minutes / 60, 1),
+            "total_assigned_hours": _hours_from_minutes(total_assigned_minutes),
         },
     )

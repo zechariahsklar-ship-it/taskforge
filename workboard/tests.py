@@ -2316,6 +2316,64 @@ class TaskEstimateFeedbackTests(TestCase):
         self.assertEqual(recurring_response.status_code, 200)
         self.assertContains(recurring_response, self.task.title)
 
+    def test_task_edit_can_enable_recurring_without_touching_half_hour_schedule_fields(self):
+        self.task.due_date = date(2026, 4, 10)
+        self.task.scheduled_date = date(2026, 4, 10)
+        self.task.scheduled_start_time = time(8, 30)
+        self.task.scheduled_end_time = time(12, 0)
+        self.task.save(update_fields=["due_date", "scheduled_date", "scheduled_start_time", "scheduled_end_time", "updated_at"])
+
+        response = self.client.post(
+            reverse("task-edit", args=[self.task.pk]),
+            {
+                "title": self.task.title,
+                "raw_message": self.task.raw_message,
+                "description": self.task.description,
+                "priority": self.task.priority,
+                "status": self.task.status,
+                "due_date": "2026-04-10",
+                "scheduled_week_of": "2026-04-06",
+                "scheduled_date": "2026-04-10",
+                "scheduled_start_time": "08:30:00",
+                "scheduled_end_time": "12:00:00",
+                "scheduled_window_segments": '[["08:30", "12:00"]]',
+                "scheduled_window_start": "08:30",
+                "scheduled_window_end": "12:00",
+                "scheduled_window_hours": "3.5",
+                "task_window_day_0_segments": "",
+                "task_window_day_1_segments": "",
+                "task_window_day_2_segments": "",
+                "task_window_day_3_segments": "",
+                "task_window_day_4_segments": '[["08:30", "12:00"]]',
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "60",
+                "assigned_to": str(self.student.pk),
+                "additional_assignees": [],
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.FRIDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertTrue(self.task.recurring_task)
+        self.assertEqual(self.task.recurrence_pattern, "weekly")
+        self.assertEqual(self.task.recurrence_day_of_week, Weekday.FRIDAY)
+        self.assertEqual(self.task.scheduled_start_time, time(8, 30))
+        self.assertEqual(self.task.scheduled_end_time, time(12, 0))
+        self.assertIsNotNone(self.task.recurring_template)
+        self.assertEqual(self.task.recurring_template.day_of_week, Weekday.FRIDAY)
+        recurring_response = self.client.get(reverse("recurring-list"))
+        self.assertEqual(recurring_response.status_code, 200)
+        self.assertContains(recurring_response, self.task.title)
+
 
 class ScheduleAdjustmentRequestTests(TestCase):
     def setUp(self):

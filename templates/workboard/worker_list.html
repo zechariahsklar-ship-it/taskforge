@@ -69,9 +69,11 @@
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
-                        <a href="{% url 'worker-edit' item.profile.pk %}">Edit worker</a><br>
-                        <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a><br>
-                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
+                        <div class="table-action-links">
+                            <a href="{% url 'worker-edit' item.profile.pk %}">Edit worker</a>
+                            <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a>
+                            <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
+                        </div>
                     </td>
                 </tr>
             {% empty %}
@@ -104,9 +106,11 @@
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
-                        <a href="{% url 'worker-edit' item.profile.pk %}">Edit student supervisor</a><br>
-                        <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a><br>
-                        <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
+                        <div class="table-action-links">
+                            <a href="{% url 'worker-edit' item.profile.pk %}">Edit student supervisor</a>
+                            <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a>
+                            <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
+                        </div>
                     </td>
                 </tr>
             {% empty %}
@@ -139,8 +143,10 @@
                     <td>{{ supervisor.active_tasks }}</td>
                     <td>{{ supervisor.estimated_minutes|default:0 }}</td>
                     <td>
-                        <a href="{% url 'supervisor-edit' supervisor.pk %}">Edit supervisor</a><br>
-                        <a href="{% url 'worker-password-reset' supervisor.pk %}">Reset password</a>
+                        <div class="table-action-links">
+                            <a href="{% url 'supervisor-edit' supervisor.pk %}">Edit supervisor</a>
+                            <a href="{% url 'worker-password-reset' supervisor.pk %}">Reset password</a>
+                        </div>
                     </td>
                 </tr>
             {% empty %}

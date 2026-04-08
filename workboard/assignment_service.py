@@ -59,6 +59,20 @@ class TaskAssignmentService:
         return {}
 
     @staticmethod
+    def _resolve_task_window_blocks(
+        *,
+        task_window_blocks=None,
+        scheduled_date=None,
+        scheduled_start_time=None,
+        scheduled_end_time=None,
+    ):
+        return task_window_blocks or TaskAssignmentService._single_window_blocks(
+            scheduled_date=scheduled_date,
+            scheduled_start_time=scheduled_start_time,
+            scheduled_end_time=scheduled_end_time,
+        )
+
+    @staticmethod
     def _candidate_metrics(profile, *, due_date, task_window_blocks=None, exclude_task_id=None):
         active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
         if task_window_blocks:
@@ -111,7 +125,8 @@ class TaskAssignmentService:
         exclude_task_id=None,
         team=None,
     ):
-        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+        task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
+            task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
@@ -176,7 +191,8 @@ class TaskAssignmentService:
         exclude_task_id=None,
         team=None,
     ):
-        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+        task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
+            task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
@@ -214,7 +230,8 @@ class TaskAssignmentService:
         if not profile.active_status:
             return False
 
-        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+        task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
+            task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
@@ -252,7 +269,8 @@ class TaskAssignmentService:
         if count <= 0:
             return []
 
-        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+        task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
+            task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
@@ -456,25 +474,32 @@ class TaskAssignmentService:
 
     @staticmethod
     def _minutes_available_in_task_windows(profile, task_window_blocks):
+        # Only count minutes that overlap the task window and still remain in the future.
         total_minutes = 0
         normalized_blocks = TaskAssignmentService._normalize_task_window_blocks(task_window_blocks)
         for work_date, task_blocks in normalized_blocks.items():
             worker_blocks = TaskAssignmentService._schedule_blocks_for_date(profile, work_date)
             for task_start, task_end in task_blocks:
                 for worker_start, worker_end in worker_blocks:
-                    overlap_start = max(task_start, worker_start)
-                    overlap_end = min(task_end, worker_end)
-                    if overlap_end <= overlap_start:
+                    overlap_minutes = TaskAssignmentService._time_overlap_minutes(
+                        task_start,
+                        task_end,
+                        worker_start,
+                        worker_end,
+                    )
+                    if overlap_minutes <= 0:
                         continue
                     total_minutes += TaskAssignmentService._minutes_remaining_in_interval(
                         work_date,
-                        overlap_start,
-                        overlap_end,
+                        max(task_start, worker_start),
+                        min(task_end, worker_end),
                     )
         return total_minutes
 
     @staticmethod
     def _reserved_window_minutes_for_user(user, task_window_blocks, *, exclude_task_id=None):
+        # Scheduled work reserves only the portion of existing tasks that collides
+        # with the candidate window, so workers are not double-booked.
         normalized_blocks = TaskAssignmentService._normalize_task_window_blocks(task_window_blocks)
         if not normalized_blocks:
             return 0
@@ -553,7 +578,8 @@ class TaskAssignmentService:
         exclude_task_id=None,
         team=None,
     ):
-        task_window_blocks = task_window_blocks or TaskAssignmentService._single_window_blocks(
+        task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
+            task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
             scheduled_start_time=scheduled_start_time,
             scheduled_end_time=scheduled_end_time,
