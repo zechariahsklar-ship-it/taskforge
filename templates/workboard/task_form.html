@@ -15,7 +15,7 @@
         {% endif %}
 
         {% for hidden in form.hidden_fields %}
-            {% if hidden.name != "scheduled_date" and hidden.name != "scheduled_start_time" and hidden.name != "scheduled_end_time" and hidden.name != "scheduled_window_segments" and hidden.name != "scheduled_window_start" and hidden.name != "scheduled_window_end" and hidden.name != "scheduled_window_hours" and hidden.name != "task_window_day_0_segments" and hidden.name != "task_window_day_1_segments" and hidden.name != "task_window_day_2_segments" and hidden.name != "task_window_day_3_segments" and hidden.name != "task_window_day_4_segments" and hidden.name != "task_window_day_5_segments" and hidden.name != "task_window_day_6_segments" %}
+            {% if hidden.name != "scheduled_week_of" and hidden.name != "scheduled_date" and hidden.name != "scheduled_start_time" and hidden.name != "scheduled_end_time" and hidden.name != "scheduled_window_segments" and hidden.name != "scheduled_window_start" and hidden.name != "scheduled_window_end" and hidden.name != "scheduled_window_hours" and hidden.name != "task_window_day_0_segments" and hidden.name != "task_window_day_1_segments" and hidden.name != "task_window_day_2_segments" and hidden.name != "task_window_day_3_segments" and hidden.name != "task_window_day_4_segments" %}
                 {{ hidden }}
             {% endif %}
         {% endfor %}
@@ -53,7 +53,7 @@
                         </p>
                     </div>
                 </section>
-            {% elif field.name != "scheduled_week_of" and field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "task_window_day_0_segments" and field.name != "task_window_day_1_segments" and field.name != "task_window_day_2_segments" and field.name != "task_window_day_3_segments" and field.name != "task_window_day_4_segments" and field.name != "task_window_day_5_segments" and field.name != "task_window_day_6_segments" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
+            {% elif field.name != "scheduled_week_of" and field.name != "scheduled_date" and field.name != "scheduled_start_time" and field.name != "scheduled_end_time" and field.name != "scheduled_window_segments" and field.name != "scheduled_window_start" and field.name != "scheduled_window_end" and field.name != "scheduled_window_hours" and field.name != "task_window_day_0_segments" and field.name != "task_window_day_1_segments" and field.name != "task_window_day_2_segments" and field.name != "task_window_day_3_segments" and field.name != "task_window_day_4_segments" and field.name != "additional_assignees" and field.name != "rotating_additional_assignee_count" and field.name != "recurring_task" and field.name != "recurrence_pattern" and field.name != "recurrence_interval" and field.name != "recurrence_day_of_week" and field.name != "recurrence_day_of_month" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}
@@ -63,18 +63,12 @@
             {% endif %}
         {% endfor %}
 
-        <section class="review-field recurring-task-panel">
+        <section class="review-field recurring-task-panel" data-task-window-picker>
             <div class="stack">
                 <div>
                     <h2>Scheduled work window</h2>
-                    <p class="meta">Pick the week, then click or drag on the calendar to choose every day and time this task can be worked. TaskForge will only assign teammates who have enough open scheduled time inside those windows.</p>
+                    <p class="meta">Choose any Monday through Friday times this task can be worked. TaskForge uses these windows to find teammates who have availability and to place the task inside those hours.</p>
                 </div>
-                <p>
-                    <label for="{{ form.scheduled_week_of.id_for_label }}">{{ form.scheduled_week_of.label }}</label>
-                    {{ form.scheduled_week_of }}
-                    {% if form.scheduled_week_of.help_text %}<span class="meta">{{ form.scheduled_week_of.help_text }}</span>{% endif %}
-                    {% if form.scheduled_week_of.errors %}<div class="meta">{{ form.scheduled_week_of.errors }}</div>{% endif %}
-                </p>
                 {% if form.scheduled_window_segments.errors %}
                     <div class="meta">{{ form.scheduled_window_segments.errors }}</div>
                 {% endif %}
@@ -135,8 +129,21 @@
         const recurringOptions = document.querySelector('[data-recurring-options]');
         const weeklyField = document.querySelector('[data-recurring-weekly]');
         const monthlyField = document.querySelector('[data-recurring-monthly]');
+        const recurringWeekday = document.getElementById('{{ form.recurrence_day_of_week.id_for_label }}');
+        const taskWindowPicker = document.getElementById('task-window-picker');
         if (!recurringCheckbox || !recurrencePattern || !recurringFields || !recurringOptions || !weeklyField || !monthlyField) {
             return;
+        }
+
+        function syncRecurringWeekday() {
+            if (!recurringWeekday || recurrencePattern.value !== 'weekly' || !taskWindowPicker) {
+                return;
+            }
+            const scheduledCards = Array.from(taskWindowPicker.querySelectorAll('[data-schedule-summary-card].is-scheduled'));
+            if (scheduledCards.length !== 1) {
+                return;
+            }
+            recurringWeekday.value = scheduledCards[0].dataset.weekday || '';
         }
 
         function updateRecurringVisibility() {
@@ -146,12 +153,15 @@
             recurringOptions.hidden = !enabled;
             weeklyField.hidden = !enabled || pattern !== 'weekly';
             monthlyField.hidden = !enabled || pattern !== 'monthly';
+            syncRecurringWeekday();
         }
 
         recurringCheckbox.addEventListener('change', updateRecurringVisibility);
         recurrencePattern.addEventListener('change', updateRecurringVisibility);
+        if (taskWindowPicker) {
+            taskWindowPicker.addEventListener('taskforge:schedule-change', syncRecurringWeekday);
+        }
         updateRecurringVisibility();
     }());
 </script>
-<script src="{% static 'task_window_picker.js' %}?v=20260326a" defer></script>
 {% endblock %}

@@ -889,6 +889,14 @@ class TaskCreateDueDateFallbackTests(TestCase):
 
 class TaskScheduledWindowTests(TestCase):
     def setUp(self):
+        fixed_now = timezone.make_aware(datetime(2026, 3, 16, 8, 0))
+        self.localdate_patcher = patch("django.utils.timezone.localdate", return_value=date(2026, 3, 16))
+        self.localtime_patcher = patch("django.utils.timezone.localtime", return_value=fixed_now)
+        self.localdate_patcher.start()
+        self.localtime_patcher.start()
+        self.addCleanup(self.localtime_patcher.stop)
+        self.addCleanup(self.localdate_patcher.stop)
+
         self.supervisor = User.objects.create_user(
             username="scheduled-window-supervisor",
             password="password123",
@@ -955,16 +963,18 @@ class TaskScheduledWindowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Scheduled work window")
-        self.assertContains(response, 'id="id_scheduled_week_of"')
+        self.assertNotContains(response, "Show week of")
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
-        self.assertContains(response, 'data-schedule-summary-card="task_window_day_6"')
+        self.assertContains(response, 'data-schedule-summary-card="task_window_day_4"')
+        self.assertNotContains(response, 'data-schedule-summary-card="task_window_day_5"')
+        self.assertNotContains(response, 'data-schedule-summary-card="task_window_day_6"')
         self.assertContains(response, 'data-slot-value="07:00"')
         self.assertContains(response, 'data-slot-end="18:00"')
         self.assertNotContains(response, 'data-slot-value="06:30"')
         self.assertNotContains(response, 'data-slot-end="18:30"')
         self.assertContains(response, 'Select a weekday')
         self.assertContains(response, 'Monday')
-        self.assertContains(response, 'Sunday')
+        self.assertContains(response, 'Friday')
         self.assertNotContains(response, 'type="number" name="recurrence_day_of_week"', html=False)
         self.assertNotContains(response, '<label for="id_scheduled_start_time">Start time</label>', html=True)
         self.assertNotContains(response, '<label for="id_scheduled_end_time">End time</label>', html=True)
@@ -1167,6 +1177,39 @@ class TaskScheduledWindowTests(TestCase):
         self.assertContains(response, "does not have enough scheduled availability during those task windows")
         self.assertFalse(Task.objects.filter(title="Needs more window time").exists())
 
+    def test_task_create_syncs_weekly_recurring_day_from_task_window(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Friday closing checklist",
+                "description": "Wrap up the lab each Friday.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_4_segments": '[["08:00", "17:00"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "60",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Friday closing checklist")
+        self.assertTrue(task.recurring_task)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 20))
+        self.assertEqual(task.recurrence_day_of_week, Weekday.FRIDAY)
+        self.assertIsNotNone(task.recurring_template)
+        self.assertEqual(task.recurring_template.day_of_week, Weekday.FRIDAY)
+        self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 27))
+
     def test_split_shift_worker_is_available_inside_second_block_but_not_gap(self):
         self._replace_blocks(
             self.morning_worker,
@@ -1267,8 +1310,10 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Add rotating team members")
         self.assertContains(response, "Scheduled work window")
-        self.assertContains(response, "Show week of")
+        self.assertNotContains(response, "Show week of")
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
+        self.assertContains(response, 'data-schedule-summary-card="task_window_day_4"')
+        self.assertNotContains(response, 'data-schedule-summary-card="task_window_day_5"')
         self.assertNotContains(response, "Scheduled date")
         self.assertNotContains(response, "Start time")
         self.assertNotContains(response, "End time")

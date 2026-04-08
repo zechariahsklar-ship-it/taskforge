@@ -39,8 +39,11 @@ DAY_FIELD_CONFIG = [
 ]
 
 TASK_WINDOW_DAY_CONFIG = [
-    (f"task_window_day_{offset}", offset)
-    for offset in range(7)
+    ("task_window_day_0", "Monday", Weekday.MONDAY),
+    ("task_window_day_1", "Tuesday", Weekday.TUESDAY),
+    ("task_window_day_2", "Wednesday", Weekday.WEDNESDAY),
+    ("task_window_day_3", "Thursday", Weekday.THURSDAY),
+    ("task_window_day_4", "Friday", Weekday.FRIDAY),
 ]
 
 TASK_SAVED_VIEW_CHOICES = [
@@ -621,7 +624,7 @@ class CompletedTaskFilterForm(StyledFormMixin, forms.Form):
 
 
 class TaskForm(StyledFormMixin, forms.ModelForm):
-    scheduled_week_of = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
+    scheduled_week_of = forms.DateField(required=False, widget=forms.HiddenInput())
     scheduled_date = forms.DateField(required=False, widget=forms.HiddenInput())
     scheduled_start_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
     scheduled_end_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
@@ -634,8 +637,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     task_window_day_2_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     task_window_day_3_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     task_window_day_4_segments = forms.CharField(required=False, widget=forms.HiddenInput())
-    task_window_day_5_segments = forms.CharField(required=False, widget=forms.HiddenInput())
-    task_window_day_6_segments = forms.CharField(required=False, widget=forms.HiddenInput())
     recurrence_day_of_week = forms.TypedChoiceField(
         required=False,
         choices=WEEKDAY_SELECT_CHOICES,
@@ -706,8 +707,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         )
         self.fields["respond_to_text"].label = "Notify when done"
         self.fields["respond_to_text"].help_text = "Person or office to notify after the task is complete"
-        self.fields["scheduled_week_of"].label = "Show week of"
-        self.fields["scheduled_week_of"].help_text = "Pick any days and times this task can be worked. TaskForge will only assign teammates who have enough open time inside these windows."
         self._task_window_week_start = self._resolve_task_window_week_start()
         self.initial["scheduled_week_of"] = self._task_window_week_start
         self._initialize_task_window_fields()
@@ -723,19 +722,16 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["recurrence_day_of_month"].help_text = "Only needed for monthly repeating tasks."
 
     def day_rows(self):
-        rows = []
-        for prefix, day_offset in TASK_WINDOW_DAY_CONFIG:
-            target_date = self._task_window_week_start + timedelta(days=day_offset)
-            rows.append(
-                {
-                    "prefix": prefix,
-                    "label": _format_short_date_label(target_date),
-                    "segments": self[f"{prefix}_segments"],
-                    "weekday": target_date.weekday(),
-                    "override_entries": [],
-                }
-            )
-        return rows
+        return [
+            {
+                "prefix": prefix,
+                "label": label,
+                "segments": self[f"{prefix}_segments"],
+                "weekday": int(weekday),
+                "override_entries": [],
+            }
+            for prefix, label, weekday in TASK_WINDOW_DAY_CONFIG
+        ]
 
     def calendar_slots(self):
         return WEEKLY_CALENDAR_SLOTS
@@ -785,25 +781,26 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
         scheduled_blocks = list(self.instance.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk")) if getattr(self.instance, "pk", None) else []
         if scheduled_blocks:
-            week_start = _start_of_week(scheduled_blocks[0].work_date)
-            if week_start != self._task_window_week_start:
-                self._task_window_week_start = week_start
-                self.initial["scheduled_week_of"] = week_start
             grouped_blocks = {}
             for block in scheduled_blocks:
-                grouped_blocks.setdefault(block.work_date, []).append((block.start_time, block.end_time))
-            for prefix, day_offset in TASK_WINDOW_DAY_CONFIG:
-                current_date = self._task_window_week_start + timedelta(days=day_offset)
-                blocks = grouped_blocks.get(current_date, [])
+                weekday = block.work_date.weekday()
+                grouped_blocks.setdefault(weekday, []).append((block.start_time, block.end_time))
+            for prefix, _, weekday in TASK_WINDOW_DAY_CONFIG:
+                blocks = grouped_blocks.get(int(weekday), [])
                 if blocks:
                     self.initial[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
-            earliest_date = min(grouped_blocks)
-            earliest_blocks = grouped_blocks[earliest_date]
+            earliest_date = min(block.work_date for block in scheduled_blocks)
+            earliest_blocks = [
+                (block.start_time, block.end_time)
+                for block in scheduled_blocks
+                if block.work_date == earliest_date
+            ]
             total_minutes = sum(
-                _window_minutes(start_value, end_value)
-                for blocks in grouped_blocks.values()
-                for start_value, end_value in blocks
+                _window_minutes(block.start_time, block.end_time)
+                for block in scheduled_blocks
             )
+            self._task_window_week_start = _start_of_week(earliest_date)
+            self.initial["scheduled_week_of"] = self._task_window_week_start
             self.initial["scheduled_date"] = earliest_date
             self.initial["scheduled_start_time"] = earliest_blocks[0][0]
             self.initial["scheduled_end_time"] = earliest_blocks[0][1]
@@ -821,17 +818,17 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         if not (scheduled_date and start_value and end_value):
             return
 
-        week_start = _start_of_week(scheduled_date)
-        if week_start != self._task_window_week_start:
-            self._task_window_week_start = week_start
-            self.initial["scheduled_week_of"] = week_start
+        self._task_window_week_start = _start_of_week(scheduled_date)
+        self.initial["scheduled_week_of"] = self._task_window_week_start
 
-        day_offset = (scheduled_date - self._task_window_week_start).days
-        if not 0 <= day_offset < len(TASK_WINDOW_DAY_CONFIG):
+        prefix = next(
+            (configured_prefix for configured_prefix, _, weekday in TASK_WINDOW_DAY_CONFIG if int(weekday) == scheduled_date.weekday()),
+            None,
+        )
+        if not prefix:
             return
 
         blocks = [(start_value, end_value)]
-        prefix = TASK_WINDOW_DAY_CONFIG[day_offset][0]
         self.initial[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
         self.initial["scheduled_window_segments"] = _serialize_schedule_segments(blocks)
         self.initial["scheduled_window_start"] = start_value
@@ -889,13 +886,17 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     def _selected_task_window_days(self, cleaned_data):
         selected_days = []
         week_start = cleaned_data.get("scheduled_week_of") or self._task_window_week_start
-        for prefix, day_offset in TASK_WINDOW_DAY_CONFIG:
+        today = timezone.localdate()
+        for prefix, _, weekday in TASK_WINDOW_DAY_CONFIG:
             raw_value = cleaned_data.get(f"{prefix}_segments")
             blocks = self._parse_task_window_segments(raw_value) if raw_value else []
             if blocks is None:
                 return None
             if blocks:
-                selected_days.append((week_start + timedelta(days=day_offset), blocks))
+                work_date = week_start + timedelta(days=int(weekday))
+                if not cleaned_data.get("due_date") and work_date < today:
+                    work_date += timedelta(days=7)
+                selected_days.append((work_date, blocks, int(weekday)))
         return selected_days
 
     def _clear_task_schedule_fields(self, cleaned_data):
@@ -908,12 +909,13 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         cleaned_data["scheduled_window_hours"] = Decimal("0")
         cleaned_data["task_schedule_blocks"] = []
         cleaned_data["task_schedule_blocks_by_date"] = {}
+        cleaned_data["task_schedule_weekdays"] = []
         return cleaned_data
 
     def _clean_schedule_window(self, cleaned_data):
         due_date = cleaned_data.get("due_date")
         scheduled_date = cleaned_data.get("scheduled_date")
-        week_value = cleaned_data.get("scheduled_week_of") or scheduled_date or due_date or timezone.localdate()
+        week_value = due_date or scheduled_date or cleaned_data.get("scheduled_week_of") or self._task_window_week_start or timezone.localdate()
         cleaned_data["scheduled_week_of"] = _start_of_week(week_value)
 
         selected_days = self._selected_task_window_days(cleaned_data)
@@ -937,19 +939,22 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
             scheduled_date = cleaned_data.get("scheduled_date") or cleaned_data.get("due_date")
             if blocks and scheduled_date:
-                selected_days = [(scheduled_date, blocks)]
+                selected_days = [(scheduled_date, blocks, scheduled_date.weekday())]
             else:
+                cleaned_data["task_schedule_weekdays"] = []
                 return self._clear_task_schedule_fields(cleaned_data)
 
         task_schedule_blocks = []
         task_schedule_blocks_by_date = {}
+        task_schedule_weekdays = []
         total_minutes = 0
         earliest_date = None
         latest_date = None
         earliest_blocks = []
 
-        for work_date, blocks in selected_days:
+        for work_date, blocks, weekday in selected_days:
             task_schedule_blocks_by_date[work_date] = blocks
+            task_schedule_weekdays.append(weekday)
             if earliest_date is None or work_date < earliest_date:
                 earliest_date = work_date
                 earliest_blocks = blocks
@@ -967,10 +972,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 total_minutes += _window_minutes(start_value, end_value)
 
         if not task_schedule_blocks:
+            cleaned_data["task_schedule_weekdays"] = []
             return self._clear_task_schedule_fields(cleaned_data)
 
         cleaned_data["task_schedule_blocks"] = task_schedule_blocks
         cleaned_data["task_schedule_blocks_by_date"] = task_schedule_blocks_by_date
+        cleaned_data["task_schedule_weekdays"] = task_schedule_weekdays
         cleaned_data["scheduled_date"] = earliest_date
         cleaned_data["scheduled_start_time"] = earliest_blocks[0][0]
         cleaned_data["scheduled_end_time"] = earliest_blocks[0][1]
@@ -978,8 +985,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         cleaned_data["scheduled_window_start"] = earliest_blocks[0][0]
         cleaned_data["scheduled_window_end"] = earliest_blocks[-1][1]
         cleaned_data["scheduled_window_hours"] = Decimal(total_minutes) / Decimal("60")
+        cleaned_data["scheduled_week_of"] = _start_of_week(earliest_date)
 
-        if not cleaned_data.get("due_date"):
+        if cleaned_data.get("due_date"):
+            if latest_date and latest_date > cleaned_data["due_date"]:
+                cleaned_data["due_date"] = latest_date
+        else:
             cleaned_data["due_date"] = latest_date
 
         estimated_minutes = cleaned_data.get("estimated_minutes")
@@ -987,7 +998,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.add_error("estimated_minutes", "The time estimate is longer than the total allowed task windows.")
 
         if cleaned_data.get("recurring_task") and len(task_schedule_blocks) > 1:
-            self.add_error("scheduled_window_segments", "Repeating tasks can only use one scheduled work window right now.")
+            self.add_error("scheduled_window_segments", "Repeating tasks can only use one continuous scheduled time window right now.")
 
         return cleaned_data
 
@@ -1065,7 +1076,11 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         if not recurrence_interval:
             cleaned_data["recurrence_interval"] = 1
 
+        task_schedule_weekdays = cleaned_data.get("task_schedule_weekdays") or []
         if recurrence_pattern == "weekly":
+            if len(task_schedule_weekdays) == 1:
+                cleaned_data["recurrence_day_of_week"] = task_schedule_weekdays[0]
+                recurrence_day_of_week = cleaned_data["recurrence_day_of_week"]
             if recurrence_day_of_week is None:
                 self.add_error("recurrence_day_of_week", "Choose the weekday for this weekly task.")
             cleaned_data["recurrence_day_of_month"] = None
