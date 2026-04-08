@@ -964,7 +964,7 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Scheduled work window")
         self.assertContains(response, 'data-task-window-toggle', html=False)
-        self.assertContains(response, 'data-task-window-fields hidden', html=False)
+        self.assertContains(response, 'data-task-window-fields style="display: none;"', html=False)
         self.assertNotContains(response, "Show week of")
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_0"')
         self.assertContains(response, 'data-schedule-summary-card="task_window_day_4"')
@@ -1322,8 +1322,8 @@ class TaskCreateLabelTests(TestCase):
         self.assertContains(response, 'name="additional_assignees"', count=1)
         self.assertContains(response, 'name="rotating_additional_assignee_count"')
         self.assertContains(response, 'type="checkbox"', html=False)
-        self.assertContains(response, 'data-recurring-toggle', html=False)
-        self.assertContains(response, 'data-recurring-fields hidden', html=False)
+        self.assertNotContains(response, 'data-recurring-toggle', html=False)
+        self.assertContains(response, 'data-recurring-fields style="display: none;"', html=False)
         self.assertNotContains(response, '<select name="additional_assignees"', html=False)
         self.assertNotContains(response, "Requested by")
         self.assertNotContains(response, ">alex-worker<", html=False)
@@ -1381,8 +1381,8 @@ class TaskCreateLabelTests(TestCase):
         response = self.client.get(reverse("task-edit", args=[task.pk]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'data-recurring-toggle', html=False)
-        self.assertNotContains(response, 'data-recurring-fields hidden', html=False)
+        self.assertNotContains(response, 'data-recurring-toggle', html=False)
+        self.assertNotContains(response, 'data-recurring-fields style="display: none;"', html=False)
 
 
 class TaskVisibilityAndAdditionalAssigneeTests(TestCase):
