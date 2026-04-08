@@ -2270,6 +2270,52 @@ class TaskEstimateFeedbackTests(TestCase):
         self.assertEqual(feedback.corrected_estimated_minutes, 75)
         self.assertEqual(feedback.source, "task_edit")
 
+    def test_task_edit_can_enable_weekly_recurring_and_show_in_recurring_list(self):
+        self.task.due_date = date(2026, 4, 10)
+        self.task.scheduled_date = date(2026, 4, 10)
+        self.task.scheduled_start_time = time(8, 0)
+        self.task.scheduled_end_time = time(17, 0)
+        self.task.save(update_fields=["due_date", "scheduled_date", "scheduled_start_time", "scheduled_end_time", "updated_at"])
+
+        response = self.client.post(
+            reverse("task-edit", args=[self.task.pk]),
+            {
+                "title": self.task.title,
+                "raw_message": self.task.raw_message,
+                "description": self.task.description,
+                "priority": self.task.priority,
+                "status": self.task.status,
+                "due_date": "2026-04-10",
+                "scheduled_week_of": "2026-04-06",
+                "task_window_day_4_segments": '[["08:00", "17:00"]]',
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "60",
+                "assigned_to": str(self.student.pk),
+                "additional_assignees": [],
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.FRIDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertTrue(self.task.recurring_task)
+        self.assertEqual(self.task.recurrence_pattern, "weekly")
+        self.assertEqual(self.task.recurrence_day_of_week, Weekday.FRIDAY)
+        self.assertEqual(self.task.assigned_to, self.supervisor)
+        self.assertIsNotNone(self.task.recurring_template)
+        self.assertEqual(self.task.recurring_template.day_of_week, Weekday.FRIDAY)
+        recurring_response = self.client.get(reverse("recurring-list"))
+        self.assertEqual(recurring_response.status_code, 200)
+        self.assertContains(recurring_response, self.task.title)
+
 
 class ScheduleAdjustmentRequestTests(TestCase):
     def setUp(self):

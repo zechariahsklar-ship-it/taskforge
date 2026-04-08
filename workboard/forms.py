@@ -676,6 +676,8 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, actor=None, **kwargs):
         self.actor = actor
+        self.reassign_unavailable_assignee = False
+        self.reassigned_assignee_label = ""
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["team"].queryset = _team_queryset()
@@ -1007,6 +1009,9 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         if not task_schedule_blocks:
             return cleaned_data
 
+        self.reassign_unavailable_assignee = False
+        self.reassigned_assignee_label = ""
+
         exclude_task_id = self.instance.pk if getattr(self.instance, "pk", None) else None
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
@@ -1020,7 +1025,17 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             task_window_blocks=task_schedule_blocks,
             exclude_task_id=exclude_task_id,
         ):
-            self.add_error("assigned_to", f"{assigned_to.display_label} does not have enough scheduled availability during those task windows.")
+            preserved_existing_assignee = bool(
+                getattr(self.instance, "pk", None)
+                and self.instance.assigned_to_id == assigned_to.pk
+            )
+            if preserved_existing_assignee:
+                cleaned_data["assigned_to"] = None
+                self.reassign_unavailable_assignee = True
+                self.reassigned_assignee_label = assigned_to.display_label
+                assigned_to = None
+            else:
+                self.add_error("assigned_to", f"{assigned_to.display_label} does not have enough scheduled availability during those task windows.")
 
         unavailable_additional = []
         for teammate in additional_assignees or []:

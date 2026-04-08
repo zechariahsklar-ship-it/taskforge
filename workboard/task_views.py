@@ -1304,6 +1304,20 @@ def task_edit_view(request, pk):
             updated_task.team = form.cleaned_data["team"]
             updated_task = _ensure_task_due_date(updated_task)
             updated_task = _append_task_to_status(updated_task, previous_status=previous_status, previous_team_id=previous_team_id)
+            reassigned_from = form.reassigned_assignee_label if form.reassign_unavailable_assignee else ""
+            if form.reassign_unavailable_assignee and not updated_task.assigned_to:
+                suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
+                    due_date=updated_task.due_date,
+                    estimated_minutes=updated_task.estimated_minutes,
+                    fallback_supervisor=request.user,
+                    scheduled_date=updated_task.scheduled_date,
+                    scheduled_start_time=updated_task.scheduled_start_time,
+                    scheduled_end_time=updated_task.scheduled_end_time,
+                    task_window_blocks=task_window_blocks,
+                    exclude_task_id=updated_task.pk,
+                    team=updated_task.team,
+                )
+                updated_task.assigned_to = suggested_user
             if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                 updated_task.mark_complete()
             elif updated_task.status != TaskStatus.DONE:
@@ -1323,6 +1337,8 @@ def task_edit_view(request, pk):
             updated_task = _apply_task_additional_assignee_settings(updated_task)
             updated_task = _sync_task_recurring_template(updated_task)
             TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
+            if reassigned_from and updated_task.assigned_to:
+                messages.info(request, f"{reassigned_from} did not have enough scheduled availability for those task windows, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:
