@@ -1610,6 +1610,23 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
 
+    def test_board_groups_overdue_tasks_into_overdue_column_between_new_and_in_progress(self):
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        grouped_tasks = response.context["grouped_tasks"]
+        self.assertEqual(
+            [column["value"] for column in grouped_tasks],
+            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.REVIEW, TaskStatus.DONE],
+        )
+        overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
+        new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
+        self.assertEqual([task.title for task in overdue_column["tasks"]], ["Overdue archive cleanup"])
+        self.assertIn("Weekly recurring mail sweep", [task.title for task in new_column["tasks"]])
+        self.assertNotIn("Overdue archive cleanup", [task.title for task in new_column["tasks"]])
+        self.assertContains(response, "Stage: New Requests")
+
     def test_board_overdue_view_includes_today_tasks_after_evening_cutoff(self):
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 18, 5))):
             response = self.client.get(reverse("board"), {"saved_view": "overdue"})
@@ -1836,43 +1853,53 @@ class MyTasksOverdueSectionTests(TestCase):
             board_order=2,
         )
 
-    def test_supervisor_my_tasks_shows_team_overdue_section_separately(self):
+    def test_supervisor_my_tasks_shows_team_overdue_tasks_in_overdue_column(self):
         self.client.force_login(self.supervisor)
 
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
             response = self.client.get(reverse("my-tasks"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Team overdue tasks")
-        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
-        grouped_titles = [task.title for column in response.context["grouped_tasks"] for task in column["tasks"]]
-        self.assertNotIn("Team overdue task", grouped_titles)
-        self.assertIn("Waiting task for leads", grouped_titles)
+        grouped_tasks = response.context["grouped_tasks"]
+        self.assertEqual(
+            [column["value"] for column in grouped_tasks],
+            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.REVIEW, TaskStatus.DONE],
+        )
+        overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
+        waiting_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.WAITING)
+        self.assertEqual([task.title for task in overdue_column["tasks"]], ["Team overdue task"])
+        self.assertEqual([task.title for task in waiting_column["tasks"]], ["Waiting task for leads"])
+        self.assertContains(response, "Stage: In Progress")
 
-    def test_student_supervisor_my_tasks_shows_team_overdue_section_separately(self):
+    def test_student_supervisor_my_tasks_shows_team_overdue_tasks_in_overdue_column(self):
         self.client.force_login(self.student_supervisor)
 
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
             response = self.client.get(reverse("my-tasks"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Team overdue tasks")
-        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
-        grouped_titles = [task.title for column in response.context["grouped_tasks"] for task in column["tasks"]]
-        self.assertNotIn("Team overdue task", grouped_titles)
-        self.assertIn("Lead personal task", grouped_titles)
+        grouped_tasks = response.context["grouped_tasks"]
+        overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
+        new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
+        self.assertEqual([task.title for task in overdue_column["tasks"]], ["Team overdue task"])
+        self.assertEqual([task.title for task in new_column["tasks"]], ["Lead personal task"])
+        self.assertContains(response, "Assigned to: Taylor Worker")
 
-    def test_student_worker_does_not_get_team_overdue_section(self):
+    def test_student_worker_sees_personal_overdue_tasks_in_overdue_column(self):
         self.client.force_login(self.student)
 
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
             response = self.client.get(reverse("my-tasks"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "Team overdue tasks")
-        self.assertEqual(response.context["overdue_tasks"], [])
+        grouped_tasks = response.context["grouped_tasks"]
+        overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
+        grouped_titles = [task.title for column in grouped_tasks for task in column["tasks"]]
+        self.assertEqual([task.title for task in overdue_column["tasks"]], ["Team overdue task"])
+        self.assertNotIn("Waiting task for leads", grouped_titles)
+        self.assertNotIn("Lead personal task", grouped_titles)
 
-    def test_supervisor_overdue_section_treats_due_today_tasks_as_overdue_after_cutoff(self):
+    def test_supervisor_overdue_column_treats_due_today_tasks_as_overdue_after_cutoff(self):
         self.overdue_task.due_date = date(2026, 3, 20)
         self.overdue_task.save(update_fields=["due_date", "updated_at"])
         self.client.force_login(self.supervisor)
@@ -1881,7 +1908,8 @@ class MyTasksOverdueSectionTests(TestCase):
             response = self.client.get(reverse("my-tasks"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
+        overdue_column = next(column for column in response.context["grouped_tasks"] if column["value"] == "overdue")
+        self.assertEqual([task.title for task in overdue_column["tasks"]], ["Team overdue task"])
 
 
 class CompletedTasksViewTests(TestCase):

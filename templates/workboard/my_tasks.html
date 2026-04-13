@@ -42,46 +42,31 @@
         </div>
     </form>
 </section>
-{% if overdue_tasks %}
-<section class="task-bucket">
-    <div class="task-bucket-header">
-        <div>
-            <h2 class="task-bucket-title">Team overdue tasks</h2>
-            <p class="meta board-help-text">These tasks are past due, or still open after 6:00 PM on their due day.</p>
-        </div>
-        <span class="meta">{{ overdue_tasks|length }}</span>
-    </div>
-    <div class="task-bucket-list">
-        {% for task in overdue_tasks %}
-            <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card my-task-card">
-                <article>
-                    <h3 class="board-task-title">{{ task.title }}</h3>
-                    <div class="board-task-meta-row">
-                        <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
-                        <span class="meta">Status: {{ task.get_status_display }}</span>
-                        <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
-                        <span class="meta">Assigned to: {{ task.assigned_to.display_label|default:"Unassigned" }}</span>
-                    </div>
-                </article>
-            </a>
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
 <section class="my-tasks-groups" data-my-tasks-groups>
     {% for column in grouped_tasks %}
-        <section class="task-bucket" data-column-status="{{ column.value }}">
+        <section class="task-bucket{% if column.is_overdue_column %} task-bucket-overdue{% endif %}" data-column-status="{{ column.value }}" data-column-droppable="{{ column.droppable|yesno:'true,false' }}">
             <div class="task-bucket-header">
-                <h2 class="task-bucket-title">{{ column.label }}</h2>
+                <div>
+                    <h2 class="task-bucket-title">{{ column.label }}</h2>
+                    {% if column.is_overdue_column %}
+                        <p class="meta board-help-text">These tasks are past due, or still open after 6:00 PM on their due day.</p>
+                    {% endif %}
+                </div>
                 <span class="meta">{{ column.tasks|length }}</span>
             </div>
             <div class="task-bucket-list">
                 {% for task in column.tasks %}
-                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card my-task-card" draggable="true" data-task-id="{{ task.pk }}">
+                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card my-task-card" draggable="true" data-task-id="{{ task.pk }}" data-task-overdue="{{ task.is_overdue|yesno:'true,false' }}">
                         <article>
                             <h3 class="board-task-title">{{ task.title }}</h3>
                             <div class="board-task-meta-row">
                                 <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                                {% if column.is_overdue_column %}
+                                    <span class="meta">Stage: {{ task.get_status_display }}</span>
+                                    {% if request.user.can_view_full_board %}
+                                        <span class="meta">Assigned to: {{ task.assigned_to.display_label|default:"Unassigned" }}</span>
+                                    {% endif %}
+                                {% endif %}
                                 <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
                                 <span class="meta">Time: {% if task.estimated_minutes %}{{ task.estimated_minutes }} min{% else %}TBD{% endif %}</span>
                             </div>
@@ -127,7 +112,19 @@
                 return;
             }
             try {
+                const defaultOrder = Array.from(groups.querySelectorAll('.task-bucket')).map(function (bucket) {
+                    return bucket.dataset.columnStatus;
+                });
                 const order = JSON.parse(raw);
+                const matchesCurrentColumns = Array.isArray(order)
+                    && order.length === defaultOrder.length
+                    && order.every(function (status) {
+                        return defaultOrder.includes(status);
+                    });
+                if (!matchesCurrentColumns) {
+                    window.localStorage.removeItem(columnStorageKey);
+                    return;
+                }
                 for (const status of order) {
                     const bucket = groups.querySelector(`.task-bucket[data-column-status="${status}"]`);
                     if (bucket) {
@@ -211,6 +208,7 @@
             if (!response.ok) {
                 throw new Error('Move failed');
             }
+            return response.json();
         }
 
         restoreBucketOrder();
@@ -244,6 +242,10 @@
                 return;
             }
             event.preventDefault();
+            if (bucket.dataset.columnDroppable === 'false') {
+                clearDropIndicators();
+                return;
+            }
             event.dataTransfer.dropEffect = 'move';
             positionDraggedCard(bucket, event.clientY);
         });
@@ -254,10 +256,19 @@
                 return;
             }
             event.preventDefault();
+            if (bucket.dataset.columnDroppable === 'false') {
+                clearDropIndicators();
+                return;
+            }
             suppressClick = true;
             try {
-                await moveTask(draggedCard, bucket);
+                const result = await moveTask(draggedCard, bucket);
+                draggedCard.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
                 clearDropIndicators();
+                if (result.status_bucket !== bucket.dataset.columnStatus) {
+                    window.location.reload();
+                    return;
+                }
             } catch (error) {
                 window.location.reload();
             }

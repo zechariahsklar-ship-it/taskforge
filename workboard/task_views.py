@@ -53,13 +53,26 @@ from .recurring_service import RECURRING_RELEASE_TIME, RecurringTaskService
 from .services import TaskAssignmentService, TaskEstimateFeedbackService, TaskParsingService
 
 
-BOARD_COLUMNS = [
+OVERDUE_COLUMN_VALUE = "overdue"
+
+BOARD_MOVABLE_STATUSES = [
     TaskStatus.NEW,
     TaskStatus.IN_PROGRESS,
     TaskStatus.WAITING,
     TaskStatus.REVIEW,
     TaskStatus.DONE,
 ]
+
+BOARD_COLUMN_DEFINITIONS = [
+    {"value": TaskStatus.NEW, "label": TaskStatus.NEW.label, "droppable": True, "is_overdue_column": False},
+    {"value": OVERDUE_COLUMN_VALUE, "label": "Overdue", "droppable": False, "is_overdue_column": True},
+    {"value": TaskStatus.IN_PROGRESS, "label": TaskStatus.IN_PROGRESS.label, "droppable": True, "is_overdue_column": False},
+    {"value": TaskStatus.WAITING, "label": TaskStatus.WAITING.label, "droppable": True, "is_overdue_column": False},
+    {"value": TaskStatus.REVIEW, "label": TaskStatus.REVIEW.label, "droppable": True, "is_overdue_column": False},
+    {"value": TaskStatus.DONE, "label": TaskStatus.DONE.label, "droppable": True, "is_overdue_column": False},
+]
+
+BOARD_BUCKET_DISPLAY_ORDER = {definition["value"]: index for index, definition in enumerate(BOARD_COLUMN_DEFINITIONS)}
 
 COMPLETED_TASK_BOARD_RETENTION_DAYS = 7
 
@@ -255,19 +268,45 @@ def _ordered_board_tasks(queryset):
     return list(queryset.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
 
 
-def _prepare_tasks_for_board(tasks: list[Task]) -> list[Task]:
+def _task_is_overdue(task: Task, *, now=None, local_now: datetime | None = None) -> bool:
+    if task.status == TaskStatus.DONE or not task.due_date:
+        return False
+    local_now = local_now or timezone.localtime(now or timezone.now())
+    return task.due_date < local_now.date() or (task.due_date == local_now.date() and _after_recurring_release_cutoff(local_now))
+
+
+def _status_bucket_for_task(task: Task, *, now=None, local_now: datetime | None = None) -> str:
+    return OVERDUE_COLUMN_VALUE if _task_is_overdue(task, now=now, local_now=local_now) else _board_bucket_status(task.status)
+
+
+def _overdue_bucket_sort_key(task: Task):
+    return (
+        task.board_due_date,
+        BOARD_BUCKET_DISPLAY_ORDER.get(_board_bucket_status(task.status), len(BOARD_BUCKET_DISPLAY_ORDER)),
+        task.board_order is None,
+        task.board_order or 0,
+        task.pk,
+    )
+
+
+def _prepare_tasks_for_board(tasks: list[Task], *, now=None) -> list[Task]:
+    local_now = timezone.localtime(now or timezone.now())
     for task in tasks:
-        task.status_bucket = _board_bucket_status(task.status)
+        task.is_overdue = _task_is_overdue(task, local_now=local_now)
+        task.status_bucket = _status_bucket_for_task(task, local_now=local_now)
         task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
     return tasks
 
 
-def _group_tasks_for_board(tasks: list[Task]) -> list[dict]:
-    prepared_tasks = _prepare_tasks_for_board(tasks)
-    return [
-        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in prepared_tasks if task.status_bucket == status]}
-        for status in BOARD_COLUMNS
-    ]
+def _group_tasks_for_board(tasks: list[Task], *, now=None) -> list[dict]:
+    prepared_tasks = _prepare_tasks_for_board(tasks, now=now)
+    grouped_columns = []
+    for definition in BOARD_COLUMN_DEFINITIONS:
+        column_tasks = [task for task in prepared_tasks if task.status_bucket == definition["value"]]
+        if definition["value"] == OVERDUE_COLUMN_VALUE:
+            column_tasks.sort(key=_overdue_bucket_sort_key)
+        grouped_columns.append({**definition, "tasks": column_tasks})
+    return grouped_columns
 
 
 def _user_can_access_task(user: User, task: Task) -> bool:
@@ -924,7 +963,7 @@ def board_task_move_view(request, pk):
 
     before_snapshot = TaskAuditService.snapshot(task)
     new_status = request.POST.get("status", "").strip()
-    if new_status not in BOARD_COLUMNS:
+    if new_status not in BOARD_MOVABLE_STATUSES:
         return HttpResponseBadRequest("Invalid status.")
 
     before_task_id = request.POST.get("before_task_id", "").strip()
@@ -956,7 +995,14 @@ def board_task_move_view(request, pk):
         _resequence_status_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk, team=task.team), previous_status)
     TaskAuditService.record_updated(task, actor=request.user, before_snapshot=before_snapshot)
 
-    return JsonResponse({"ok": True, "status": task.status, "label": TaskStatus(task.status).label})
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": task.status,
+            "label": TaskStatus(task.status).label,
+            "status_bucket": _status_bucket_for_task(task),
+        }
+    )
 
 
 @app_login_required
@@ -964,18 +1010,13 @@ def my_tasks_view(request):
     visibility_filter = _task_membership_filter(request.user)
     if request.user.is_supervisor:
         visibility_filter |= Q(status=TaskStatus.WAITING)
+    if request.user.can_view_full_board:
+        # Keep team overdue work visible for leads and supervisors even when it
+        # is not personally assigned to them.
+        visibility_filter |= (~Q(status=TaskStatus.DONE) & _open_overdue_task_filter())
     visible_tasks = _exclude_stale_done_tasks(_team_scoped_task_queryset(request.user).filter(visibility_filter).distinct())
     filter_form = _task_filter_form(request, include_assignee=False)
     filtered_tasks, active_filters = _apply_task_board_filters(visible_tasks, filter_form)
-
-    overdue_tasks = []
-    if request.user.can_view_full_board:
-        team_overdue_queryset = _open_overdue_tasks(_team_scoped_task_queryset(request.user).distinct())
-        overdue_tasks = _prepare_tasks_for_board(
-            list(team_overdue_queryset.order_by("due_date", "status", F("board_order").asc(nulls_last=True), "-created_at", "pk"))
-        )
-        if overdue_tasks:
-            filtered_tasks = filtered_tasks.exclude(pk__in=[task.pk for task in overdue_tasks])
 
     ordered_tasks = _ordered_board_tasks(filtered_tasks)
     grouped_tasks = _group_tasks_for_board(ordered_tasks)
@@ -984,7 +1025,6 @@ def my_tasks_view(request):
         "workboard/my_tasks.html",
         {
             "grouped_tasks": grouped_tasks,
-            "overdue_tasks": overdue_tasks,
             "filter_form": filter_form,
             "active_filters": active_filters,
             "task_count": len(ordered_tasks),

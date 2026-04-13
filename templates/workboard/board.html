@@ -52,14 +52,17 @@
 <section class="board-shell">
     <section class="board-grid" data-board-grid>
         {% for column in grouped_tasks %}
-            <div class="board-column" data-column-status="{{ column.value }}" draggable="true">
+            <div class="board-column{% if column.is_overdue_column %} board-column-overdue{% endif %}" data-column-status="{{ column.value }}" data-column-droppable="{{ column.droppable|yesno:'true,false' }}" draggable="true">
                 <h2 class="board-column-title">{{ column.label }}</h2>
                 {% for task in column.tasks %}
-                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card" draggable="true" data-task-id="{{ task.pk }}">
+                    <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card" draggable="true" data-task-id="{{ task.pk }}" data-task-overdue="{{ task.is_overdue|yesno:'true,false' }}">
                         <article>
                             <h3 class="board-task-title">{{ task.title }}</h3>
                             <div class="board-task-meta-row">
                                 <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                                {% if column.is_overdue_column %}
+                                    <span class="meta">Stage: {{ task.get_status_display }}</span>
+                                {% endif %}
                                 <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
                             </div>
                             <p class="board-task-description">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
@@ -112,7 +115,19 @@
                 return;
             }
             try {
+                const defaultOrder = Array.from(board.querySelectorAll('.board-column')).map(function (column) {
+                    return column.dataset.columnStatus;
+                });
                 const order = JSON.parse(raw);
+                const matchesCurrentColumns = Array.isArray(order)
+                    && order.length === defaultOrder.length
+                    && order.every(function (status) {
+                        return defaultOrder.includes(status);
+                    });
+                if (!matchesCurrentColumns) {
+                    window.localStorage.removeItem(columnStorageKey);
+                    return;
+                }
                 for (const status of order) {
                     const column = board.querySelector(`.board-column[data-column-status="${status}"]`);
                     if (column) {
@@ -195,6 +210,7 @@
             if (!response.ok) {
                 throw new Error('Move failed');
             }
+            return response.json();
         }
 
         restoreColumnOrder();
@@ -240,6 +256,10 @@
             }
             event.preventDefault();
             if (draggedCard) {
+                if (column.dataset.columnDroppable === 'false') {
+                    clearDropIndicators();
+                    return;
+                }
                 event.dataTransfer.dropEffect = 'move';
                 positionDraggedCard(column, event.clientY);
                 return;
@@ -265,10 +285,19 @@
             event.preventDefault();
 
             if (draggedCard) {
+                if (column.dataset.columnDroppable === 'false') {
+                    clearDropIndicators();
+                    return;
+                }
                 suppressClick = true;
                 try {
-                    await moveTask(draggedCard, column);
+                    const result = await moveTask(draggedCard, column);
+                    draggedCard.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
                     clearDropIndicators();
+                    if (result.status_bucket !== column.dataset.columnStatus) {
+                        window.location.reload();
+                        return;
+                    }
                 } catch (error) {
                     window.location.reload();
                 }
