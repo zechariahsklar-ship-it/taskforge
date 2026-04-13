@@ -49,7 +49,7 @@ from .models import (
     UserRole,
     Weekday,
 )
-from .recurring_service import RecurringTaskService
+from .recurring_service import RECURRING_RELEASE_TIME, RecurringTaskService
 from .services import TaskAssignmentService, TaskEstimateFeedbackService, TaskParsingService
 
 
@@ -86,7 +86,7 @@ def _process_ready_recurring_tasks(request) -> None:
         return
     if request.resolver_match and request.resolver_match.url_name in {"logout", "password-change"}:
         return
-    # Sweep overdue recurring rollovers on normal app traffic when no scheduler is available.
+    # Sweep recurring releases on normal app traffic when no scheduler is available.
     RecurringTaskService.run_templates_ready_today()
 
 
@@ -185,7 +185,9 @@ def _scope_queryset_to_user_team(queryset, user: User, *, field_name: str = "tea
     if user.is_admin:
         return queryset
     if not user.team_id:
-        return queryset.none()
+        # Keep legacy no-team records visible to legacy no-team users without
+        # exposing tasks that belong to a scoped team.
+        return queryset.filter(**{f"{field_name}__isnull": True})
     return queryset.filter(**{f"{field_name}_id": user.team_id})
 
 
@@ -253,12 +255,17 @@ def _ordered_board_tasks(queryset):
     return list(queryset.order_by("status", F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
 
 
-def _group_tasks_for_board(tasks: list[Task]) -> list[dict]:
+def _prepare_tasks_for_board(tasks: list[Task]) -> list[Task]:
     for task in tasks:
         task.status_bucket = _board_bucket_status(task.status)
         task.board_due_date = task.due_date or TaskParsingService._priority_due_date(task.priority)[1]
+    return tasks
+
+
+def _group_tasks_for_board(tasks: list[Task]) -> list[dict]:
+    prepared_tasks = _prepare_tasks_for_board(tasks)
     return [
-        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in tasks if task.status_bucket == status]}
+        {"value": status, "label": TaskStatus(status).label, "tasks": [task for task in prepared_tasks if task.status_bucket == status]}
         for status in BOARD_COLUMNS
     ]
 
@@ -660,6 +667,28 @@ def _completed_task_cutoff(*, now=None):
     return (now or timezone.now()) - timedelta(days=COMPLETED_TASK_BOARD_RETENTION_DAYS)
 
 
+def _after_recurring_release_cutoff(local_now: datetime) -> bool:
+    return (local_now.hour, local_now.minute, local_now.second, local_now.microsecond) >= (
+        RECURRING_RELEASE_TIME.hour,
+        RECURRING_RELEASE_TIME.minute,
+        RECURRING_RELEASE_TIME.second,
+        RECURRING_RELEASE_TIME.microsecond,
+    )
+
+
+def _open_overdue_task_filter(*, now=None) -> Q:
+    local_now = timezone.localtime(now or timezone.now())
+    today = local_now.date()
+    overdue_filter = Q(due_date__lt=today)
+    if _after_recurring_release_cutoff(local_now):
+        overdue_filter |= Q(due_date=today)
+    return overdue_filter
+
+
+def _open_overdue_tasks(queryset, *, now=None):
+    return queryset.exclude(status=TaskStatus.DONE).filter(_open_overdue_task_filter(now=now)).distinct()
+
+
 def _exclude_stale_done_tasks(queryset, *, now=None):
     return queryset.exclude(status=TaskStatus.DONE, completed_at__lt=_completed_task_cutoff(now=now))
 
@@ -708,7 +737,7 @@ def _apply_saved_task_view(queryset, *, saved_view: str, today: date):
     if saved_view == "today":
         return queryset.exclude(status=TaskStatus.DONE).filter(Q(due_date=today) | Q(scheduled_date=today) | Q(scheduled_blocks__work_date=today))
     if saved_view == "overdue":
-        return queryset.exclude(status=TaskStatus.DONE).filter(due_date__lt=today)
+        return _open_overdue_tasks(queryset)
     if saved_view == "waiting":
         return queryset.exclude(status=TaskStatus.DONE).filter(status=TaskStatus.WAITING)
     if saved_view == "recurring":
@@ -742,7 +771,7 @@ def _apply_task_board_filters(queryset, filter_form: TaskBoardFilterForm):
 
     due_scope = cleaned.get("due_scope")
     if due_scope == "overdue":
-        filtered = filtered.exclude(status=TaskStatus.DONE).filter(due_date__lt=today)
+        filtered = _open_overdue_tasks(filtered)
     elif due_scope == "today":
         filtered = filtered.filter(due_date=today)
     elif due_scope == "week":
@@ -938,6 +967,16 @@ def my_tasks_view(request):
     visible_tasks = _exclude_stale_done_tasks(_team_scoped_task_queryset(request.user).filter(visibility_filter).distinct())
     filter_form = _task_filter_form(request, include_assignee=False)
     filtered_tasks, active_filters = _apply_task_board_filters(visible_tasks, filter_form)
+
+    overdue_tasks = []
+    if request.user.can_view_full_board:
+        team_overdue_queryset = _open_overdue_tasks(_team_scoped_task_queryset(request.user).distinct())
+        overdue_tasks = _prepare_tasks_for_board(
+            list(team_overdue_queryset.order_by("due_date", "status", F("board_order").asc(nulls_last=True), "-created_at", "pk"))
+        )
+        if overdue_tasks:
+            filtered_tasks = filtered_tasks.exclude(pk__in=[task.pk for task in overdue_tasks])
+
     ordered_tasks = _ordered_board_tasks(filtered_tasks)
     grouped_tasks = _group_tasks_for_board(ordered_tasks)
     return render(
@@ -945,6 +984,7 @@ def my_tasks_view(request):
         "workboard/my_tasks.html",
         {
             "grouped_tasks": grouped_tasks,
+            "overdue_tasks": overdue_tasks,
             "filter_form": filter_form,
             "active_filters": active_filters,
             "task_count": len(ordered_tasks),

@@ -346,7 +346,8 @@ class RecurringTaskListViewTests(TestCase):
         self.first_template.next_run_date = date(2026, 3, 27)
         self.first_template.save(update_fields=["next_run_date", "updated_at"])
 
-        response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
 
         self.assertEqual(response.status_code, 200)
         generated = Task.objects.filter(recurring_template=self.first_template).latest("pk")
@@ -367,7 +368,8 @@ class RecurringTaskListViewTests(TestCase):
             recurring_template=self.first_template,
         )
 
-        response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.post(reverse("recurring-run-now", args=[self.first_template.pk]), follow=True)
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "already has an open run on the board")
@@ -595,70 +597,106 @@ class RecurringTaskGenerationRotationTests(TestCase):
             requested_by=self.supervisor,
             recurrence_pattern="weekly",
             recurrence_interval=1,
-            next_run_date=date(2026, 3, 13),
+            next_run_date=date(2026, 3, 20),
         )
         self.previous_task = Task.objects.create(
             title="Rotating recurring task",
             description="Previous run",
+            raw_message="Take out the trash and notify Facilities.",
             priority=Priority.MEDIUM,
             status=TaskStatus.DONE,
+            due_date=date(2026, 3, 13),
             estimated_minutes=30,
             assigned_to=self.alex,
             requested_by=self.supervisor,
+            created_by=self.supervisor,
             recurring_task=True,
             recurring_template=self.template,
-            completed_at=timezone.now(),
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.FRIDAY,
+            respond_to_text="Facilities",
+            completed_at=timezone.make_aware(datetime(2026, 3, 13, 17, 30)),
         )
         TaskChecklistItem.objects.create(task=self.previous_task, title="Recurring step", is_completed=True, position=1)
+        self.client.force_login(self.supervisor)
 
-    def test_generate_recurring_tasks_reopens_completed_task_and_rotates_assignment(self):
-        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
-        self.previous_task.save(update_fields=["completed_at", "updated_at"])
-
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
+    def _run_generator_at(self, when):
+        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=when):
             call_command("generate_recurring_tasks")
 
-        self.previous_task.refresh_from_db()
-        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
-        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
-        self.assertIsNone(self.previous_task.completed_at)
-        self.assertEqual(self.previous_task.assigned_to, self.jordan)
-        self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
-        self.assertFalse(self.previous_task.checklist_items.get().is_completed)
+    def _load_board_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            return self.client.get(reverse("board"))
 
-    def test_generate_recurring_tasks_reopens_next_cycle_with_new_due_date_and_rotation(self):
+    def test_generate_recurring_tasks_creates_new_task_after_evening_cutoff(self):
         self.sam_profile.active_status = False
         self.sam_profile.save(update_fields=["active_status"])
 
-        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
-        self.previous_task.save(update_fields=["completed_at", "updated_at"])
-
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
-            call_command("generate_recurring_tasks")
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 13, 18, 5)))
 
         self.previous_task.refresh_from_db()
         self.template.refresh_from_db()
-        self.assertEqual(self.previous_task.assigned_to, self.jordan)
+        tasks = list(Task.objects.filter(recurring_template=self.template).order_by("due_date", "pk"))
+        self.assertEqual(len(tasks), 2)
+        next_task = tasks[-1]
+        self.assertEqual(self.previous_task.status, TaskStatus.DONE)
         self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
-        self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
+        self.assertEqual(next_task.status, TaskStatus.NEW)
+        self.assertEqual(next_task.due_date, date(2026, 3, 20))
+        self.assertEqual(next_task.assigned_to, self.jordan)
+        self.assertEqual(next_task.created_by, self.supervisor)
+        self.assertEqual(next_task.raw_message, self.previous_task.raw_message)
+        self.assertEqual(next_task.respond_to_text, "Facilities")
+        self.assertEqual(list(next_task.checklist_items.values_list("title", flat=True)), ["Recurring step"])
+        self.assertFalse(next_task.checklist_items.get().is_completed)
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 27))
 
-        self.previous_task.status = TaskStatus.DONE
-        self.previous_task.completed_at = timezone.now()
+    def test_generate_recurring_tasks_keeps_open_run_visible_and_creates_next_cycle(self):
+        self.sam_profile.active_status = False
+        self.sam_profile.save(update_fields=["active_status"])
+        self.previous_task.status = TaskStatus.IN_PROGRESS
+        self.previous_task.completed_at = None
         self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
 
-        self.previous_task.completed_at = timezone.make_aware(datetime(2026, 3, 19, 23, 50))
-        self.previous_task.save(update_fields=["completed_at", "updated_at"])
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 13, 18, 5)))
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 0, 5))):
-            call_command("generate_recurring_tasks")
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).order_by("due_date", "pk"))
+        self.assertEqual(len(tasks), 2)
+        next_task = tasks[-1]
+        self.assertEqual(self.previous_task.status, TaskStatus.IN_PROGRESS)
+        self.assertIsNone(self.previous_task.completed_at)
+        self.assertEqual(next_task.status, TaskStatus.NEW)
+        self.assertEqual(next_task.due_date, date(2026, 3, 20))
+        self.assertEqual(next_task.assigned_to, self.jordan)
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 27))
 
+    def test_request_driven_rollover_waits_until_evening_cutoff(self):
+        response = self._load_board_at(timezone.make_aware(datetime(2026, 3, 13, 17, 0)))
+
+        self.assertEqual(response.status_code, 200)
         self.previous_task.refresh_from_db()
         self.template.refresh_from_db()
         self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
-        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
-        self.assertIsNone(self.previous_task.completed_at)
-        self.assertEqual(self.previous_task.assigned_to, self.alex)
-        self.assertEqual(self.previous_task.due_date, date(2026, 3, 20))
+        self.assertEqual(self.previous_task.status, TaskStatus.DONE)
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
+
+    def test_request_driven_rollover_creates_next_cycle_after_evening_cutoff(self):
+        self.sam_profile.active_status = False
+        self.sam_profile.save(update_fields=["active_status"])
+
+        response = self._load_board_at(timezone.make_aware(datetime(2026, 3, 13, 18, 5)))
+
+        self.assertEqual(response.status_code, 200)
+        self.previous_task.refresh_from_db()
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).order_by("due_date", "pk"))
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(self.previous_task.status, TaskStatus.DONE)
+        self.assertEqual(tasks[-1].due_date, date(2026, 3, 20))
+        self.assertEqual(tasks[-1].assigned_to, self.jordan)
         self.assertEqual(self.template.next_run_date, date(2026, 3, 27))
 
     def test_generate_recurring_tasks_sets_fixed_and_rotating_additional_assignees(self):
@@ -671,75 +709,34 @@ class RecurringTaskGenerationRotationTests(TestCase):
             requested_by=self.supervisor,
             recurrence_pattern="weekly",
             recurrence_interval=1,
-            next_run_date=date(2026, 3, 13),
+            next_run_date=date(2026, 3, 20),
             rotating_additional_assignee_count=1,
             rotate_additional_assignee=True,
         )
         extra_template.additional_assignees.add(self.jordan)
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
-            call_command("generate_recurring_tasks")
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 13, 18, 5)))
 
         generated = Task.objects.filter(recurring_template=extra_template).latest("pk")
         self.assertEqual(generated.assigned_to, self.alex)
+        self.assertEqual(generated.due_date, date(2026, 3, 20))
         self.assertEqual(list(generated.additional_assignees.values_list("id", flat=True)), [self.jordan.id])
         self.assertEqual(generated.rotating_additional_assignee_count, 1)
         self.assertEqual(list(generated.rotating_additional_assignees.values_list("id", flat=True)), [self.sam.id])
 
-    def test_generate_recurring_tasks_does_not_duplicate_open_task(self):
-        self.previous_task.status = TaskStatus.IN_PROGRESS
-        self.previous_task.completed_at = None
-        self.previous_task.save(update_fields=["status", "completed_at", "updated_at"])
-
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
-            call_command("generate_recurring_tasks")
-
-        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
-        self.previous_task.refresh_from_db()
-        self.assertEqual(self.previous_task.status, TaskStatus.IN_PROGRESS)
-        self.template.refresh_from_db()
-        self.assertEqual(self.template.next_run_date, date(2026, 3, 13))
-
-    def test_request_driven_rollover_waits_until_the_next_day(self):
-        self.client.force_login(self.supervisor)
+    def test_generate_recurring_tasks_backfills_every_release_window_that_has_passed(self):
         self.sam_profile.active_status = False
         self.sam_profile.save(update_fields=["active_status"])
-        completed_at = timezone.make_aware(datetime(2026, 3, 13, 9, 0))
-        self.previous_task.completed_at = completed_at
-        self.previous_task.save(update_fields=["completed_at", "updated_at"])
 
-        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 17, 0))):
-            response = self.client.get(reverse("board"))
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 27, 18, 5)))
 
-        self.assertEqual(response.status_code, 200)
-        self.previous_task.refresh_from_db()
         self.template.refresh_from_db()
-        self.assertEqual(self.previous_task.status, TaskStatus.DONE)
-        self.assertEqual(self.previous_task.assigned_to, self.alex)
-        self.assertIsNotNone(self.previous_task.completed_at)
-        self.assertEqual(self.template.next_run_date, date(2026, 3, 13))
-
-    def test_request_driven_rollover_reopens_completed_task_after_midnight(self):
-        self.client.force_login(self.supervisor)
-        self.sam_profile.active_status = False
-        self.sam_profile.save(update_fields=["active_status"])
-        completed_at = timezone.make_aware(datetime(2026, 3, 12, 23, 50))
-        self.previous_task.completed_at = completed_at
-        self.previous_task.save(update_fields=["completed_at", "updated_at"])
-
-        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 0, 5))):
-            response = self.client.get(reverse("board"))
-
-        self.assertEqual(response.status_code, 200)
-        self.previous_task.refresh_from_db()
-        self.template.refresh_from_db()
-        self.assertEqual(Task.objects.filter(recurring_template=self.template).count(), 1)
-        self.assertEqual(self.previous_task.status, TaskStatus.NEW)
-        self.assertIsNone(self.previous_task.completed_at)
-        self.assertEqual(self.previous_task.assigned_to, self.jordan)
-        self.assertEqual(self.previous_task.due_date, date(2026, 3, 13))
-        self.assertEqual(self.template.next_run_date, date(2026, 3, 20))
-
+        due_dates = list(Task.objects.filter(recurring_template=self.template).order_by("due_date", "pk").values_list("due_date", flat=True))
+        self.assertEqual(
+            due_dates,
+            [date(2026, 3, 13), date(2026, 3, 20), date(2026, 3, 27), date(2026, 4, 3)],
+        )
+        self.assertEqual(self.template.next_run_date, date(2026, 4, 10))
 
     def test_generate_recurring_tasks_backfills_legacy_recurring_tasks(self):
         legacy_task = Task.objects.create(
@@ -757,13 +754,11 @@ class RecurringTaskGenerationRotationTests(TestCase):
             recurrence_day_of_week=Weekday.TUESDAY,
         )
 
-        with patch("workboard.management.commands.generate_recurring_tasks.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 8, 0))):
-            call_command("generate_recurring_tasks")
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 13, 8, 0)))
 
         legacy_task.refresh_from_db()
         self.assertIsNotNone(legacy_task.recurring_template)
         self.assertEqual(legacy_task.recurring_template.assign_to, self.alex)
-
 
 
 class TaskParsingFallbackTests(TestCase):
@@ -1615,6 +1610,15 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
 
+    def test_board_overdue_view_includes_today_tasks_after_evening_cutoff(self):
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 18, 5))):
+            response = self.client.get(reverse("board"), {"saved_view": "overdue"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Overdue archive cleanup")
+        self.assertContains(response, "Front desk shift prep")
+        self.assertNotContains(response, "Waiting on vendor reply")
+
     def test_board_filter_bar_hides_schedule_and_status_controls(self):
         response = self.client.get(reverse("board"))
 
@@ -1766,6 +1770,118 @@ class MyTasksViewOrderingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Recent completed my task")
         self.assertNotContains(response, "Old completed my task")
+
+
+class MyTasksOverdueSectionTests(TestCase):
+    def setUp(self):
+        self.team = Team.objects.create(name="My Tasks Overdue", description="My Tasks overdue scope")
+        self.supervisor = User.objects.create_user(
+            username="mytasks-overdue-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            team=self.team,
+        )
+        self.student_supervisor = User.objects.create_user(
+            username="mytasks-overdue-lead",
+            password="password123",
+            role=UserRole.STUDENT_SUPERVISOR,
+            team=self.team,
+        )
+        self.student = User.objects.create_user(
+            username="mytasks-overdue-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            team=self.team,
+        )
+        self.other_student = User.objects.create_user(
+            username="mytasks-overdue-helper",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            team=self.team,
+        )
+        StudentWorkerProfile.objects.create(user=self.student_supervisor, display_name="Morgan Lead", email="lead@example.com")
+        StudentWorkerProfile.objects.create(user=self.student, display_name="Taylor Worker", email="worker@example.com")
+        StudentWorkerProfile.objects.create(user=self.other_student, display_name="Casey Helper", email="helper@example.com")
+        self.overdue_task = Task.objects.create(
+            team=self.team,
+            title="Team overdue task",
+            description="Needs follow up",
+            priority=Priority.HIGH,
+            status=TaskStatus.IN_PROGRESS,
+            due_date=date(2026, 3, 19),
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            board_order=1,
+        )
+        self.waiting_task = Task.objects.create(
+            team=self.team,
+            title="Waiting task for leads",
+            description="Waiting work",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.WAITING,
+            due_date=date(2026, 3, 22),
+            assigned_to=self.other_student,
+            created_by=self.supervisor,
+            board_order=1,
+        )
+        self.lead_task = Task.objects.create(
+            team=self.team,
+            title="Lead personal task",
+            description="Lead-owned task",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 22),
+            assigned_to=self.student_supervisor,
+            created_by=self.supervisor,
+            board_order=2,
+        )
+
+    def test_supervisor_my_tasks_shows_team_overdue_section_separately(self):
+        self.client.force_login(self.supervisor)
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Team overdue tasks")
+        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
+        grouped_titles = [task.title for column in response.context["grouped_tasks"] for task in column["tasks"]]
+        self.assertNotIn("Team overdue task", grouped_titles)
+        self.assertIn("Waiting task for leads", grouped_titles)
+
+    def test_student_supervisor_my_tasks_shows_team_overdue_section_separately(self):
+        self.client.force_login(self.student_supervisor)
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Team overdue tasks")
+        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
+        grouped_titles = [task.title for column in response.context["grouped_tasks"] for task in column["tasks"]]
+        self.assertNotIn("Team overdue task", grouped_titles)
+        self.assertIn("Lead personal task", grouped_titles)
+
+    def test_student_worker_does_not_get_team_overdue_section(self):
+        self.client.force_login(self.student)
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Team overdue tasks")
+        self.assertEqual(response.context["overdue_tasks"], [])
+
+    def test_supervisor_overdue_section_treats_due_today_tasks_as_overdue_after_cutoff(self):
+        self.overdue_task.due_date = date(2026, 3, 20)
+        self.overdue_task.save(update_fields=["due_date", "updated_at"])
+        self.client.force_login(self.supervisor)
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 18, 5))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task.title for task in response.context["overdue_tasks"]], ["Team overdue task"])
 
 
 class CompletedTasksViewTests(TestCase):

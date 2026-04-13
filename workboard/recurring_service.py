@@ -1,12 +1,15 @@
+from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from django.db.models import Max
 from django.utils import timezone
 
 from .audit_service import TaskAuditService
-from .models import RecurringTaskTemplate, Task, TaskStatus, User, UserRole
+from .models import RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole
 from .services import TaskAssignmentService
+
+RECURRING_RELEASE_TIME = time(18, 0)
 
 
 @dataclass
@@ -20,6 +23,29 @@ class RecurringRunPreview:
 
 
 class RecurringTaskService:
+    @staticmethod
+    def _release_deadline(run_date: date) -> datetime:
+        return timezone.make_aware(datetime.combine(run_date, RECURRING_RELEASE_TIME))
+
+    @staticmethod
+    def _previous_run_date(template: RecurringTaskTemplate, run_date: date) -> date:
+        if template.recurrence_pattern == "daily":
+            return run_date - timedelta(days=template.recurrence_interval)
+        if template.recurrence_pattern == "weekly":
+            return run_date - timedelta(weeks=template.recurrence_interval)
+        month_index = run_date.month - 1 - template.recurrence_interval
+        year = run_date.year + month_index // 12
+        month = month_index % 12 + 1
+        day = template.day_of_month or run_date.day
+        return date(year, month, min(day, monthrange(year, month)[1]))
+
+    @staticmethod
+    def _run_is_ready(template: RecurringTaskTemplate, *, local_now: datetime) -> bool:
+        # next_run_date stores the due date of the upcoming cycle. Release that
+        # cycle once the prior scheduled due day has crossed the evening cutoff.
+        release_date = RecurringTaskService._previous_run_date(template, template.next_run_date)
+        return local_now >= RecurringTaskService._release_deadline(release_date)
+
     @staticmethod
     def upcoming_run_dates(template: RecurringTaskTemplate, *, count: int = 5) -> list[date]:
         if count <= 0:
@@ -78,7 +104,35 @@ class RecurringTaskService:
         ) + 1
 
     @staticmethod
-    def _apply_template_to_task(task: Task, template: RecurringTaskTemplate, *, run_date: date, assignee: User | None, rotating_assignees: list[User], board_order: int) -> Task:
+    def _copy_source_task_context(source_task: Task | None, task: Task, *, template: RecurringTaskTemplate) -> None:
+        task.created_by = source_task.created_by if source_task and source_task.created_by_id else template.requested_by
+        task.raw_message = source_task.raw_message if source_task else ""
+        task.waiting_person = source_task.waiting_person if source_task else ""
+        task.respond_to_text = source_task.respond_to_text if source_task else ""
+
+    @staticmethod
+    def _copy_checklist_items(source_task: Task | None, task: Task) -> None:
+        if source_task is None:
+            return
+        for item in source_task.checklist_items.order_by('position', 'pk'):
+            TaskChecklistItem.objects.create(
+                task=task,
+                title=item.title,
+                is_completed=False,
+                position=item.position,
+            )
+
+    @staticmethod
+    def _apply_template_to_task(
+        task: Task,
+        template: RecurringTaskTemplate,
+        *,
+        run_date: date,
+        assignee: User | None,
+        rotating_assignees: list[User],
+        board_order: int,
+        source_task: Task | None = None,
+    ) -> Task:
         task.team = template.team
         task.title = template.title
         task.description = template.description
@@ -91,6 +145,7 @@ class RecurringTaskService:
         task.estimated_minutes = template.estimated_minutes
         task.assigned_to = assignee
         task.requested_by = template.requested_by
+        RecurringTaskService._copy_source_task_context(source_task, task, template=template)
         task.recurring_task = True
         task.recurring_template = template
         task.recurrence_pattern = template.recurrence_pattern
@@ -117,7 +172,6 @@ class RecurringTaskService:
 
         assigned_to = template.assign_to
         assignee_summary = ''
-        exclude_task_id = last_generated_task.pk if last_generated_task else None
         scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
 
         if assigned_to:
@@ -126,7 +180,6 @@ class RecurringTaskService:
                 scheduled_date=scheduled_date,
                 scheduled_start_time=template.scheduled_start_time,
                 scheduled_end_time=template.scheduled_end_time,
-                exclude_task_id=exclude_task_id,
             ):
                 assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but that scheduled window is currently unavailable.'
             else:
@@ -141,7 +194,6 @@ class RecurringTaskService:
                 scheduled_date=scheduled_date,
                 scheduled_start_time=template.scheduled_start_time,
                 scheduled_end_time=template.scheduled_end_time,
-                exclude_task_id=exclude_task_id,
                 team=template.team,
             )
             assigned_to = suggested_user
@@ -158,7 +210,6 @@ class RecurringTaskService:
             scheduled_date=scheduled_date,
             scheduled_start_time=template.scheduled_start_time,
             scheduled_end_time=template.scheduled_end_time,
-            exclude_task_id=exclude_task_id,
             team=template.team,
         )
         return RecurringRunPreview(
@@ -174,84 +225,52 @@ class RecurringTaskService:
     def run_template(template: RecurringTaskTemplate, *, run_date: date | None = None):
         run_date = run_date or template.next_run_date
         last_generated_task = RecurringTaskService._last_generated_task(template)
-        if last_generated_task and last_generated_task.status != TaskStatus.DONE:
-            return None, 'skipped'
-
         preview = RecurringTaskService.preview_next_run(template, run_date=run_date)
         next_order = RecurringTaskService._next_new_task_order(team=template.team)
         rotating_assignees = preview.rotating_assignees
 
-        if last_generated_task:
-            # Reopen the last completed run in place so its checklist and audit trail stay attached.
-            task = RecurringTaskService._apply_template_to_task(
-                last_generated_task,
-                template,
-                run_date=run_date,
-                assignee=preview.assignee,
-                rotating_assignees=rotating_assignees,
-                board_order=next_order,
-            )
-            task.save()
-            RecurringTaskService._sync_generated_task_memberships(
-                task,
-                fixed_additional_ids=preview.fixed_additional_ids,
-                rotating_assignees=rotating_assignees,
-            )
-            task.checklist_items.update(is_completed=False)
-            TaskAuditService.record_recurring_reopened(task, summary=f'Prepared recurring task for {run_date.isoformat()}.')
-            outcome = 'reopened'
-        else:
-            task = RecurringTaskService._apply_template_to_task(
-                Task(),
-                template,
-                run_date=run_date,
-                assignee=preview.assignee,
-                rotating_assignees=rotating_assignees,
-                board_order=next_order,
-            )
-            task.save()
-            RecurringTaskService._sync_generated_task_memberships(
-                task,
-                fixed_additional_ids=preview.fixed_additional_ids,
-                rotating_assignees=rotating_assignees,
-            )
-            TaskAuditService.record_recurring_reopened(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
-            outcome = 'created'
+        # Each recurring cycle becomes its own task so unfinished runs can stay
+        # visible while the next scheduled cycle is still released on time.
+        task = RecurringTaskService._apply_template_to_task(
+            Task(),
+            template,
+            run_date=run_date,
+            assignee=preview.assignee,
+            rotating_assignees=rotating_assignees,
+            board_order=next_order,
+            source_task=last_generated_task,
+        )
+        task.save()
+        RecurringTaskService._sync_generated_task_memberships(
+            task,
+            fixed_additional_ids=preview.fixed_additional_ids,
+            rotating_assignees=rotating_assignees,
+        )
+        RecurringTaskService._copy_checklist_items(last_generated_task, task)
+        TaskAuditService.record_recurring_reopened(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
 
         template.next_run_date = run_date
         template.advance_next_run_date()
         template.save(update_fields=['next_run_date', 'updated_at'])
-        return task, outcome
+        return task, 'created'
 
     @staticmethod
     def run_templates_ready_today(*, now=None) -> tuple[int, int]:
-        now = now or timezone.now()
-        run_date = timezone.localdate(now)
-        local_midnight = timezone.make_aware(datetime.combine(run_date, time.min))
+        local_now = timezone.localtime(now or timezone.now())
         created_count = 0
         reopened_count = 0
         templates = (
-            RecurringTaskTemplate.objects.filter(
-                active=True,
-                next_run_date__lte=run_date,
-            )
+            RecurringTaskTemplate.objects.filter(active=True)
             .prefetch_related('additional_assignees', 'generated_tasks')
             .distinct()
         )
         for template in templates:
-            last_generated_task = RecurringTaskService._last_generated_task(template)
-            if last_generated_task:
-                if (
-                    last_generated_task.status != TaskStatus.DONE
-                    or not last_generated_task.completed_at
-                    or last_generated_task.completed_at >= local_midnight
-                ):
-                    continue
-            _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
-            if outcome == 'created':
-                created_count += 1
-            elif outcome == 'reopened':
-                reopened_count += 1
+            while RecurringTaskService._run_is_ready(template, local_now=local_now):
+                _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
+                if outcome == 'created':
+                    created_count += 1
+                elif outcome == 'reopened':
+                    reopened_count += 1
         return created_count, reopened_count
 
     @staticmethod

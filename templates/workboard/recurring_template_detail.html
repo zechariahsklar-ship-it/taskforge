@@ -56,7 +56,7 @@
                 <dt>How TaskForge Chose It</dt><dd>{{ next_run_preview.assignee_summary }}</dd>
             </dl>
             {% if next_run_preview.current_task_open %}
-                <p class="warning-note">The current recurring task is still open, so TaskForge will not run this one again until that task is finished.</p>
+                <p class="warning-note">The latest recurring run is still open. Automatic releases can still queue the next scheduled cycle after its cutoff, but Run now stays disabled to avoid generating an extra copy.</p>
             {% endif %}
         </section>
 

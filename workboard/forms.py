@@ -244,13 +244,15 @@ def _parse_date_value(raw_value: str | None) -> date | None:
         return None
 
 
-def _worker_user_queryset(*, include_assignable_supervisors: bool = False, team=None):
+def _worker_user_queryset(*, include_assignable_supervisors: bool = False, team=None, teamless_only: bool = False):
     worker_filter = Q(role__in=UserRole.worker_roles())
     if include_assignable_supervisors:
         worker_filter |= Q(role=UserRole.SUPERVISOR, assignable_to_tasks=True)
     queryset = User.objects.filter(worker_filter)
     if team is not None:
         queryset = queryset.filter(team=team)
+    elif teamless_only:
+        queryset = queryset.filter(team__isnull=True)
     return queryset.order_by("first_name", "last_name", "username")
 
 
@@ -258,8 +260,8 @@ def _team_queryset():
     return Team.objects.order_by("name", "pk")
 
 
-def _configure_additional_assignees_field(field, *, help_text: str, team=None) -> None:
-    field.queryset = _worker_user_queryset(team=team)
+def _configure_additional_assignees_field(field, *, help_text: str, team=None, teamless_only: bool = False) -> None:
+    field.queryset = _worker_user_queryset(team=team, teamless_only=teamless_only)
     field.required = False
     field.widget = forms.CheckboxSelectMultiple(choices=field.choices)
     field.label = "Fixed additional assignees"
@@ -722,16 +724,22 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.fields["team"].label = "Team"
         self.fields["team"].required = True
         selected_team = self._resolve_selected_team()
+        restrict_to_teamless = bool(actor and not actor.is_admin and not actor.team_id and selected_team is None)
         if actor and not actor.is_admin:
             self.fields["team"].widget = forms.HiddenInput()
             self.fields["team"].required = False
-            self.initial["team"] = actor.team_id
-            selected_team = actor.team
+            self.initial["team"] = actor.team_id or getattr(selected_team, "pk", None)
+            if actor.team_id:
+                selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team owns this task."
             if selected_team:
                 self.initial.setdefault("team", selected_team.pk)
-        self.fields["assigned_to"].queryset = _worker_user_queryset(include_assignable_supervisors=True, team=selected_team)
+        self.fields["assigned_to"].queryset = _worker_user_queryset(
+            include_assignable_supervisors=True,
+            team=selected_team,
+            teamless_only=restrict_to_teamless,
+        )
         self.fields["assigned_to"].label = "Assign to"
         self.fields["assigned_to"].help_text = "Choose the main teammate for this task."
         self.fields["assigned_to"].label_from_instance = _user_choice_label
@@ -739,6 +747,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.fields["additional_assignees"],
             help_text="Pick any teammates who should always be added to this task.",
             team=selected_team,
+            teamless_only=restrict_to_teamless,
         )
         _configure_rotation_count_field(
             self.fields["rotating_additional_assignee_count"],
@@ -795,7 +804,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         return getattr(self, "cleaned_data", {}).get("task_schedule_blocks_by_date", {})
 
     def _resolve_selected_team(self):
-        if self.actor and not self.actor.is_admin:
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
             return self.actor.team
         if self.is_bound:
             raw_team_id = self.data.get(self.add_prefix("team"))
@@ -1131,10 +1140,14 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        if self.actor and not self.actor.is_admin:
+        allow_teamless_scope = bool(
+            (self.actor and not self.actor.is_admin and not self.actor.team_id)
+            or (getattr(self.instance, "pk", None) and getattr(self.instance, "team_id", None) is None)
+        )
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
             cleaned_data["team"] = self.actor.team
         team = cleaned_data.get("team")
-        if not team:
+        if not team and not allow_teamless_scope:
             self.add_error("team", "Choose which team owns this task.")
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
@@ -1356,14 +1369,16 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.actor = actor
         super().__init__(*args, **kwargs)
         selected_team = self._resolve_selected_team()
+        restrict_to_teamless = bool(actor and not actor.is_admin and not actor.team_id and selected_team is None)
         self.fields["team"].queryset = _team_queryset()
         self.fields["team"].required = True
         self.fields["team"].label = "Team"
         if actor and not actor.is_admin:
             self.fields["team"].widget = forms.HiddenInput()
             self.fields["team"].required = False
-            self.initial["team"] = actor.team_id
-            selected_team = actor.team
+            self.initial["team"] = actor.team_id or getattr(selected_team, "pk", None)
+            if actor.team_id:
+                selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team owns this recurring task."
             if selected_team:
@@ -1377,12 +1392,13 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
         self.fields["assign_to"].label = "Assign to"
         self.fields["assign_to"].help_text = "Choose the main teammate for this recurring task. Leave blank to rotate the main assignee automatically."
-        self.fields["assign_to"].queryset = _worker_user_queryset(team=selected_team)
+        self.fields["assign_to"].queryset = _worker_user_queryset(team=selected_team, teamless_only=restrict_to_teamless)
         self.fields["assign_to"].label_from_instance = _user_choice_label
         _configure_additional_assignees_field(
             self.fields["additional_assignees"],
             help_text="Pick any teammates who should always join each run of this recurring task.",
             team=selected_team,
+            teamless_only=restrict_to_teamless,
         )
         _configure_rotation_count_field(
             self.fields["rotating_additional_assignee_count"],
@@ -1409,7 +1425,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         return RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES
 
     def _resolve_selected_team(self):
-        if self.actor and not self.actor.is_admin:
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
             return self.actor.team
         if self.is_bound:
             raw_team_id = self.data.get(self.add_prefix("team"))
@@ -1424,10 +1440,14 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        if self.actor and not self.actor.is_admin:
+        allow_teamless_scope = bool(
+            (self.actor and not self.actor.is_admin and not self.actor.team_id)
+            or (getattr(self.instance, "pk", None) and getattr(self.instance, "team_id", None) is None)
+        )
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
             cleaned_data["team"] = self.actor.team
         team = cleaned_data.get("team")
-        if not team:
+        if not team and not allow_teamless_scope:
             self.add_error("team", "Choose which team owns this recurring task.")
         assign_to = cleaned_data.get("assign_to")
         additional_assignees = cleaned_data.get("additional_assignees")

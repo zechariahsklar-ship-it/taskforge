@@ -42,6 +42,32 @@
         </div>
     </form>
 </section>
+{% if overdue_tasks %}
+<section class="task-bucket">
+    <div class="task-bucket-header">
+        <div>
+            <h2 class="task-bucket-title">Team overdue tasks</h2>
+            <p class="meta board-help-text">These tasks are past due, or still open after 6:00 PM on their due day.</p>
+        </div>
+        <span class="meta">{{ overdue_tasks|length }}</span>
+    </div>
+    <div class="task-bucket-list">
+        {% for task in overdue_tasks %}
+            <a href="{% url 'task-detail' task.pk %}" class="task-card task-card-link board-task-card my-task-card">
+                <article>
+                    <h3 class="board-task-title">{{ task.title }}</h3>
+                    <div class="board-task-meta-row">
+                        <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
+                        <span class="meta">Status: {{ task.get_status_display }}</span>
+                        <span class="meta">Due: {{ task.board_due_date|date:"M j, Y" }}</span>
+                        <span class="meta">Assigned to: {{ task.assigned_to.display_label|default:"Unassigned" }}</span>
+                    </div>
+                </article>
+            </a>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
 <section class="my-tasks-groups" data-my-tasks-groups>
     {% for column in grouped_tasks %}
         <section class="task-bucket" data-column-status="{{ column.value }}">
