@@ -3466,11 +3466,11 @@ class ReportsViewTests(TestCase):
         self.assertEqual(summary["Open due by week end"], 2)
         self.assertEqual(summary["Recurring runs this week"], 1)
         self.assertContains(response, "Weekly report")
-        self.assertContains(response, "Past reports")
+        self.assertNotContains(response, "Past reports")
+        self.assertNotContains(response, "Report details")
         self.assertContains(response, "Export CSV")
         self.assertContains(response, "Taylor Reports")
         self.assertEqual(response.context["export_url"], f"{reverse('reports')}?period=week&anchor=2026-03-16&export=csv")
-        self.assertEqual(response.context["history_entries"][0]["start"], date(2026, 3, 16))
 
     def test_reports_view_supports_monthly_report_selection(self):
         with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
@@ -3533,7 +3533,6 @@ class ReportsViewTests(TestCase):
         self.assertEqual(summary["Due this month"], 2)
         self.assertEqual(summary["Open due by month end"], 1)
         self.assertEqual(summary["Recurring runs this month"], 1)
-        self.assertTrue(any(entry["is_selected"] and entry["start"] == date(2026, 2, 1) for entry in response.context["history_entries"]))
         self.assertContains(response, "Showing a past month")
 
     def test_reports_view_can_export_selected_report_as_csv(self):

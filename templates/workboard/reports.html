@@ -47,39 +47,6 @@
         </div>
     </form>
 </section>
-<section class="detail-grid report-grid">
-    <article class="card report-summary-card">
-        <div class="split-heading">
-            <h2>Past reports</h2>
-            <p class="meta">Recent {{ period_unit }}ly periods you can reopen.</p>
-        </div>
-        <ul>
-            {% for entry in history_entries %}
-                <li>
-                    <a href="{{ entry.href }}">
-                        {% if period == "month" %}
-                            {{ entry.start|date:"F Y" }}
-                        {% else %}
-                            {{ entry.start|date:"M j" }} to {{ entry.end|date:"M j, Y" }}
-                        {% endif %}
-                    </a>
-                    {% if entry.is_selected %}<span class="meta">Showing</span>{% endif %}
-                </li>
-            {% endfor %}
-        </ul>
-    </article>
-    <article class="card report-summary-card">
-        <h2>Report details</h2>
-        <dl class="detail-list">
-            <dt>Report type</dt><dd>{{ period_title }}</dd>
-            <dt>Range</dt><dd>{{ period_start|date:"M j, Y" }} to {{ period_end|date:"M j, Y" }}</dd>
-            <dt>Recurring tasks created in period</dt><dd>{{ recurring_generated_in_period }}</dd>
-            <dt>Active recurring templates now</dt><dd>{{ active_recurring_templates }}</dd>
-            <dt>Open assigned hours at period end</dt><dd>{{ total_assigned_hours }}</dd>
-            <dt>Report generated</dt><dd>{{ today|date:"M j, Y" }}</dd>
-        </dl>
-    </article>
-</section>
 <section class="report-metric-grid">
     {% for card in summary_cards %}
         <article class="card report-metric-card">

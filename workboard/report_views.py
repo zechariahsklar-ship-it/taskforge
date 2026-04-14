@@ -16,8 +16,6 @@ from .assignment_service import TaskAssignmentService
 
 REPORT_PERIOD_WEEK = "week"
 REPORT_PERIOD_MONTH = "month"
-REPORT_HISTORY_MIN_ITEMS = 8
-
 
 def _week_bounds(anchor):
     week_start = anchor - timedelta(days=anchor.weekday())
@@ -86,24 +84,6 @@ def _report_href(*, period, anchor, export=None):
     if export:
         params["export"] = export
     return f"{reverse('reports')}?{urlencode(params)}"
-
-
-def _history_entries(period, *, selected_start, today):
-    current_start = _normalize_period_anchor(period, today)
-    cursor = current_start
-    entries = []
-    while len(entries) < REPORT_HISTORY_MIN_ITEMS or cursor >= selected_start:
-        entry_start, entry_end = _period_bounds(period, cursor)
-        entries.append(
-            {
-                "start": entry_start,
-                "end": entry_end,
-                "href": _report_href(period=period, anchor=entry_start),
-                "is_selected": entry_start == selected_start,
-            }
-        )
-        cursor = _shift_period_anchor(cursor, period, -1)
-    return entries
 
 
 def _tasks_open_at_period_end(queryset, period_end_at):
@@ -205,7 +185,6 @@ def _build_report_context(request, *, today, period, selected_anchor):
         "total_assigned_hours": _hours_from_minutes(total_assigned_minutes),
         "recurring_generated_in_period": recurring_generated_in_period,
         "active_recurring_templates": active_recurring_templates,
-        "history_entries": _history_entries(period, selected_start=period_start, today=today),
         "export_url": _report_href(period=period, anchor=period_start, export="csv"),
         "current_period_url": _report_href(period=period, anchor=current_period_start),
         "older_period_url": _report_href(period=period, anchor=older_period_start),
