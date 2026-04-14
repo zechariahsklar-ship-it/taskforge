@@ -59,7 +59,6 @@ BOARD_MOVABLE_STATUSES = [
     TaskStatus.NEW,
     TaskStatus.IN_PROGRESS,
     TaskStatus.WAITING,
-    TaskStatus.REVIEW,
     TaskStatus.DONE,
 ]
 
@@ -68,7 +67,6 @@ BOARD_COLUMN_DEFINITIONS = [
     {"value": OVERDUE_COLUMN_VALUE, "label": "Overdue", "droppable": False, "is_overdue_column": True},
     {"value": TaskStatus.IN_PROGRESS, "label": TaskStatus.IN_PROGRESS.label, "droppable": True, "is_overdue_column": False},
     {"value": TaskStatus.WAITING, "label": TaskStatus.WAITING.label, "droppable": True, "is_overdue_column": False},
-    {"value": TaskStatus.REVIEW, "label": TaskStatus.REVIEW.label, "droppable": True, "is_overdue_column": False},
     {"value": TaskStatus.DONE, "label": TaskStatus.DONE.label, "droppable": True, "is_overdue_column": False},
 ]
 
@@ -88,7 +86,20 @@ WEEKLY_SCHEDULE_FIELDS = [
 
 
 def _board_bucket_status(status: str) -> str:
-    return TaskStatus.NEW if status == TaskStatus.ASSIGNED else status
+    if status == TaskStatus.ASSIGNED:
+        return TaskStatus.NEW
+    if status == TaskStatus.REVIEW:
+        return TaskStatus.WAITING
+    return status
+
+
+def _bucket_statuses(status: str) -> tuple[str, ...]:
+    bucket_status = _board_bucket_status(status)
+    if bucket_status == TaskStatus.NEW:
+        return (TaskStatus.NEW, TaskStatus.ASSIGNED)
+    if bucket_status == TaskStatus.WAITING:
+        return (TaskStatus.WAITING, TaskStatus.REVIEW)
+    return (bucket_status,)
 
 
 def _process_ready_recurring_tasks(request) -> None:
@@ -209,7 +220,7 @@ def _team_scoped_task_queryset(user: User, queryset=None):
 
 
 def _next_board_order(status: str, exclude_pk: int | None = None, team: Team | None = None) -> int:
-    queryset = Task.objects.filter(status=status)
+    queryset = Task.objects.filter(status__in=_bucket_statuses(status))
     if team is not None:
         queryset = queryset.filter(team=team)
     if exclude_pk:
@@ -218,16 +229,21 @@ def _next_board_order(status: str, exclude_pk: int | None = None, team: Team | N
 
 
 def _ordered_status_tasks(status: str, *, exclude_pk: int | None = None, team: Team | None = None) -> list[Task]:
-    queryset = Task.objects.filter(status=status)
+    queryset = Task.objects.filter(status__in=_bucket_statuses(status))
     if team is not None:
         queryset = queryset.filter(team=team)
     if exclude_pk:
         queryset = queryset.exclude(pk=exclude_pk)
-    return list(queryset.order_by(F("board_order").asc(nulls_last=True), "due_date", "-created_at", "pk"))
+    return list(queryset.order_by(F("board_order").asc(nulls_last=True), "status", "due_date", "-created_at", "pk"))
 
 
 def _append_task_to_status(task: Task, previous_status: str | None = None, previous_team_id: int | None = None) -> Task:
-    if task.board_order is not None and previous_status == task.status and previous_team_id == task.team_id:
+    if (
+        task.board_order is not None
+        and previous_team_id == task.team_id
+        and previous_status is not None
+        and _board_bucket_status(previous_status) == _board_bucket_status(task.status)
+    ):
         return task
     task.board_order = _next_board_order(task.status, exclude_pk=task.pk, team=task.team)
     return task
@@ -289,6 +305,17 @@ def _overdue_bucket_sort_key(task: Task):
     )
 
 
+def _board_bucket_sort_key(task: Task):
+    return (
+        task.board_order is None,
+        task.board_order or 0,
+        task.status,
+        task.due_date or date.max,
+        -task.created_at.timestamp(),
+        task.pk,
+    )
+
+
 def _prepare_tasks_for_board(tasks: list[Task], *, now=None) -> list[Task]:
     local_now = timezone.localtime(now or timezone.now())
     for task in tasks:
@@ -305,6 +332,8 @@ def _group_tasks_for_board(tasks: list[Task], *, now=None) -> list[dict]:
         column_tasks = [task for task in prepared_tasks if task.status_bucket == definition["value"]]
         if definition["value"] == OVERDUE_COLUMN_VALUE:
             column_tasks.sort(key=_overdue_bucket_sort_key)
+        else:
+            column_tasks.sort(key=_board_bucket_sort_key)
         grouped_columns.append({**definition, "tasks": column_tasks})
     return grouped_columns
 
@@ -336,8 +365,16 @@ def _resequence_status_tasks(tasks: list[Task], status: str) -> None:
             item.save(update_fields=update_fields)
 
 
+def _resequence_bucket_tasks(tasks: list[Task]) -> None:
+    for index, item in enumerate(tasks, start=1):
+        if item.board_order == index:
+            continue
+        item.board_order = index
+        item.save(update_fields=["board_order", "updated_at"])
+
+
 def _close_status_gap(status: str, *, exclude_pk: int, team: Team | None = None) -> None:
-    _resequence_status_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk, team=team), status)
+    _resequence_bucket_tasks(_ordered_status_tasks(status, exclude_pk=exclude_pk, team=team))
 
 
 def _ordered_recurring_templates(*, exclude_pk: int | None = None, team: Team | None = None) -> list[RecurringTaskTemplate]:
@@ -976,6 +1013,9 @@ def board_task_move_view(request, pk):
     if new_status not in BOARD_MOVABLE_STATUSES:
         return HttpResponseBadRequest("Invalid status.")
 
+    previous_status = task.status
+    previous_bucket = _board_bucket_status(previous_status)
+    new_bucket = _board_bucket_status(new_status)
     before_task_id = request.POST.get("before_task_id", "").strip()
     ordered_target_tasks = _ordered_status_tasks(new_status, exclude_pk=task.pk, team=task.team)
     if before_task_id:
@@ -990,7 +1030,6 @@ def board_task_move_view(request, pk):
     else:
         insert_index = len(ordered_target_tasks)
 
-    previous_status = task.status
     ordered_target_tasks.insert(insert_index, task)
 
     task.status = new_status
@@ -1000,9 +1039,9 @@ def board_task_move_view(request, pk):
         task.completed_at = None
     task.save(update_fields=["status", "completed_at", "updated_at"])
 
-    _resequence_status_tasks(ordered_target_tasks, new_status)
-    if previous_status != new_status:
-        _resequence_status_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk, team=task.team), previous_status)
+    _resequence_bucket_tasks(ordered_target_tasks)
+    if previous_bucket != new_bucket:
+        _resequence_bucket_tasks(_ordered_status_tasks(previous_status, exclude_pk=task.pk, team=task.team))
     TaskAuditService.record_updated(task, actor=request.user, before_snapshot=before_snapshot)
 
     return JsonResponse(
@@ -1248,6 +1287,7 @@ def task_detail_view(request, pk):
             status_form = TaskUpdateForm(request.POST, instance=task)
             if status_form.is_valid():
                 previous_status = task.status
+                previous_bucket = _board_bucket_status(previous_status)
                 updated_task = status_form.save(commit=False)
                 if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                     updated_task.mark_complete()
@@ -1255,7 +1295,7 @@ def task_detail_view(request, pk):
                     updated_task.completed_at = None
                 updated_task = _append_task_to_status(updated_task, previous_status=previous_status, previous_team_id=task.team_id)
                 updated_task.save()
-                if previous_status != updated_task.status:
+                if previous_bucket != _board_bucket_status(updated_task.status):
                     _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=updated_task.team)
                 TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
                 messages.success(request, "Task status updated.")
@@ -1411,6 +1451,7 @@ def task_edit_view(request, pk):
     task = get_object_or_404(_team_scoped_task_queryset(request.user, Task.objects.all()), pk=pk)
     if request.method == "POST":
         previous_status = task.status
+        previous_bucket = _board_bucket_status(previous_status)
         previous_team_id = task.team_id
         original_estimated_minutes = task.estimated_minutes
         before_snapshot = TaskAuditService.snapshot(task)
@@ -1440,7 +1481,7 @@ def task_edit_view(request, pk):
                 corrected_by=request.user,
                 source="task_edit",
             )
-            if previous_status != updated_task.status or previous_team_id != updated_task.team_id:
+            if previous_bucket != _board_bucket_status(updated_task.status) or previous_team_id != updated_task.team_id:
                 _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=Team.objects.filter(pk=previous_team_id).first())
             form.save_m2m()
             updated_task = _apply_task_additional_assignee_settings(updated_task)

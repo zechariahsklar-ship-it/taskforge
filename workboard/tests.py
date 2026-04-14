@@ -1729,7 +1729,7 @@ class BoardFilterAndAlertTests(TestCase):
         grouped_tasks = response.context["grouped_tasks"]
         self.assertEqual(
             [column["value"] for column in grouped_tasks],
-            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.REVIEW, TaskStatus.DONE],
+            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.DONE],
         )
         overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
         new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
@@ -1823,10 +1823,10 @@ class MyTasksViewOrderingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         grouped_tasks = response.context["grouped_tasks"]
         new_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.NEW)
-        review_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.REVIEW)
+        waiting_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.WAITING)
 
         self.assertEqual([task.title for task in new_column["tasks"]], ["First visible task", "Second visible task"])
-        self.assertEqual([task.title for task in review_column["tasks"]], ["Review visible task"])
+        self.assertEqual([task.title for task in waiting_column["tasks"]], ["Review visible task"])
         self.assertContains(response, "Time: 20 min")
         self.assertContains(response, "Time: 45 min")
 
@@ -1974,7 +1974,7 @@ class MyTasksOverdueSectionTests(TestCase):
         grouped_tasks = response.context["grouped_tasks"]
         self.assertEqual(
             [column["value"] for column in grouped_tasks],
-            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.REVIEW, TaskStatus.DONE],
+            [TaskStatus.NEW, "overdue", TaskStatus.IN_PROGRESS, TaskStatus.WAITING, TaskStatus.DONE],
         )
         overdue_column = next(column for column in grouped_tasks if column["value"] == "overdue")
         waiting_column = next(column for column in grouped_tasks if column["value"] == TaskStatus.WAITING)
@@ -2291,14 +2291,14 @@ class BoardTaskMoveTests(TestCase):
         self.client.force_login(self.supervisor)
         response = self.client.post(
             reverse("board-task-move", args=[self.task.pk]),
-            {"status": TaskStatus.REVIEW, "before_task_id": str(self.review_task.pk)},
+            {"status": TaskStatus.WAITING, "before_task_id": str(self.review_task.pk)},
         )
         self.assertEqual(response.status_code, 200)
         self.task.refresh_from_db()
         self.review_task.refresh_from_db()
         self.second_task.refresh_from_db()
         self.third_task.refresh_from_db()
-        self.assertEqual(self.task.status, TaskStatus.REVIEW)
+        self.assertEqual(self.task.status, TaskStatus.WAITING)
         self.assertEqual(self.task.board_order, 1)
         self.assertEqual(self.review_task.board_order, 2)
         self.assertEqual(self.second_task.board_order, 1)
