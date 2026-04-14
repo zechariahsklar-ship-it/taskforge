@@ -249,7 +249,7 @@ def _task_board_queryset():
         "requested_by",
         "created_by",
         "rotating_additional_assignee",
-    ).prefetch_related("additional_assignees", "rotating_additional_assignees", "scheduled_blocks")
+    ).prefetch_related("additional_assignees", "rotating_additional_assignees", "required_worker_tags", "scheduled_blocks")
 
 
 def _task_schedule_blocks_by_date(task: Task) -> dict:
@@ -387,6 +387,7 @@ def _choose_rotating_additional_assignees(
     task_window_blocks=None,
     exclude_task_id=None,
     team=None,
+    required_tag_ids=None,
 ) -> list[User]:
     excluded_ids = {user_id for user_id in (fixed_additional_ids or []) if user_id}
     if assigned_to_id:
@@ -405,6 +406,7 @@ def _choose_rotating_additional_assignees(
         task_window_blocks=task_window_blocks,
         exclude_task_id=exclude_task_id,
         team=team,
+        required_tag_ids=required_tag_ids,
     )
 
 
@@ -415,6 +417,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
     fixed_additional_ids = list(task.additional_assignees.values_list("pk", flat=True))
     rotation_count = task.rotating_additional_assignee_count or 0
     task_window_blocks = _task_schedule_blocks_by_date(task)
+    required_tag_ids = list(task.required_worker_tags.values_list("pk", flat=True))
     rotating_assignees = _choose_rotating_additional_assignees(
         due_date=task.due_date,
         estimated_minutes=task.estimated_minutes,
@@ -429,6 +432,7 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
         task_window_blocks=task_window_blocks,
         exclude_task_id=task.pk,
         team=task.team,
+        required_tag_ids=required_tag_ids,
     )
     task.rotate_additional_assignee = rotation_count > 0
     task.rotating_additional_assignee = rotating_assignees[0] if rotating_assignees else None
@@ -459,6 +463,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
     desired_next_run = _next_recurring_run_from_task(task)
     assignee = _recurring_assignee_from_task(task)
     fixed_additional_assignee_ids = list(task.additional_assignees.exclude(pk=task.assigned_to_id).values_list("pk", flat=True))
+    required_tag_ids = list(task.required_worker_tags.values_list("pk", flat=True))
     template = task.recurring_template
 
     if template is None:
@@ -483,6 +488,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
             active=True,
         )
         template.additional_assignees.set(fixed_additional_assignee_ids)
+        template.required_worker_tags.set(required_tag_ids)
         task.recurring_template = template
         task.save(update_fields=["recurring_template", "updated_at"])
         return task
@@ -514,6 +520,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
         template.next_run_date = desired_next_run
     template.save()
     template.additional_assignees.set(fixed_additional_assignee_ids)
+    template.required_worker_tags.set(required_tag_ids)
     return task
 
 
@@ -523,6 +530,8 @@ def _reassign_task_assignee_for_updated_schedule(*, form, request_user: User, ta
     if not form.reassign_unavailable_assignee or task.assigned_to:
         return ""
 
+    required_worker_tags = form.cleaned_data.get("required_worker_tags")
+    required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
     suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
         due_date=task.due_date,
         estimated_minutes=task.estimated_minutes,
@@ -533,6 +542,7 @@ def _reassign_task_assignee_for_updated_schedule(*, form, request_user: User, ta
         task_window_blocks=task_window_blocks,
         exclude_task_id=task.pk,
         team=task.team,
+        required_tag_ids=required_tag_ids,
     )
     task.assigned_to = suggested_user
     return form.reassigned_assignee_label
@@ -1112,6 +1122,8 @@ def task_intake_review_view(request, pk):
             task = _ensure_task_due_date(task)
             task = _append_task_to_status(task, previous_team_id=task.team_id)
             if not task.assigned_to:
+                required_worker_tags = form.cleaned_data.get("required_worker_tags")
+                required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
                     estimated_minutes=task.estimated_minutes,
@@ -1121,6 +1133,7 @@ def task_intake_review_view(request, pk):
                     scheduled_end_time=task.scheduled_end_time,
                     task_window_blocks=task_window_blocks,
                     team=task.team,
+                    required_tag_ids=required_tag_ids,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -1185,6 +1198,8 @@ def task_create_view(request):
             task = _ensure_task_due_date(task)
             task = _append_task_to_status(task, previous_team_id=task.team_id)
             if not task.assigned_to:
+                required_worker_tags = form.cleaned_data.get("required_worker_tags")
+                required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
                 suggested_user, _, _ = TaskAssignmentService.suggest_assignee(
                     due_date=task.due_date,
                     estimated_minutes=task.estimated_minutes,
@@ -1194,6 +1209,7 @@ def task_create_view(request):
                     scheduled_end_time=task.scheduled_end_time,
                     task_window_blocks=task_window_blocks,
                     team=task.team,
+                    required_tag_ids=required_tag_ids,
                 )
                 task.assigned_to = suggested_user
             if task.status == TaskStatus.DONE and not task.completed_at:
@@ -1431,7 +1447,7 @@ def task_edit_view(request, pk):
             updated_task = _sync_task_recurring_template(updated_task)
             TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
             if reassigned_from and updated_task.assigned_to:
-                messages.info(request, f"{reassigned_from} did not have enough scheduled availability for those task windows, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
+                messages.info(request, f"{reassigned_from} {form.reassignment_reason}, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:

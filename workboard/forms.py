@@ -24,6 +24,7 @@ from .models import (
     User,
     UserRole,
     Weekday,
+    WorkerTag,
 )
 from .services import TaskAssignmentService
 
@@ -260,6 +261,22 @@ def _team_queryset():
     return Team.objects.order_by("name", "pk")
 
 
+def _worker_tag_queryset(*, team=None):
+    queryset = WorkerTag.objects.select_related("team").order_by("name", "pk")
+    if team is None:
+        return queryset
+    return queryset.filter(team=team)
+
+
+def _configure_worker_tags_field(field, *, team=None, label: str, help_text: str = "") -> None:
+    field.queryset = _worker_tag_queryset(team=team)
+    field.required = False
+    field.widget = forms.CheckboxSelectMultiple(choices=field.choices)
+    field.label = label
+    field.help_text = help_text
+    field.label_from_instance = lambda tag: tag.name if team is not None else (f"{tag.name} ({tag.team.name})" if tag.team_id else tag.name)
+
+
 def _configure_additional_assignees_field(field, *, help_text: str, team=None, teamless_only: bool = False) -> None:
     field.queryset = _worker_user_queryset(team=team, teamless_only=teamless_only)
     field.required = False
@@ -286,6 +303,7 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
         fields = [
             "email",
             "active_status",
+            "tags",
             "skill_notes",
         ]
         widgets = {
@@ -295,6 +313,7 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
     def __init__(self, *args, actor=None, **kwargs):
         self.actor = actor
         super().__init__(*args, **kwargs)
+        selected_team = self._resolve_selected_team()
         self.fields["email"].required = False
         self.fields["email"].help_text = ""
         if not getattr(self.instance, "pk", None):
@@ -309,9 +328,33 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
         if actor and not actor.is_admin:
             self.fields["team"].widget = forms.HiddenInput()
             self.fields["team"].required = False
-            self.initial["team"] = actor.team_id
+            self.initial["team"] = actor.team_id or getattr(selected_team, "pk", None)
+            if actor.team_id:
+                selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team this person belongs to."
+            if selected_team:
+                self.initial.setdefault("team", selected_team.pk)
+        _configure_worker_tags_field(
+            self.fields["tags"],
+            team=selected_team,
+            label="Worker tags",
+            help_text="Select any tags that describe the kinds of work this teammate can take.",
+        )
+
+    def _resolve_selected_team(self):
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
+            return self.actor.team
+        if self.is_bound:
+            raw_team_id = self.data.get(self.add_prefix("team"))
+            if raw_team_id:
+                return _team_queryset().filter(pk=raw_team_id).first()
+        for candidate in (self.initial.get("team"), getattr(getattr(self.instance, "user", None), "team", None), getattr(self.actor, "team", None)):
+            if isinstance(candidate, Team):
+                return candidate
+            if candidate:
+                return _team_queryset().filter(pk=candidate).first()
+        return None
 
     def clean_team(self):
         if self.actor and not self.actor.is_admin:
@@ -320,6 +363,16 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
         if not team:
             raise forms.ValidationError("Choose a team for this person.")
         return team
+
+    def clean(self):
+        cleaned_data = super().clean()
+        team = cleaned_data.get("team")
+        tags = cleaned_data.get("tags")
+        if tags:
+            mismatched_tags = [tag.name for tag in tags if team and tag.team_id != team.id]
+            if mismatched_tags:
+                self.add_error("tags", "Not on that team: " + ", ".join(mismatched_tags))
+        return cleaned_data
 
 
 def _serialize_schedule_segments(blocks):
@@ -700,6 +753,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             "raw_due_text",
             "respond_to_text",
             "estimated_minutes",
+            "required_worker_tags",
             "assigned_to",
             "additional_assignees",
             "rotating_additional_assignee_count",
@@ -718,6 +772,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.actor = actor
         self.reassign_unavailable_assignee = False
         self.reassigned_assignee_label = ""
+        self.reassignment_reason = ""
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["team"].queryset = _team_queryset()
@@ -735,6 +790,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.fields["team"].help_text = "Choose which team owns this task."
             if selected_team:
                 self.initial.setdefault("team", selected_team.pk)
+        _configure_worker_tags_field(
+            self.fields["required_worker_tags"],
+            team=selected_team,
+            label="Required worker tags",
+            help_text="Only teammates with every selected tag can be assigned to this task.",
+        )
         self.fields["assigned_to"].queryset = _worker_user_queryset(
             include_assignable_supervisors=True,
             team=selected_team,
@@ -1096,10 +1157,13 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
         self.reassign_unavailable_assignee = False
         self.reassigned_assignee_label = ""
+        self.reassignment_reason = ""
 
         exclude_task_id = self.instance.pk if getattr(self.instance, "pk", None) else None
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
+        required_worker_tags = cleaned_data.get("required_worker_tags")
+        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
         due_date = cleaned_data.get("due_date")
         estimated_minutes = cleaned_data.get("estimated_minutes")
 
@@ -1109,6 +1173,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             estimated_minutes=estimated_minutes,
             task_window_blocks=task_schedule_blocks,
             exclude_task_id=exclude_task_id,
+            required_tag_ids=required_tag_ids,
         ):
             preserved_existing_assignee = bool(
                 getattr(self.instance, "pk", None)
@@ -1120,6 +1185,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 cleaned_data["assigned_to"] = None
                 self.reassign_unavailable_assignee = True
                 self.reassigned_assignee_label = assigned_to.display_label
+                self.reassignment_reason = "did not have enough scheduled availability for those task windows"
                 assigned_to = None
             else:
                 self.add_error("assigned_to", f"{assigned_to.display_label} does not have enough scheduled availability during those task windows.")
@@ -1132,6 +1198,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 estimated_minutes=estimated_minutes,
                 task_window_blocks=task_schedule_blocks,
                 exclude_task_id=exclude_task_id,
+                required_tag_ids=required_tag_ids,
             ):
                 unavailable_additional.append(teammate.display_label)
         if unavailable_additional:
@@ -1151,12 +1218,44 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.add_error("team", "Choose which team owns this task.")
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
+        required_worker_tags = cleaned_data.get("required_worker_tags")
+        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
+        if required_worker_tags:
+            mismatched_tags = [tag.name for tag in required_worker_tags if team and tag.team_id != team.id]
+            if mismatched_tags:
+                self.add_error("required_worker_tags", "Not on that team: " + ", ".join(mismatched_tags))
         if assigned_to and team and assigned_to.team_id != team.id:
             self.add_error("assigned_to", f"{assigned_to.display_label} is not on that team.")
+        if assigned_to and assigned_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_matches_required_tags(
+            assigned_to,
+            required_tag_ids=required_tag_ids,
+        ):
+            missing_tags = TaskAssignmentService.missing_required_tag_names(assigned_to, required_tag_ids=required_tag_ids)
+            preserved_existing_assignee = bool(
+                getattr(self.instance, "pk", None)
+                and self.instance.assigned_to_id == assigned_to.pk
+            )
+            if preserved_existing_assignee:
+                cleaned_data["assigned_to"] = None
+                self.reassign_unavailable_assignee = True
+                self.reassigned_assignee_label = assigned_to.display_label
+                self.reassignment_reason = "no longer matches the required worker tags"
+                assigned_to = None
+            else:
+                self.add_error("assigned_to", f"{assigned_to.display_label} is missing these required worker tags: {', '.join(missing_tags)}.")
         if additional_assignees:
             mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
             if mismatched_teammates:
                 self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
+            missing_tag_labels = []
+            for teammate in additional_assignees:
+                if teammate.role not in UserRole.worker_roles():
+                    continue
+                missing_tags = TaskAssignmentService.missing_required_tag_names(teammate, required_tag_ids=required_tag_ids)
+                if missing_tags:
+                    missing_tag_labels.append(f"{teammate.display_label} ({', '.join(missing_tags)})")
+            if missing_tag_labels:
+                self.add_error("additional_assignees", "Missing required worker tags: " + ", ".join(missing_tag_labels))
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
@@ -1226,6 +1325,7 @@ class TaskManualForm(TaskForm):
             "scheduled_end_time",
             "respond_to_text",
             "estimated_minutes",
+            "required_worker_tags",
             "assigned_to",
             "additional_assignees",
             "rotating_additional_assignee_count",
@@ -1294,6 +1394,67 @@ class TeamForm(StyledFormMixin, forms.ModelForm):
         widgets = {"description": forms.Textarea(attrs={"rows": 3})}
 
 
+class WorkerTagForm(StyledFormMixin, forms.ModelForm):
+    team = forms.ModelChoiceField(queryset=Team.objects.none(), required=False)
+
+    class Meta:
+        model = WorkerTag
+        fields = ["team", "name"]
+
+    def __init__(self, *args, actor=None, **kwargs):
+        self.actor = actor
+        super().__init__(*args, **kwargs)
+        selected_team = self._resolve_selected_team()
+        self.fields["team"].queryset = _team_queryset()
+        self.fields["team"].label = "Team"
+        self.fields["team"].required = True
+        self.fields["name"].label = "Tag name"
+        self.fields["name"].help_text = ""
+        if actor and not actor.is_admin:
+            self.fields["team"].widget = forms.HiddenInput()
+            self.fields["team"].required = False
+            self.initial["team"] = actor.team_id or getattr(selected_team, "pk", None)
+            if actor.team_id:
+                selected_team = actor.team
+        elif selected_team:
+            self.initial.setdefault("team", selected_team.pk)
+
+    def _resolve_selected_team(self):
+        if self.actor and not self.actor.is_admin and self.actor.team_id:
+            return self.actor.team
+        if self.is_bound:
+            raw_team_id = self.data.get(self.add_prefix("team"))
+            if raw_team_id:
+                return _team_queryset().filter(pk=raw_team_id).first()
+        for candidate in (self.initial.get("team"), getattr(self.instance, "team", None), getattr(self.actor, "team", None)):
+            if isinstance(candidate, Team):
+                return candidate
+            if candidate:
+                return _team_queryset().filter(pk=candidate).first()
+        return None
+
+    def clean_team(self):
+        if self.actor and not self.actor.is_admin:
+            return self.actor.team
+        team = self.cleaned_data.get("team")
+        if not team:
+            raise forms.ValidationError("Choose a team for this tag.")
+        return team
+
+    def clean(self):
+        cleaned_data = super().clean()
+        team = cleaned_data.get("team")
+        name = (cleaned_data.get("name") or "").strip()
+        cleaned_data["name"] = name
+        if name and team:
+            duplicate_tags = WorkerTag.objects.filter(team=team, name__iexact=name)
+            if getattr(self.instance, "pk", None):
+                duplicate_tags = duplicate_tags.exclude(pk=self.instance.pk)
+            if duplicate_tags.exists():
+                self.add_error("name", "That tag name already exists on this team.")
+        return cleaned_data
+
+
 class TaskNoteForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = TaskNote
@@ -1352,6 +1513,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             "estimated_minutes",
             "scheduled_start_time",
             "scheduled_end_time",
+            "required_worker_tags",
             "assign_to",
             "additional_assignees",
             "rotating_additional_assignee_count",
@@ -1390,6 +1552,12 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["scheduled_start_time"].help_text = "Optional. Generated tasks will use this start time on each run."
         self.fields["scheduled_end_time"].label = "Scheduled end time"
         self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
+        _configure_worker_tags_field(
+            self.fields["required_worker_tags"],
+            team=selected_team,
+            label="Required worker tags",
+            help_text="Only teammates with every selected tag can be assigned to this recurring task.",
+        )
         self.fields["assign_to"].label = "Assign to"
         self.fields["assign_to"].help_text = "Choose the main teammate for this recurring task. Leave blank to rotate the main assignee automatically."
         self.fields["assign_to"].queryset = _worker_user_queryset(team=selected_team, teamless_only=restrict_to_teamless)
@@ -1451,12 +1619,33 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             self.add_error("team", "Choose which team owns this recurring task.")
         assign_to = cleaned_data.get("assign_to")
         additional_assignees = cleaned_data.get("additional_assignees")
+        required_worker_tags = cleaned_data.get("required_worker_tags")
+        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
+        if required_worker_tags:
+            mismatched_tags = [tag.name for tag in required_worker_tags if team and tag.team_id != team.id]
+            if mismatched_tags:
+                self.add_error("required_worker_tags", "Not on that team: " + ", ".join(mismatched_tags))
         if assign_to and team and assign_to.team_id != team.id:
             self.add_error("assign_to", f"{assign_to.display_label} is not on that team.")
+        if assign_to and assign_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_matches_required_tags(
+            assign_to,
+            required_tag_ids=required_tag_ids,
+        ):
+            missing_tags = TaskAssignmentService.missing_required_tag_names(assign_to, required_tag_ids=required_tag_ids)
+            self.add_error("assign_to", f"{assign_to.display_label} is missing these required worker tags: {', '.join(missing_tags)}.")
         if additional_assignees:
             mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
             if mismatched_teammates:
                 self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
+            missing_tag_labels = []
+            for teammate in additional_assignees:
+                if teammate.role not in UserRole.worker_roles():
+                    continue
+                missing_tags = TaskAssignmentService.missing_required_tag_names(teammate, required_tag_ids=required_tag_ids)
+                if missing_tags:
+                    missing_tag_labels.append(f"{teammate.display_label} ({', '.join(missing_tags)})")
+            if missing_tag_labels:
+                self.add_error("additional_assignees", "Missing required worker tags: " + ", ".join(missing_tag_labels))
         if assign_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0

@@ -14,6 +14,7 @@ from .models import (
     TaskNote,
     Team,
     User,
+    WorkerTag,
 )
 
 
@@ -44,6 +45,14 @@ class UserAdmin(DjangoUserAdmin):
 class StudentWorkerProfileAdmin(admin.ModelAdmin):
     list_display = ("display_name", "email", "active_status", "user")
     search_fields = ("display_name", "email", "user__username")
+    filter_horizontal = ("tags",)
+
+
+@admin.register(WorkerTag)
+class WorkerTagAdmin(admin.ModelAdmin):
+    list_display = ("name", "team", "created_at")
+    list_filter = ("team",)
+    search_fields = ("name", "team__name")
 
 
 @admin.register(StudentAvailability)
@@ -91,7 +100,7 @@ class TaskAdmin(admin.ModelAdmin):
     )
     list_filter = ("team", "priority", "status", "recurring_task")
     search_fields = ("title", "description", "raw_message")
-    filter_horizontal = ("additional_assignees",)
+    filter_horizontal = ("required_worker_tags", "additional_assignees")
     inlines = [TaskChecklistItemInline, TaskAttachmentInline, TaskAuditEventInline, TaskNoteInline]
 
 

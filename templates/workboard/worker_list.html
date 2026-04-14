@@ -9,6 +9,7 @@
         {% if request.user.is_admin %}
             <a class="button-link" href="{% url 'team-create' %}">Add team</a>
         {% endif %}
+        <a class="button-link" href="{% url 'worker-tag-create' %}">Add worker tag</a>
         <a class="button-link" href="{% url 'worker-create' %}">Add student</a>
         <a class="button-link" href="{% url 'student-supervisor-create' %}">Add student supervisor</a>
         <a class="button-link" href="{% url 'supervisor-create' %}">Add supervisor</a>
@@ -46,6 +47,35 @@
 </section>
 {% endif %}
 <section class="table-card">
+    <h2>Worker tags</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Tag</th>
+                {% if show_tag_team_column %}<th>Team</th>{% endif %}
+                <th>Workers</th>
+                <th>Tasks</th>
+                <th>Recurring</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for worker_tag in worker_tags %}
+                <tr>
+                    <td>{{ worker_tag.name }}</td>
+                    {% if show_tag_team_column %}<td>{{ worker_tag.team.name|default:"-" }}</td>{% endif %}
+                    <td>{{ worker_tag.worker_count }}</td>
+                    <td>{{ worker_tag.task_count }}</td>
+                    <td>{{ worker_tag.recurring_count }}</td>
+                    <td><a href="{% url 'worker-tag-edit' worker_tag.pk %}">Edit tag</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="{% if show_tag_team_column %}6{% else %}5{% endif %}">No worker tags yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+<section class="table-card">
     <h2>Student workers</h2>
     <table>
         <thead>
@@ -54,6 +84,7 @@
                 {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
+                <th>Tags</th>
                 <th>Open Tasks</th>
                 <th>Estimated Minutes</th>
                 <th>Actions</th>
@@ -66,6 +97,7 @@
                     {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td>{{ item.profile.tag_labels }}</td>
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
@@ -77,7 +109,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="{% if show_team_column %}7{% else %}6{% endif %}">No student workers yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student workers yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>
@@ -91,6 +123,7 @@
                 {% if show_team_column %}<th>Team</th>{% endif %}
                 <th>Email</th>
                 <th>Active</th>
+                <th>Tags</th>
                 <th>Open Tasks</th>
                 <th>Estimated Minutes</th>
                 <th>Actions</th>
@@ -103,6 +136,7 @@
                     {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
                     <td>{{ item.profile.email }}</td>
                     <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td>{{ item.profile.tag_labels }}</td>
                     <td>{{ item.workload.active_tasks|default:0 }}</td>
                     <td>{{ item.workload.estimated_minutes|default:0 }}</td>
                     <td>
@@ -114,7 +148,7 @@
                     </td>
                 </tr>
             {% empty %}
-                <tr><td colspan="{% if show_team_column %}7{% else %}6{% endif %}">No student supervisors yet.</td></tr>
+                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">No student supervisors yet.</td></tr>
             {% endfor %}
         </tbody>
     </table>

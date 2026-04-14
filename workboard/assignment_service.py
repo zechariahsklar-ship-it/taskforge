@@ -1,9 +1,9 @@
 from datetime import date, datetime, timedelta
 
-from django.db.models import Max, Q, Sum
+from django.db.models import Count, Max, Q, Sum
 from django.utils import timezone
 
-from .models import StudentAvailability, StudentScheduleOverride, StudentWorkerProfile, Task, TaskStatus, User, UserRole
+from .models import StudentAvailability, StudentScheduleOverride, StudentWorkerProfile, Task, TaskStatus, User, UserRole, WorkerTag
 
 
 def _format_time_label(value):
@@ -12,15 +12,51 @@ def _format_time_label(value):
 
 class TaskAssignmentService:
     @staticmethod
-    def _worker_profiles(*, exclude_user_ids=None, team=None):
+    def _normalized_required_tag_ids(required_tag_ids=None):
+        if not required_tag_ids:
+            return []
+        if hasattr(required_tag_ids, "values_list"):
+            values = required_tag_ids.values_list("pk", flat=True)
+        else:
+            values = required_tag_ids
+        return sorted({int(tag_id) for tag_id in values if tag_id})
+
+    @staticmethod
+    def missing_required_tag_names(user, *, required_tag_ids=None):
+        required_tag_ids = TaskAssignmentService._normalized_required_tag_ids(required_tag_ids)
+        if not required_tag_ids or not user or user.role not in UserRole.worker_roles():
+            return []
+        try:
+            profile = user.worker_profile
+        except StudentWorkerProfile.DoesNotExist:
+            return list(WorkerTag.objects.filter(pk__in=required_tag_ids).order_by("name", "pk").values_list("name", flat=True))
+        matched_ids = profile.tags.filter(pk__in=required_tag_ids).values_list("pk", flat=True)
+        return list(
+            WorkerTag.objects.filter(pk__in=required_tag_ids)
+            .exclude(pk__in=matched_ids)
+            .order_by("name", "pk")
+            .values_list("name", flat=True)
+        )
+
+    @staticmethod
+    def user_matches_required_tags(user, *, required_tag_ids=None):
+        return not TaskAssignmentService.missing_required_tag_names(user, required_tag_ids=required_tag_ids)
+
+    @staticmethod
+    def _worker_profiles(*, exclude_user_ids=None, team=None, required_tag_ids=None):
         workers = StudentWorkerProfile.objects.filter(
             active_status=True,
             user__role__in=UserRole.worker_roles(),
-        ).select_related("user")
+        ).select_related("user").prefetch_related("tags")
         if team is not None:
             workers = workers.filter(user__team=team)
         if exclude_user_ids:
             workers = workers.exclude(user_id__in=exclude_user_ids)
+        required_tag_ids = TaskAssignmentService._normalized_required_tag_ids(required_tag_ids)
+        if required_tag_ids:
+            workers = workers.annotate(
+                matched_required_tags=Count("tags", filter=Q(tags__pk__in=required_tag_ids), distinct=True)
+            ).filter(matched_required_tags=len(required_tag_ids))
         return workers
 
     @staticmethod
@@ -97,8 +133,13 @@ class TaskAssignmentService:
         task_window_blocks=None,
         exclude_task_id=None,
         team=None,
+        required_tag_ids=None,
     ):
-        workers = TaskAssignmentService._worker_profiles(exclude_user_ids=exclude_user_ids, team=team)
+        workers = TaskAssignmentService._worker_profiles(
+            exclude_user_ids=exclude_user_ids,
+            team=team,
+            required_tag_ids=required_tag_ids,
+        )
         candidates = []
         for profile in workers:
             capacity, open_tasks, last_assigned_at = TaskAssignmentService._candidate_metrics(
@@ -124,7 +165,9 @@ class TaskAssignmentService:
         task_window_blocks=None,
         exclude_task_id=None,
         team=None,
+        required_tag_ids=None,
     ):
+        required_tag_ids = TaskAssignmentService._normalized_required_tag_ids(required_tag_ids)
         task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
             task_window_blocks=task_window_blocks,
             scheduled_date=scheduled_date,
@@ -138,14 +181,16 @@ class TaskAssignmentService:
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
             team=team,
+            required_tag_ids=required_tag_ids,
         )
+        tag_filter_active = bool(required_tag_ids)
 
         if viable:
             profile, capacity, _, _ = viable[0]
             if task_window_blocks:
                 summary = (
-                    f"Suggested worker: {profile.display_name} based on scheduled availability inside the task windows. "
-                    f"Remaining matching time: {int(capacity)} minutes."
+                    f"Suggested worker: {profile.display_name} based on scheduled availability inside the task windows"
+                    f"{' and the required worker tags' if tag_filter_active else ''}. Remaining matching time: {int(capacity)} minutes."
                 )
                 rationale = [
                     f"Recommended assignee: {profile.display_name}",
@@ -153,31 +198,45 @@ class TaskAssignmentService:
                     "Selection favors worker-level teammates who can complete this work inside the allowed schedule windows.",
                 ]
             else:
-                summary = f"Suggested worker: {profile.display_name} based on current availability and assignment rotation. Remaining capacity before due date: {int(capacity)} minutes."
+                summary = (
+                    f"Suggested worker: {profile.display_name} based on current availability and assignment rotation"
+                    f"{' plus the required worker tags' if tag_filter_active else ''}. Remaining capacity before due date: {int(capacity)} minutes."
+                )
                 rationale = [
                     f"Recommended assignee: {profile.display_name}",
                     f"Estimated open capacity before due date: {int(capacity)} minutes",
                     "Selection favors worker-level teammates with enough capacity and lighter recent assignment rotation.",
                 ]
+            if tag_filter_active:
+                rationale.append("Worker tag filters were applied before scheduling capacity was compared.")
             return profile.user, summary, rationale
 
         fallback_candidate = TaskAssignmentService._team_fallback_supervisor(team=team, preferred_user=fallback_supervisor)
+        no_worker_message = "No worker on that team with the required worker tags currently has enough available hours for this assignment rule." if tag_filter_active else "No worker on that team currently has enough available hours for this assignment rule."
         if fallback_candidate:
             message = (
-                "No worker on that team has enough scheduled availability inside those task windows, so this task should stay with the supervising user for that team."
+                "No worker on that team with the required worker tags has enough scheduled availability inside those task windows, so this task should stay with the supervising user for that team."
+                if task_window_blocks and tag_filter_active
+                else "No worker on that team has enough scheduled availability inside those task windows, so this task should stay with the supervising user for that team."
                 if task_window_blocks
+                else "No worker on that team with the required worker tags has enough available capacity before the due date, so this task should stay with the supervising user for that team."
+                if tag_filter_active
                 else "No worker on that team has enough available capacity before the due date, so this task should stay with the supervising user for that team."
             )
             return fallback_candidate, message, [
                 f"Recommended assignee: {fallback_candidate.display_label}",
-                "No worker on that team currently has enough available hours for this assignment rule.",
+                no_worker_message,
                 "Fallback rule assigned the task to the supervising user instead of rotating among supervisors.",
             ]
-        return None, "No eligible same-team worker has enough available capacity for this task, and no same-team supervisor fallback is available.", [
-            "No worker on that team currently has enough available hours for this assignment rule.",
+        final_message = (
+            "No eligible same-team worker with the required worker tags has enough available capacity for this task, and no same-team supervisor fallback is available."
+            if tag_filter_active
+            else "No eligible same-team worker has enough available capacity for this task, and no same-team supervisor fallback is available."
+        )
+        return None, final_message, [
+            no_worker_message,
             "No same-team supervising fallback is available for automatic assignment.",
         ]
-
     @staticmethod
     def suggest_worker_assignee(
         *,
@@ -190,6 +249,7 @@ class TaskAssignmentService:
         task_window_blocks=None,
         exclude_task_id=None,
         team=None,
+        required_tag_ids=None,
     ):
         task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
             task_window_blocks=task_window_blocks,
@@ -204,6 +264,7 @@ class TaskAssignmentService:
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
             team=team,
+            required_tag_ids=required_tag_ids,
         )
         if viable:
             return viable[0][0].user
@@ -220,8 +281,11 @@ class TaskAssignmentService:
         scheduled_end_time=None,
         task_window_blocks=None,
         exclude_task_id=None,
+        required_tag_ids=None,
     ):
         if not user or user.role not in UserRole.worker_roles():
+            return False
+        if not TaskAssignmentService.user_matches_required_tags(user, required_tag_ids=required_tag_ids):
             return False
         try:
             profile = user.worker_profile
@@ -265,6 +329,7 @@ class TaskAssignmentService:
         task_window_blocks=None,
         exclude_task_id=None,
         team=None,
+        required_tag_ids=None,
     ):
         if count <= 0:
             return []
@@ -297,6 +362,7 @@ class TaskAssignmentService:
                 estimated_minutes=estimated_minutes,
                 task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
+                required_tag_ids=required_tag_ids,
             ):
                 return
             selected_users.append(candidate)
@@ -314,6 +380,7 @@ class TaskAssignmentService:
                 task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
                 team=team,
+                required_tag_ids=required_tag_ids,
             )
             if not candidate:
                 break
@@ -331,6 +398,7 @@ class TaskAssignmentService:
                 task_window_blocks=task_window_blocks,
                 exclude_task_id=exclude_task_id,
                 team=team,
+                required_tag_ids=required_tag_ids,
             )
             if not candidate:
                 break
@@ -577,6 +645,7 @@ class TaskAssignmentService:
         task_window_blocks=None,
         exclude_task_id=None,
         team=None,
+        required_tag_ids=None,
     ):
         task_window_blocks = TaskAssignmentService._resolve_task_window_blocks(
             task_window_blocks=task_window_blocks,
@@ -590,6 +659,7 @@ class TaskAssignmentService:
             task_window_blocks=task_window_blocks,
             exclude_task_id=exclude_task_id,
             team=team,
+            required_tag_ids=required_tag_ids,
         )
         if task_window_blocks:
             if estimated_minutes is None:

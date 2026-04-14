@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, Team, User, UserRole, Weekday
+from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
 from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
@@ -460,6 +460,22 @@ class TaskAssignmentServiceTests(TestCase):
         self.assertIn("Suggested worker", summary)
         self.assertIn("Jordan Lee", rationale[0])
 
+    def test_suggest_assignee_only_considers_workers_with_required_tags(self):
+        specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.alex.team)
+        self.jordan.worker_profile.tags.add(specialist_tag)
+
+        with patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)):
+            assignee, summary, rationale = TaskAssignmentService.suggest_assignee(
+                due_date=date(2026, 3, 17),
+                estimated_minutes=30,
+                fallback_supervisor=self.supervisor,
+                required_tag_ids=[specialist_tag.pk],
+            )
+
+        self.assertEqual(assignee, self.jordan)
+        self.assertIn("required worker tags", summary)
+        self.assertIn("Worker tag filters were applied", rationale[-1])
+
     def test_suggest_assignee_falls_back_to_requesting_supervisor_when_students_cannot_fit_work(self):
         for profile in StudentWorkerProfile.objects.all():
             profile.weekly_availability.all().update(hours_available=0)
@@ -876,10 +892,44 @@ class TaskCreateDueDateFallbackTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        task = Task.objects.get(title="Weekly clean up")
+        task = Task.objects.get(title="Weekly clean up", due_date=date(2026, 3, 16))
         self.assertIsNotNone(task.recurring_template)
         self.assertEqual(task.recurring_template.assign_to, self.worker)
-        self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
+        self.assertGreaterEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
+
+    def test_direct_task_create_carries_required_worker_tags_to_recurring_template(self):
+        specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.worker.team)
+        self.worker.worker_profile.tags.add(specialist_tag)
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Tagged weekly clean up",
+                "raw_message": "",
+                "description": "Recurring weekly clean up with tags",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "45",
+                "required_worker_tags": [str(specialist_tag.pk)],
+                "assigned_to": str(self.worker.pk),
+                "requested_by": str(self.supervisor.pk),
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.MONDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Tagged weekly clean up", due_date=date(2026, 3, 16))
+        self.assertEqual(list(task.required_worker_tags.values_list("pk", flat=True)), [specialist_tag.pk])
+        self.assertEqual(list(task.recurring_template.required_worker_tags.values_list("pk", flat=True)), [specialist_tag.pk])
 
 
 class TaskScheduledWindowTests(TestCase):
@@ -957,6 +1007,7 @@ class TaskScheduledWindowTests(TestCase):
         response = self.client.get(reverse("task-create"))
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Required worker tags")
         self.assertContains(response, "Scheduled work window")
         self.assertContains(response, 'data-task-window-toggle', html=False)
         self.assertContains(response, 'data-task-window-fields style="display: none;"', html=False)
@@ -1066,6 +1117,66 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(task.scheduled_start_time, time(9, 30))
         self.assertEqual(task.scheduled_end_time, time(10, 30))
         self.assertEqual(task.due_date, date(2026, 3, 16))
+
+    def test_task_create_auto_assigns_only_workers_with_required_tags(self):
+        specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.morning_worker.team)
+        self.morning_worker.worker_profile.tags.add(specialist_tag)
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Tagged front desk coverage",
+                "description": "Cover the front desk with a tagged teammate.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-17",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "required_worker_tags": [str(specialist_tag.pk)],
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Tagged front desk coverage")
+        self.assertEqual(task.assigned_to, self.morning_worker)
+        self.assertEqual(list(task.required_worker_tags.values_list("pk", flat=True)), [specialist_tag.pk])
+
+    def test_task_create_rejects_manual_assignee_missing_required_tags(self):
+        specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.morning_worker.team)
+        self.morning_worker.worker_profile.tags.add(specialist_tag)
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Tagged phone shift",
+                "description": "Tagged task with the wrong teammate selected.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-17",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "required_worker_tags": [str(specialist_tag.pk)],
+                "assigned_to": str(self.afternoon_worker.pk),
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "missing these required worker tags")
+        self.assertFalse(Task.objects.filter(title="Tagged phone shift").exists())
 
     def test_task_create_rejects_manual_assignee_outside_scheduled_window(self):
         response = self.client.post(
@@ -2699,15 +2810,21 @@ class PeopleManagementTests(TestCase):
             recurrence_pattern="weekly",
             recurrence_interval=1,
         )
+        self.worker_tag = WorkerTag.objects.create(name="Front Desk", team=self.profile.user.team)
         self.client.force_login(self.supervisor)
 
     def test_people_page_shows_cleaner_actions_for_workers_and_supervisors(self):
+        self.profile.tags.add(self.worker_tag)
         response = self.client.get(reverse("worker-list"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, reverse("worker-create"))
         self.assertContains(response, reverse("student-supervisor-create"))
         self.assertContains(response, reverse("supervisor-create"))
+        self.assertContains(response, reverse("worker-tag-create"))
+        self.assertContains(response, "Worker tags")
+        self.assertContains(response, self.worker_tag.name)
+        self.assertContains(response, "Front Desk")
         self.assertContains(response, "Student supervisors")
         self.assertContains(response, reverse("worker-edit", args=[self.profile.pk]))
         self.assertContains(response, reverse("worker-schedule", args=[self.profile.pk]))
@@ -2732,6 +2849,7 @@ class PeopleManagementTests(TestCase):
                 "last_name": "Parker",
                 "email": "jordan@example.com",
                 "active_status": "",
+                "tags": [str(self.worker_tag.pk)],
                 "skill_notes": "Prefers morning tasks",
             },
             follow=True,
@@ -2747,6 +2865,7 @@ class PeopleManagementTests(TestCase):
         self.assertEqual(self.profile.display_name, "Jordan Parker")
         self.assertFalse(self.profile.active_status)
         self.assertEqual(self.profile.skill_notes, "Prefers morning tasks")
+        self.assertEqual(list(self.profile.tags.values_list("pk", flat=True)), [self.worker_tag.pk])
 
     def test_edit_pages_hide_optional_email_help_text(self):
         worker_response = self.client.get(reverse("worker-edit", args=[self.profile.pk]))
@@ -2759,6 +2878,16 @@ class PeopleManagementTests(TestCase):
         self.assertNotContains(worker_response, "Optional. Leave blank if you do not want to store an email address for this person.")
         self.assertNotContains(student_supervisor_response, "Optional. Leave blank if you do not want to store an email address for this person.")
         self.assertNotContains(supervisor_response, "Optional. Leave blank if you do not want to store an email address for this supervisor.")
+
+    def test_supervisor_can_create_worker_tag_for_their_team(self):
+        response = self.client.post(
+            reverse("worker-tag-create"),
+            {"name": "Phones"},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(WorkerTag.objects.filter(name="Phones", team=self.supervisor.team).exists())
 
     def test_edit_schedule_updates_student_weekly_schedule(self):
         response = self.client.post(

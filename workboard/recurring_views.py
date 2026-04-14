@@ -28,7 +28,7 @@ def recurring_template_list_view(request):
         _scoped_recurring_templates(
             request.user,
             RecurringTaskTemplate.objects.select_related("team", "assign_to", "requested_by")
-            .prefetch_related("additional_assignees")
+            .prefetch_related("additional_assignees", "required_worker_tags")
             .annotate(generated_task_count=Count("generated_tasks")),
         )
         .order_by(F("display_order").asc(nulls_last=True), "next_run_date", "title", "pk")
@@ -42,7 +42,7 @@ def recurring_template_detail_view(request, pk):
         _scoped_recurring_templates(
             request.user,
             RecurringTaskTemplate.objects.select_related("team", "assign_to", "requested_by").prefetch_related(
-                "additional_assignees", "generated_tasks"
+                "additional_assignees", "generated_tasks", "required_worker_tags"
             ),
         ),
         pk=pk,

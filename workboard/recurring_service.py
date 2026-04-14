@@ -160,9 +160,16 @@ class RecurringTaskService:
         return task
 
     @staticmethod
-    def _sync_generated_task_memberships(task: Task, *, fixed_additional_ids: list[int], rotating_assignees: list[User]) -> None:
+    def _sync_generated_task_memberships(
+        task: Task,
+        *,
+        fixed_additional_ids: list[int],
+        rotating_assignees: list[User],
+        required_tag_ids: list[int],
+    ) -> None:
         task.additional_assignees.set(fixed_additional_ids)
         task.rotating_additional_assignees.set([user.pk for user in rotating_assignees])
+        task.required_worker_tags.set(required_tag_ids)
 
     @staticmethod
     def preview_next_run(template: RecurringTaskTemplate, *, run_date: date | None = None) -> RecurringRunPreview:
@@ -173,9 +180,15 @@ class RecurringTaskService:
         assigned_to = template.assign_to
         assignee_summary = ''
         scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
+        required_tag_ids = list(template.required_worker_tags.values_list("pk", flat=True))
 
         if assigned_to:
-            if scheduled_date and not TaskAssignmentService.user_is_available_for_window(
+            if assigned_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_matches_required_tags(
+                assigned_to,
+                required_tag_ids=required_tag_ids,
+            ):
+                assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but no longer matches the required worker tags.'
+            elif scheduled_date and not TaskAssignmentService.user_is_available_for_window(
                 assigned_to,
                 scheduled_date=scheduled_date,
                 scheduled_start_time=template.scheduled_start_time,
@@ -195,6 +208,7 @@ class RecurringTaskService:
                 scheduled_start_time=template.scheduled_start_time,
                 scheduled_end_time=template.scheduled_end_time,
                 team=template.team,
+                required_tag_ids=required_tag_ids,
             )
             assigned_to = suggested_user
             assignee_summary = summary
@@ -211,6 +225,7 @@ class RecurringTaskService:
             scheduled_start_time=template.scheduled_start_time,
             scheduled_end_time=template.scheduled_end_time,
             team=template.team,
+            required_tag_ids=required_tag_ids,
         )
         return RecurringRunPreview(
             run_date=run_date,
@@ -228,6 +243,7 @@ class RecurringTaskService:
         preview = RecurringTaskService.preview_next_run(template, run_date=run_date)
         next_order = RecurringTaskService._next_new_task_order(team=template.team)
         rotating_assignees = preview.rotating_assignees
+        required_tag_ids = list(template.required_worker_tags.values_list("pk", flat=True))
 
         # Each recurring cycle becomes its own task so unfinished runs can stay
         # visible while the next scheduled cycle is still released on time.
@@ -245,6 +261,7 @@ class RecurringTaskService:
             task,
             fixed_additional_ids=preview.fixed_additional_ids,
             rotating_assignees=rotating_assignees,
+            required_tag_ids=required_tag_ids,
         )
         RecurringTaskService._copy_checklist_items(last_generated_task, task)
         TaskAuditService.record_recurring_reopened(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
@@ -261,7 +278,7 @@ class RecurringTaskService:
         reopened_count = 0
         templates = (
             RecurringTaskTemplate.objects.filter(active=True)
-            .prefetch_related('additional_assignees', 'generated_tasks')
+            .prefetch_related('additional_assignees', 'generated_tasks', 'required_worker_tags')
             .distinct()
         )
         for template in templates:
@@ -278,7 +295,7 @@ class RecurringTaskService:
         run_date = run_date or timezone.localdate()
         created_count = 0
         reopened_count = 0
-        templates = RecurringTaskTemplate.objects.filter(active=True, next_run_date__lte=run_date).prefetch_related('additional_assignees', 'generated_tasks')
+        templates = RecurringTaskTemplate.objects.filter(active=True, next_run_date__lte=run_date).prefetch_related('additional_assignees', 'generated_tasks', 'required_worker_tags')
         for template in templates:
             _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
             if outcome == 'created':

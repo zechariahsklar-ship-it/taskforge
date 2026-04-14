@@ -112,6 +112,26 @@ class Team(models.Model):
         )[0]
 
 
+class WorkerTag(models.Model):
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="worker_tags")
+    name = models.CharField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+        unique_together = ("team", "name")
+
+    def save(self, *args, **kwargs):
+        if not self.team_id:
+            self.team = _resolved_team_or_default()
+        self.name = self.name.strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
 def _resolved_team_or_default(*candidates):
     for candidate in candidates:
         if candidate is None:
@@ -173,10 +193,15 @@ class StudentWorkerProfile(models.Model):
     active_status = models.BooleanField(default=True)
     normal_shift_availability = models.TextField(blank=True)
     skill_notes = models.TextField(blank=True)
-
+    tags = models.ManyToManyField("WorkerTag", blank=True, related_name="workers")
 
     def __str__(self):
         return self.display_name
+
+    @property
+    def tag_labels(self):
+        labels = list(self.tags.order_by("name", "pk").values_list("name", flat=True))
+        return ", ".join(labels) if labels else "None"
 
 
 class StudentAvailability(models.Model):
@@ -343,6 +368,7 @@ class RecurringTaskTemplate(models.Model):
     estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
     scheduled_start_time = models.TimeField(null=True, blank=True)
     scheduled_end_time = models.TimeField(null=True, blank=True)
+    required_worker_tags = models.ManyToManyField("WorkerTag", blank=True, related_name="recurring_templates")
     assign_to = models.ForeignKey(
         User,
         null=True,
@@ -415,6 +441,11 @@ class RecurringTaskTemplate(models.Model):
             labels.append(_rotation_count_label(1))
         return ", ".join(labels) if labels else "None"
 
+    @property
+    def required_worker_tag_labels(self):
+        labels = list(self.required_worker_tags.order_by("name", "pk").values_list("name", flat=True))
+        return ", ".join(labels) if labels else "None"
+
     def advance_next_run_date(self):
         if self.recurrence_pattern == RecurrencePattern.DAILY:
             self.next_run_date = self.next_run_date + timedelta(days=self.recurrence_interval)
@@ -443,6 +474,7 @@ class Task(models.Model):
     waiting_person = models.CharField(max_length=255, blank=True)
     respond_to_text = models.CharField(max_length=255, blank=True)
     estimated_minutes = models.PositiveIntegerField(null=True, blank=True)
+    required_worker_tags = models.ManyToManyField("WorkerTag", blank=True, related_name="tasks")
     assigned_to = models.ForeignKey(
         User,
         null=True,
@@ -584,6 +616,11 @@ class Task(models.Model):
             labels.append(_rotation_count_label(self.rotating_additional_assignee_count))
         elif self.rotate_additional_assignee:
             labels.append(_rotation_count_label(1))
+        return ", ".join(labels) if labels else "None"
+
+    @property
+    def required_worker_tag_labels(self):
+        labels = list(self.required_worker_tags.order_by("name", "pk").values_list("name", flat=True))
         return ", ".join(labels) if labels else "None"
 
 

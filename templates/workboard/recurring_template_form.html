@@ -20,7 +20,27 @@
 
         {# Render the custom assignment, schedule, and cadence panels below so the shared field loop stays small and predictable. #}
         {% for field in form %}
-            {% if field.name == "assign_to" %}
+            {% if field.name == "required_worker_tags" %}
+                <section class="review-field assignee-panel">
+                    <div class="stack">
+                        <div>
+                            <label>{{ field.label }}</label>
+                            {% if field.help_text %}<p class="meta">{{ field.help_text }}</p>{% endif %}
+                        </div>
+                        <div class="assignee-choice-grid">
+                            {% for checkbox in field %}
+                                <label class="assignee-choice-card" for="{{ checkbox.id_for_label }}">
+                                    {{ checkbox.tag }}
+                                    <span>{{ checkbox.choice_label }}</span>
+                                </label>
+                            {% empty %}
+                                <p class="empty-state">No worker tags are available for this team yet.</p>
+                            {% endfor %}
+                        </div>
+                        {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                    </div>
+                </section>
+            {% elif field.name == "assign_to" %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>
                     {{ field }}

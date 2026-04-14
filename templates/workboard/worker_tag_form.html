@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} | TaskForge{% endblock %}
+
+{% block content %}
+{% if worker_tag %}
+<div class="inline-form">
+    <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
+</div>
+{% endif %}
+<section class="card narrow">
+    <h1>{{ page_title }}</h1>
+    {% if worker_tag %}
+        <p>Update this worker tag here.</p>
+    {% else %}
+        <p>Create a worker tag so tasks can be limited to teammates with the right training or role.</p>
+    {% endif %}
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">{{ submit_label }}</button>
+    </form>
+    {% if worker_tag %}
+        <div class="task-delete-form">
+            <h2>Delete worker tag</h2>
+            <p class="meta">Use this only when this tag should no longer be available for workers or tasks.</p>
+            <form method="post" action="{% url 'worker-tag-delete' worker_tag.pk %}" onsubmit="return window.confirm('Delete this worker tag? Existing workers and tasks will lose this tag.');">
+                {% csrf_token %}
+                <button type="submit" class="task-delete-button">Delete worker tag</button>
+            </form>
+        </div>
+    {% endif %}
+</section>
+{% if not worker_tag %}
+<div class="inline-form">
+    <a class="button-link button-link-secondary" href="{% url 'worker-list' %}">Back to workers</a>
+</div>
+{% endif %}
+{% endblock %}

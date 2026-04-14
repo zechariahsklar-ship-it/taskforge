@@ -13,6 +13,7 @@ from .forms import (
     StudentScheduleOverrideForm,
     StudentWorkerProfileForm,
     SupervisorForm,
+    WorkerTagForm,
     SupervisorStudentPasswordResetForm,
     TeamForm,
     WeeklyAvailabilityForm,
@@ -29,6 +30,7 @@ from .models import (
     TaskStatus,
     Team,
     User,
+    WorkerTag,
     UserRole,
 )
 from .task_views import (
@@ -44,12 +46,16 @@ from .task_views import (
 
 
 def _scoped_worker_profiles(user):
-    queryset = StudentWorkerProfile.objects.select_related("user")
+    queryset = StudentWorkerProfile.objects.select_related("user").prefetch_related("tags")
     return _scope_queryset_to_user_team(queryset, user, field_name="user__team")
 
 
 def _scoped_users(user, queryset=None):
     return _scope_queryset_to_user_team(queryset or User.objects.all(), user)
+
+
+def _scoped_worker_tags(user, queryset=None):
+    return _scope_queryset_to_user_team(queryset or WorkerTag.objects.all(), user)
 
 
 def _scoped_supervisors(user):
@@ -114,6 +120,17 @@ def worker_list_view(request):
         )
         .order_by("username")
     )
+    worker_tags = (
+        _scoped_worker_tags(
+            request.user,
+            WorkerTag.objects.select_related("team").annotate(
+                worker_count=Count("workers", distinct=True),
+                task_count=Count("tasks", distinct=True),
+                recurring_count=Count("recurring_templates", distinct=True),
+            ),
+        )
+        .order_by("name", "pk")
+    )
     teams = []
     if request.user.is_admin:
         teams = Team.objects.annotate(
@@ -129,7 +146,9 @@ def worker_list_view(request):
             "student_supervisors": student_supervisors,
             "supervisors": supervisors,
             "teams": teams,
+            "worker_tags": worker_tags,
             "show_team_column": request.user.is_admin,
+            "show_tag_team_column": request.user.is_admin,
         },
     )
 
@@ -204,6 +223,7 @@ def _save_worker_profile_details(profile: StudentWorkerProfile, worker_form: Stu
     updated_profile.email = worker_form.cleaned_data["email"]
     updated_profile.display_name = user.get_full_name().strip() or user.username
     updated_profile.save()
+    worker_form.save_m2m()
     return True
 
 
@@ -248,6 +268,7 @@ def _create_worker_profile_account(
             profile.email = profile.email or account["email"]
             profile.display_name = user.get_full_name().strip() or user.username
             profile.save()
+            form.save_m2m()
             _save_weekly_schedule(profile, weekly_form)
             messages.success(request, success_message)
             if generated_password:
@@ -695,6 +716,52 @@ def worker_password_reset_view(request, pk):
         "workboard/worker_password_reset_form.html",
         {"form": form, "person": person},
     )
+
+
+@supervisor_required
+def worker_tag_create_view(request):
+    form = WorkerTagForm(request.POST or None, actor=request.user)
+    if request.method == "POST" and form.is_valid():
+        worker_tag = form.save()
+        messages.success(request, f'Worker tag "{worker_tag.name}" created.')
+        return redirect("worker-list")
+    return render(
+        request,
+        "workboard/worker_tag_form.html",
+        {"form": form, "page_title": "Add worker tag", "submit_label": "Create tag"},
+    )
+
+
+@supervisor_required
+def worker_tag_edit_view(request, pk):
+    worker_tag = get_object_or_404(_scoped_worker_tags(request.user), pk=pk)
+    form = WorkerTagForm(request.POST or None, instance=worker_tag, actor=request.user)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Worker tag updated.")
+        return redirect("worker-list")
+    return render(
+        request,
+        "workboard/worker_tag_form.html",
+        {
+            "form": form,
+            "page_title": f"Edit worker tag: {worker_tag.name}",
+            "submit_label": "Save changes",
+            "worker_tag": worker_tag,
+        },
+    )
+
+
+@supervisor_required
+def worker_tag_delete_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+
+    worker_tag = get_object_or_404(_scoped_worker_tags(request.user), pk=pk)
+    worker_tag_name = worker_tag.name
+    worker_tag.delete()
+    messages.success(request, f"Removed the {worker_tag_name} worker tag.")
+    return redirect("worker-list")
 
 
 @admin_required
