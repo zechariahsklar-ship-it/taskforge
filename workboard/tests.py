@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -1688,7 +1688,7 @@ class BoardFilterAndAlertTests(TestCase):
             estimated_minutes=30,
             recurrence_pattern="weekly",
             recurrence_interval=1,
-            next_run_date=date(2026, 3, 21),
+            next_run_date=date(2027, 3, 21),
         )
         self.client.force_login(self.supervisor)
 
@@ -3370,68 +3370,184 @@ class SupervisorRoutePermissionTests(TestCase):
 
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class ReportsViewTests(TestCase):
     def setUp(self):
-        self.supervisor = User.objects.create_user(username="reports-supervisor", password="password123", role=UserRole.SUPERVISOR)
-        self.worker = User.objects.create_user(username="reports-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.team = Team.objects.create(name="Reports Team")
+        self.supervisor = User.objects.create_user(username="reports-supervisor", password="password123", role=UserRole.SUPERVISOR, team=self.team)
+        self.worker = User.objects.create_user(username="reports-worker", password="password123", role=UserRole.STUDENT_WORKER, team=self.team)
         self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Taylor Reports", email="reports@example.com")
         for weekday in Weekday.values:
             StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=4 if weekday < 5 else 0)
-        Task.objects.create(
+
+        self.completed_task = Task.objects.create(
             title="Completed task",
             description="Done this week",
             priority=Priority.MEDIUM,
             status=TaskStatus.DONE,
             assigned_to=self.worker,
+            created_by=self.supervisor,
             completed_at=timezone.make_aware(datetime(2026, 3, 18, 10, 0)),
         )
-        Task.objects.create(
+        self._set_created_at(self.completed_task, timezone.make_aware(datetime(2026, 3, 17, 9, 0)))
+
+        self.overdue_task = Task.objects.create(
             title="Overdue task",
             description="Overdue",
             priority=Priority.HIGH,
             status=TaskStatus.NEW,
             assigned_to=self.worker,
+            created_by=self.supervisor,
             due_date=date(2026, 3, 19),
             estimated_minutes=120,
         )
-        Task.objects.create(
+        self._set_created_at(self.overdue_task, timezone.make_aware(datetime(2026, 3, 17, 8, 0)))
+
+        self.waiting_task = Task.objects.create(
             title="Waiting task",
             description="Waiting",
             priority=Priority.MEDIUM,
             status=TaskStatus.WAITING,
             assigned_to=self.worker,
+            created_by=self.supervisor,
             due_date=date(2026, 3, 21),
             estimated_minutes=60,
         )
+        self._set_created_at(self.waiting_task, timezone.make_aware(datetime(2026, 3, 18, 8, 30)))
+
+        self.generated_recurring_task = Task.objects.create(
+            title="Generated recurring task",
+            description="Created by recurring workflow",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            recurring_task=True,
+            assigned_to=self.worker,
+            created_by=self.supervisor,
+            estimated_minutes=30,
+        )
+        self._set_created_at(self.generated_recurring_task, timezone.make_aware(datetime(2026, 3, 19, 9, 0)))
+
         RecurringTaskTemplate.objects.create(
             title="Report recurring",
             description="Recurring report",
             priority=Priority.MEDIUM,
             recurrence_pattern="weekly",
             recurrence_interval=1,
-            next_run_date=date(2026, 3, 21),
+            next_run_date=date(2027, 3, 21),
+            requested_by=self.supervisor,
             active=True,
         )
-        TaskAuditEvent.objects.create(
+        self.recurring_event = TaskAuditEvent.objects.create(
+            task=self.generated_recurring_task,
             task_title="Recurring report",
             action=TaskAuditAction.RECURRING_RUN,
             summary="Generated recurring task",
-            created_at=timezone.make_aware(datetime(2026, 3, 19, 9, 0)),
         )
+        self._set_created_at(self.recurring_event, timezone.make_aware(datetime(2026, 3, 19, 9, 0)))
+
         self.client.force_login(self.supervisor)
 
-    def test_reports_view_renders_summary_metrics_and_worker_table(self):
+    def _set_created_at(self, instance, value):
+        instance.__class__.objects.filter(pk=instance.pk).update(created_at=value)
+        instance.refresh_from_db()
+
+    def test_reports_view_renders_weekly_metrics_history_and_worker_table(self):
         with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
             response = self.client.get(reverse("reports"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Reports")
-        self.assertContains(response, "Completed this week")
-        self.assertContains(response, "Open overdue tasks")
-        self.assertContains(response, "Worker workload")
+        self.assertEqual(response.context["period"], "week")
+        self.assertEqual(response.context["period_start"], date(2026, 3, 16))
+        self.assertEqual(response.context["period_end"], date(2026, 3, 22))
+        summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
+        self.assertEqual(summary["Completed this week"], 1)
+        self.assertEqual(summary["Created this week"], 4)
+        self.assertEqual(summary["Due this week"], 2)
+        self.assertEqual(summary["Open due by week end"], 2)
+        self.assertEqual(summary["Recurring runs this week"], 1)
+        self.assertContains(response, "Weekly report")
+        self.assertContains(response, "Past reports")
+        self.assertContains(response, "Export CSV")
         self.assertContains(response, "Taylor Reports")
-        self.assertContains(response, "Recurring snapshot")
+        self.assertEqual(response.context["export_url"], f"{reverse('reports')}?period=week&anchor=2026-03-16&export=csv")
+        self.assertEqual(response.context["history_entries"][0]["start"], date(2026, 3, 16))
 
+    def test_reports_view_supports_monthly_report_selection(self):
+        with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-20"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["period"], "month")
+        self.assertEqual(response.context["period_start"], date(2026, 3, 1))
+        self.assertEqual(response.context["period_end"], date(2026, 3, 31))
+        summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
+        self.assertEqual(summary["Completed this month"], 1)
+        self.assertEqual(summary["Created this month"], 4)
+        self.assertEqual(summary["Due this month"], 2)
+        self.assertEqual(summary["Open due by month end"], 2)
+        self.assertEqual(summary["Recurring runs this month"], 1)
+        self.assertContains(response, "Monthly report for March 2026.")
+        self.assertContains(response, "Current month")
+        self.assertContains(response, "Previous month")
+
+    def test_reports_view_can_show_past_month_reports(self):
+        past_completed = Task.objects.create(
+            title="February completed task",
+            description="Closed in February",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            assigned_to=self.worker,
+            created_by=self.supervisor,
+            due_date=date(2026, 2, 11),
+            completed_at=timezone.make_aware(datetime(2026, 2, 12, 11, 0)),
+        )
+        self._set_created_at(past_completed, timezone.make_aware(datetime(2026, 2, 10, 9, 0)))
+        past_waiting = Task.objects.create(
+            title="February waiting task",
+            description="Still open",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.WAITING,
+            assigned_to=self.worker,
+            created_by=self.supervisor,
+            due_date=date(2026, 2, 14),
+            estimated_minutes=45,
+        )
+        self._set_created_at(past_waiting, timezone.make_aware(datetime(2026, 2, 13, 8, 0)))
+        past_event = TaskAuditEvent.objects.create(
+            task=past_waiting,
+            task_title="February recurring report",
+            action=TaskAuditAction.RECURRING_RUN,
+            summary="Generated recurring task",
+        )
+        self._set_created_at(past_event, timezone.make_aware(datetime(2026, 2, 13, 9, 0)))
+
+        with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-02-10"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["period_start"], date(2026, 2, 1))
+        self.assertEqual(response.context["period_end"], date(2026, 2, 28))
+        summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
+        self.assertEqual(summary["Completed this month"], 1)
+        self.assertEqual(summary["Created this month"], 2)
+        self.assertEqual(summary["Due this month"], 2)
+        self.assertEqual(summary["Open due by month end"], 1)
+        self.assertEqual(summary["Recurring runs this month"], 1)
+        self.assertTrue(any(entry["is_selected"] and entry["start"] == date(2026, 2, 1) for entry in response.context["history_entries"]))
+        self.assertContains(response, "Showing a past month")
+
+    def test_reports_view_can_export_selected_report_as_csv(self):
+        with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-20", "export": "csv"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        self.assertIn("taskforge-month-report-2026-03-01-to-2026-03-31.csv", response["Content-Disposition"])
+        content = response.content.decode()
+        self.assertIn("TaskForge report", content)
+        self.assertIn("Report type,Monthly", content)
+        self.assertIn("Completed this month,1", content)
+        self.assertIn("Taylor Reports", content)
 
 class AdminGuideViewTests(TestCase):
     def setUp(self):

@@ -49,7 +49,7 @@
                 <div>
                     <h2 class="task-bucket-title">{{ column.label }}</h2>
                     {% if column.is_overdue_column %}
-                        <p class="meta board-help-text">These tasks are past due, or still open after 6:00 PM on their due day.</p>
+                        <p class="meta board-help-text">These tasks are past due.</p>
                     {% endif %}
                 </div>
                 <span class="meta">{{ column.tasks|length }}</span>

@@ -6,8 +6,79 @@
 <section class="page-heading">
     <div>
         <h1>Reports</h1>
-        <p>Week of {{ week_start|date:"M j, Y" }} through {{ week_end|date:"M j, Y" }}.</p>
+        {% if period == "month" %}
+            <p>Monthly report for {{ period_start|date:"F Y" }}.</p>
+        {% else %}
+            <p>Weekly report for {{ period_start|date:"M j, Y" }} through {{ period_end|date:"M j, Y" }}.</p>
+        {% endif %}
     </div>
+</section>
+<section class="card board-filter-card">
+    <form method="get" class="stack">
+        <div class="board-filter-grid">
+            <p>
+                <label for="id_period">Report type</label>
+                <select name="period" id="id_period">
+                    {% for option in period_options %}
+                        <option value="{{ option.value }}"{% if option.value == period %} selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                </select>
+            </p>
+            <p>
+                <label for="id_anchor">Reference date</label>
+                <input type="date" name="anchor" id="id_anchor" value="{{ anchor_value }}">
+            </p>
+        </div>
+        <div class="inline-form board-filter-actions">
+            <button type="submit">Show report</button>
+            <a class="button-link button-link-secondary" href="{{ current_period_url }}">Current {{ period_unit }}</a>
+            <a class="button-link button-link-secondary" href="{{ older_period_url }}">Previous {{ period_unit }}</a>
+            {% if newer_period_url %}
+                <a class="button-link button-link-secondary" href="{{ newer_period_url }}">Next {{ period_unit }}</a>
+            {% endif %}
+            <a class="button-link" href="{{ export_url }}">Export CSV</a>
+            <p class="meta board-filter-summary">
+                {% if showing_current_period %}
+                    Showing the current {{ period_unit }}
+                {% else %}
+                    Showing a past {{ period_unit }}
+                {% endif %}
+            </p>
+        </div>
+    </form>
+</section>
+<section class="detail-grid report-grid">
+    <article class="card report-summary-card">
+        <div class="split-heading">
+            <h2>Past reports</h2>
+            <p class="meta">Recent {{ period_unit }}ly periods you can reopen.</p>
+        </div>
+        <ul>
+            {% for entry in history_entries %}
+                <li>
+                    <a href="{{ entry.href }}">
+                        {% if period == "month" %}
+                            {{ entry.start|date:"F Y" }}
+                        {% else %}
+                            {{ entry.start|date:"M j" }} to {{ entry.end|date:"M j, Y" }}
+                        {% endif %}
+                    </a>
+                    {% if entry.is_selected %}<span class="meta">Showing</span>{% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </article>
+    <article class="card report-summary-card">
+        <h2>Report details</h2>
+        <dl class="detail-list">
+            <dt>Report type</dt><dd>{{ period_title }}</dd>
+            <dt>Range</dt><dd>{{ period_start|date:"M j, Y" }} to {{ period_end|date:"M j, Y" }}</dd>
+            <dt>Recurring tasks created in period</dt><dd>{{ recurring_generated_in_period }}</dd>
+            <dt>Active recurring templates now</dt><dd>{{ active_recurring_templates }}</dd>
+            <dt>Open assigned hours at period end</dt><dd>{{ total_assigned_hours }}</dd>
+            <dt>Report generated</dt><dd>{{ today|date:"M j, Y" }}</dd>
+        </dl>
+    </article>
 </section>
 <section class="report-metric-grid">
     {% for card in summary_cards %}
@@ -21,18 +92,18 @@
     <article class="table-card">
         <div class="split-heading">
             <h2>Worker workload</h2>
-            <p class="meta">Open assigned work compared to scheduled hours this week.</p>
+            <p class="meta">Open assigned work at period end compared to scheduled hours in this {{ period_unit }}.</p>
         </div>
         <table>
             <thead>
                 <tr>
                     <th>Teammate</th>
                     <th>Role</th>
-                    <th>Open Tasks</th>
-                    <th>Open Hours</th>
+                    <th>Open Tasks At End</th>
+                    <th>Open Hours At End</th>
                     <th>Scheduled Hours</th>
                     <th>Load</th>
-                    <th>Completed This Week</th>
+                    <th>Completed In Period</th>
                 </tr>
             </thead>
             <tbody>
@@ -44,7 +115,7 @@
                         <td>{{ row.open_estimated_hours }}</td>
                         <td>{{ row.scheduled_hours }}</td>
                         <td>{% if row.load_percent is not None %}{{ row.load_percent }}%{% else %}-{% endif %}</td>
-                        <td>{{ row.completed_this_week }}</td>
+                        <td>{{ row.completed_in_period }}</td>
                     </tr>
                 {% empty %}
                     <tr>
@@ -55,12 +126,9 @@
         </table>
     </article>
     <article class="card report-summary-card">
-        <h2>Recurring snapshot</h2>
-        <dl class="detail-list">
-            <dt>Recurring due soon</dt><dd>{{ recurring_due_soon }}</dd>
-            <dt>Total open assigned hours</dt><dd>{{ total_assigned_hours }}</dd>
-            <dt>Report generated</dt><dd>{{ today|date:"M j, Y" }}</dd>
-        </dl>
+        <h2>Export</h2>
+        <p>Download the currently selected {{ period_unit }} report to keep a past copy or share it elsewhere.</p>
+        <p><a class="button-link" href="{{ export_url }}">Export CSV</a></p>
     </article>
 </section>
 {% endblock %}
