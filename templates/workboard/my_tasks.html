@@ -265,10 +265,6 @@
                 const result = await moveTask(draggedCard, bucket);
                 draggedCard.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
                 clearDropIndicators();
-                if (result.status_bucket !== bucket.dataset.columnStatus) {
-                    window.location.reload();
-                    return;
-                }
             } catch (error) {
                 window.location.reload();
             }
