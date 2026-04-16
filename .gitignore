@@ -7,3 +7,5 @@ media/
 .env
 .env.*
 !.env.example
+runserver_stdout.log
+runserver_stderr.log

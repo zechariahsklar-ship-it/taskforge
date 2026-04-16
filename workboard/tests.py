@@ -1632,6 +1632,7 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         self.assertContains(response, "Taylor Helper (rotation)")
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class BoardFilterAndAlertTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="board-filter-supervisor", password="password123", role=UserRole.SUPERVISOR)
@@ -1746,6 +1747,26 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Overdue archive cleanup")
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
+
+    def test_board_overdue_view_excludes_today_tasks_before_evening_cutoff(self):
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 17, 55))):
+            response = self.client.get(reverse("board"), {"saved_view": "overdue"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Overdue archive cleanup")
+        self.assertNotContains(response, "Front desk shift prep")
+
+    def test_board_overdue_view_excludes_completed_tasks_even_after_evening_cutoff(self):
+        self.scheduled_task.status = TaskStatus.DONE
+        self.scheduled_task.completed_at = timezone.make_aware(datetime(2026, 3, 20, 17, 0))
+        self.scheduled_task.save(update_fields=["status", "completed_at", "updated_at"])
+
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 18, 5))):
+            response = self.client.get(reverse("board"), {"saved_view": "overdue"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Overdue archive cleanup")
+        self.assertNotContains(response, "Front desk shift prep")
 
     def test_board_filter_bar_hides_schedule_and_status_controls(self):
         response = self.client.get(reverse("board"))
@@ -2245,6 +2266,7 @@ class StudentSupervisorPermissionsTests(TestCase):
         self.assertEqual(self.task.status, TaskStatus.IN_PROGRESS)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class BoardTaskMoveTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="move-sup", password="password123", role=UserRole.SUPERVISOR)
@@ -2331,6 +2353,15 @@ class BoardTaskMoveTests(TestCase):
         response = self.client.post(reverse("board-task-move", args=[self.task.pk]), {"status": TaskStatus.DONE})
         self.assertEqual(response.status_code, 403)
 
+    def test_task_delete_closes_board_order_gap(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(reverse("task-delete", args=[self.second_task.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.third_task.refresh_from_db()
+        self.assertEqual(self.task.board_order, 1)
+        self.assertEqual(self.third_task.board_order, 2)
 
 class TaskDetailChecklistTests(TestCase):
     def setUp(self):
@@ -3676,6 +3707,7 @@ class TaskAuditHistoryTests(TestCase):
 
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class TeamHierarchyTests(TestCase):
     def setUp(self):
         self.team_alpha = Team.objects.create(name="Alpha", description="Alpha team")
@@ -3774,6 +3806,99 @@ class TeamHierarchyTests(TestCase):
 
         self.assertContains(response, "Alpha recurring")
         self.assertNotContains(response, "Beta recurring")
+
+    def test_supervisor_run_now_generates_task_on_their_team(self):
+        self.client.force_login(self.supervisor_alpha)
+        self.alpha_template.next_run_date = date(2026, 4, 6)
+        self.alpha_template.save(update_fields=["next_run_date", "updated_at"])
+
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 4, 1, 9, 0))):
+            response = self.client.post(reverse("recurring-run-now", args=[self.alpha_template.pk]), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        generated = Task.objects.get(recurring_template=self.alpha_template)
+        self.assertEqual(generated.team, self.team_alpha)
+        self.assertEqual(generated.assigned_to, self.worker_alpha)
+        self.assertEqual(generated.created_by, self.supervisor_alpha)
+
+    def test_supervisor_cannot_open_other_team_task_edit(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.get(reverse("task-edit", args=[self.beta_task.pk]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_supervisor_cannot_reassign_task_to_other_team_worker(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.post(
+            reverse("task-edit", args=[self.alpha_task.pk]),
+            {
+                "title": self.alpha_task.title,
+                "description": self.alpha_task.description,
+                "priority": self.alpha_task.priority,
+                "status": self.alpha_task.status,
+                "due_date": "2026-03-31",
+                "scheduled_date": "",
+                "scheduled_start_time": "",
+                "scheduled_end_time": "",
+                "respond_to_text": "",
+                "estimated_minutes": "",
+                "required_worker_tags": [],
+                "assigned_to": str(self.worker_beta.pk),
+                "additional_assignees": [],
+                "rotating_additional_assignee_count": "0",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Select a valid choice")
+        self.alpha_task.refresh_from_db()
+        self.assertEqual(self.alpha_task.assigned_to, self.worker_alpha)
+
+    def test_supervisor_cannot_move_other_team_task_on_board(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        response = self.client.post(
+            reverse("board-task-move", args=[self.beta_task.pk]),
+            {"status": TaskStatus.IN_PROGRESS},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_supervisor_cannot_open_other_team_recurring_routes(self):
+        self.client.force_login(self.supervisor_alpha)
+
+        detail_response = self.client.get(reverse("recurring-detail", args=[self.beta_template.pk]))
+        edit_response = self.client.get(reverse("recurring-edit", args=[self.beta_template.pk]))
+
+        self.assertEqual(detail_response.status_code, 404)
+        self.assertEqual(edit_response.status_code, 404)
+
+    def test_supervisor_cannot_mutate_other_team_recurring_template(self):
+        self.client.force_login(self.supervisor_alpha)
+        original_task_count = Task.objects.filter(recurring_template=self.beta_template).count()
+        original_next_run_date = self.beta_template.next_run_date
+
+        move_response = self.client.post(
+            reverse("recurring-move", args=[self.beta_template.pk]),
+            {"before_template_id": str(self.alpha_template.pk)},
+        )
+        delete_response = self.client.post(reverse("recurring-delete", args=[self.beta_template.pk]))
+        run_response = self.client.post(reverse("recurring-run-now", args=[self.beta_template.pk]))
+
+        self.assertEqual(move_response.status_code, 404)
+        self.assertEqual(delete_response.status_code, 404)
+        self.assertEqual(run_response.status_code, 404)
+        self.assertTrue(RecurringTaskTemplate.objects.filter(pk=self.beta_template.pk).exists())
+        self.beta_template.refresh_from_db()
+        self.assertEqual(Task.objects.filter(recurring_template=self.beta_template).count(), original_task_count)
+        self.assertEqual(self.beta_template.next_run_date, original_next_run_date)
 
     def test_admin_people_page_shows_team_management(self):
         self.client.force_login(self.admin)
