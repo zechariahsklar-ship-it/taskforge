@@ -63,8 +63,28 @@ def _scoped_supervisors(user):
 
 
 def _scoped_schedule_requests(user, queryset=None):
-    queryset = queryset or ScheduleAdjustmentRequest.objects.all()
+    if queryset is None:
+        queryset = ScheduleAdjustmentRequest.objects.all()
     return _scope_queryset_to_user_team(queryset, user)
+
+
+def _auto_decline_expired_schedule_requests(queryset=None, *, now=None):
+    if queryset is None:
+        queryset = ScheduleAdjustmentRequest.objects.all()
+    review_time = now or timezone.now()
+    expired_request_ids = list(
+        queryset.filter(
+            status=ScheduleAdjustmentRequestStatus.PENDING,
+            requested_date__lt=timezone.localdate(review_time),
+        ).values_list("pk", flat=True)
+    )
+    if not expired_request_ids:
+        return 0
+    return ScheduleAdjustmentRequest.objects.filter(pk__in=expired_request_ids).update(
+        status=ScheduleAdjustmentRequestStatus.DECLINED,
+        reviewed_by=None,
+        reviewed_at=review_time,
+    )
 
 
 def _reassignment_user_for_removed_account(request_user, removed_user):
@@ -424,6 +444,7 @@ def schedule_adjustment_request_view(request):
     if profile is None:
         return HttpResponseForbidden("Student worker access required.")
 
+    _auto_decline_expired_schedule_requests(profile.schedule_adjustment_requests.all())
     request_form = ScheduleAdjustmentRequestForm(request.POST or None)
     if request.method == "POST" and request_form.is_valid():
         adjustment_request = request_form.save(commit=False)
@@ -449,6 +470,7 @@ def schedule_adjustment_request_view(request):
 
 @supervisor_required
 def schedule_adjustment_request_list_view(request):
+    _auto_decline_expired_schedule_requests(_scoped_schedule_requests(request.user))
     if request.method == "POST":
         adjustment_request = get_object_or_404(
             _scoped_schedule_requests(
@@ -489,7 +511,7 @@ def schedule_adjustment_request_list_view(request):
             request.user,
             ScheduleAdjustmentRequest.objects.select_related("profile", "requested_by", "reviewed_by", "applied_override")
             .prefetch_related("blocks")
-            .exclude(status=ScheduleAdjustmentRequestStatus.PENDING)
+            .filter(status=ScheduleAdjustmentRequestStatus.APPLIED)
         )
         .order_by("-reviewed_at", "-updated_at", "-pk")[:20]
     )

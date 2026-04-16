@@ -932,6 +932,7 @@ class TaskCreateDueDateFallbackTests(TestCase):
         self.assertEqual(list(task.recurring_template.required_worker_tags.values_list("pk", flat=True)), [specialist_tag.pk])
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class TaskScheduledWindowTests(TestCase):
     def setUp(self):
         fixed_now = timezone.make_aware(datetime(2026, 3, 16, 8, 0))
@@ -1117,6 +1118,84 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(task.scheduled_start_time, time(9, 30))
         self.assertEqual(task.scheduled_end_time, time(10, 30))
         self.assertEqual(task.due_date, date(2026, 3, 16))
+
+    def test_task_create_auto_assignment_uses_temporary_override_for_target_day(self):
+        self.morning_worker.worker_profile.schedule_overrides.create(
+            override_date=date(2026, 3, 16),
+            note="Morning worker is out.",
+        )
+        afternoon_override = self.afternoon_worker.worker_profile.schedule_overrides.create(
+            override_date=date(2026, 3, 16),
+            note="Afternoon worker is covering the morning.",
+        )
+        afternoon_override.blocks.create(start_time=time(9, 0), end_time=time(11, 0), position=1)
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Override-driven morning coverage",
+                "description": "Use the temporary override instead of the weekly schedule.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:30", "10:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Override-driven morning coverage")
+        self.assertEqual(task.assigned_to, self.afternoon_worker)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.scheduled_start_time, time(9, 30))
+        self.assertEqual(task.scheduled_end_time, time(10, 30))
+
+    def test_task_create_accepts_manual_assignee_when_temporary_override_matches_window(self):
+        afternoon_override = self.afternoon_worker.worker_profile.schedule_overrides.create(
+            override_date=date(2026, 3, 16),
+            note="Afternoon worker is covering the morning.",
+        )
+        afternoon_override.blocks.create(start_time=time(9, 0), end_time=time(11, 0), position=1)
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Manual override assignment",
+                "description": "Manual assignment should respect the temporary override.",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:30", "10:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": str(self.afternoon_worker.pk),
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Manual override assignment")
+        self.assertEqual(task.assigned_to, self.afternoon_worker)
+        self.assertEqual(task.scheduled_date, date(2026, 3, 16))
+        self.assertEqual(task.scheduled_start_time, time(9, 30))
+        self.assertEqual(task.scheduled_end_time, time(10, 30))
 
     def test_task_create_auto_assigns_only_workers_with_required_tags(self):
         specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.morning_worker.team)
@@ -2719,6 +2798,7 @@ class TaskEstimateFeedbackTests(TestCase):
         self.assertContains(recurring_response, self.task.title)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
 class ScheduleAdjustmentRequestTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="schedule-request-supervisor", password="password123", role=UserRole.SUPERVISOR)
@@ -2739,15 +2819,16 @@ class ScheduleAdjustmentRequestTests(TestCase):
 
     def test_student_can_submit_schedule_adjustment_request(self):
         self.client.force_login(self.student)
-        response = self.client.post(
-            reverse("schedule-adjustment-request"),
-            {
-                "requested_date": "2026-03-24",
-                "note": "Need to swap tutoring hours.",
-                "request_segments": json.dumps([["13:00", "15:00"], ["16:00", "17:00"]]),
-            },
-            follow=True,
-        )
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 9, 0))):
+            response = self.client.post(
+                reverse("schedule-adjustment-request"),
+                {
+                    "requested_date": "2026-03-24",
+                    "note": "Need to swap tutoring hours.",
+                    "request_segments": json.dumps([["13:00", "15:00"], ["16:00", "17:00"]]),
+                },
+                follow=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         adjustment_request = ScheduleAdjustmentRequest.objects.get(profile=self.profile)
@@ -2764,6 +2845,26 @@ class ScheduleAdjustmentRequestTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Request a schedule adjustment")
 
+    def test_student_request_page_auto_declines_past_pending_request(self):
+        adjustment_request = ScheduleAdjustmentRequest.objects.create(
+            profile=self.profile,
+            requested_by=self.student,
+            requested_date=date(2026, 3, 24),
+            note="Old request should be auto-declined.",
+        )
+        adjustment_request.blocks.create(start_time=time(10, 0), end_time=time(12, 0), position=1)
+
+        self.client.force_login(self.student)
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 26, 9, 0))):
+            response = self.client.get(reverse("schedule-adjustment-request"))
+
+        self.assertEqual(response.status_code, 200)
+        adjustment_request.refresh_from_db()
+        self.assertEqual(adjustment_request.status, ScheduleAdjustmentRequestStatus.DECLINED)
+        self.assertIsNotNone(adjustment_request.reviewed_at)
+        self.assertContains(response, "Declined")
+        self.assertNotContains(response, "Pending")
+
     def test_supervisor_can_apply_schedule_request_to_temporary_override(self):
         adjustment_request = ScheduleAdjustmentRequest.objects.create(
             profile=self.profile,
@@ -2776,11 +2877,12 @@ class ScheduleAdjustmentRequestTests(TestCase):
         adjustment_request.blocks.create(start_time=time(16, 0), end_time=time(17, 0), position=2)
 
         self.client.force_login(self.supervisor)
-        response = self.client.post(
-            reverse("schedule-adjustment-requests"),
-            {"action": "apply_request", "schedule_request_id": str(adjustment_request.pk)},
-            follow=True,
-        )
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 9, 0))):
+            response = self.client.post(
+                reverse("schedule-adjustment-requests"),
+                {"action": "apply_request", "schedule_request_id": str(adjustment_request.pk)},
+                follow=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         adjustment_request.refresh_from_db()
@@ -2798,6 +2900,61 @@ class ScheduleAdjustmentRequestTests(TestCase):
                 scheduled_end_time=time(14, 30),
             )
         )
+
+    def test_supervisor_can_decline_schedule_request_and_it_disappears_from_review_page(self):
+        adjustment_request = ScheduleAdjustmentRequest.objects.create(
+            profile=self.profile,
+            requested_by=self.student,
+            requested_date=date(2026, 3, 25),
+            note="Need this declined request to disappear.",
+        )
+        adjustment_request.blocks.create(start_time=time(9, 0), end_time=time(11, 0), position=1)
+
+        self.client.force_login(self.supervisor)
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 9, 0))):
+            response = self.client.post(
+                reverse("schedule-adjustment-requests"),
+                {"action": "decline_request", "schedule_request_id": str(adjustment_request.pk)},
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        adjustment_request.refresh_from_db()
+        self.assertEqual(adjustment_request.status, ScheduleAdjustmentRequestStatus.DECLINED)
+        self.assertEqual(adjustment_request.reviewed_by, self.supervisor)
+        self.assertIsNotNone(adjustment_request.reviewed_at)
+        self.assertContains(response, "No pending schedule requests.")
+        self.assertContains(response, "No applied schedule requests yet.")
+        self.assertNotContains(response, "Need this declined request to disappear.")
+
+    def test_supervisor_review_page_auto_declines_past_pending_request(self):
+        expired_request = ScheduleAdjustmentRequest.objects.create(
+            profile=self.profile,
+            requested_by=self.student,
+            requested_date=date(2026, 3, 24),
+            note="Expired pending request.",
+        )
+        expired_request.blocks.create(start_time=time(8, 0), end_time=time(10, 0), position=1)
+        active_request = ScheduleAdjustmentRequest.objects.create(
+            profile=self.profile,
+            requested_by=self.student,
+            requested_date=date(2026, 3, 28),
+            note="Still pending request.",
+        )
+        active_request.blocks.create(start_time=time(13, 0), end_time=time(15, 0), position=1)
+
+        self.client.force_login(self.supervisor)
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 26, 9, 0))):
+            response = self.client.get(reverse("schedule-adjustment-requests"))
+
+        self.assertEqual(response.status_code, 200)
+        expired_request.refresh_from_db()
+        active_request.refresh_from_db()
+        self.assertEqual(expired_request.status, ScheduleAdjustmentRequestStatus.DECLINED)
+        self.assertIsNotNone(expired_request.reviewed_at)
+        self.assertEqual(active_request.status, ScheduleAdjustmentRequestStatus.PENDING)
+        self.assertContains(response, "Still pending request.")
+        self.assertNotContains(response, "Expired pending request.")
 
     def test_non_supervisor_cannot_open_schedule_request_review_page(self):
         self.client.force_login(self.student)
@@ -3490,6 +3647,8 @@ class ReportsViewTests(TestCase):
         self.assertEqual(response.context["period"], "week")
         self.assertEqual(response.context["period_start"], date(2026, 3, 16))
         self.assertEqual(response.context["period_end"], date(2026, 3, 22))
+        self.assertEqual(response.context["anchor_value"], "2026-03-16")
+        self.assertEqual(response.context["anchor_options"], [{"value": "2026-03-16", "label": "Mar 16, 2026"}])
         summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
         self.assertEqual(summary["Completed this week"], 1)
         self.assertEqual(summary["Created this week"], 4)
@@ -3501,11 +3660,13 @@ class ReportsViewTests(TestCase):
         self.assertNotContains(response, "Report details")
         self.assertContains(response, "Export CSV")
         self.assertContains(response, "Taylor Reports")
+        self.assertContains(response, '<select name="anchor" id="id_anchor">', html=False)
+        self.assertNotContains(response, 'type="date" name="anchor"', html=False)
         self.assertEqual(response.context["export_url"], f"{reverse('reports')}?period=week&anchor=2026-03-16&export=csv")
 
     def test_reports_view_supports_monthly_report_selection(self):
         with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
-            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-20"})
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-01"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["period"], "month")
@@ -3553,11 +3714,18 @@ class ReportsViewTests(TestCase):
         self._set_created_at(past_event, timezone.make_aware(datetime(2026, 2, 13, 9, 0)))
 
         with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
-            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-02-10"})
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-02-01"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["period_start"], date(2026, 2, 1))
         self.assertEqual(response.context["period_end"], date(2026, 2, 28))
+        self.assertEqual(
+            response.context["anchor_options"][:2],
+            [
+                {"value": "2026-03-01", "label": "Mar 1, 2026"},
+                {"value": "2026-02-01", "label": "Feb 1, 2026"},
+            ],
+        )
         summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
         self.assertEqual(summary["Completed this month"], 1)
         self.assertEqual(summary["Created this month"], 2)
@@ -3568,7 +3736,7 @@ class ReportsViewTests(TestCase):
 
     def test_reports_view_can_export_selected_report_as_csv(self):
         with patch("workboard.report_views.timezone.localdate", return_value=date(2026, 3, 20)):
-            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-20", "export": "csv"})
+            response = self.client.get(reverse("reports"), {"period": "month", "anchor": "2026-03-01", "export": "csv"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")

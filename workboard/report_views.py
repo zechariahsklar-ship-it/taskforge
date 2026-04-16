@@ -3,7 +3,7 @@ from calendar import monthrange
 from datetime import date, datetime, time, timedelta
 from urllib.parse import urlencode
 
-from django.db.models import Q, Sum
+from django.db.models import Min, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -73,6 +73,56 @@ def _period_unit_label(period):
 
 def _period_title(period):
     return "Monthly" if period == REPORT_PERIOD_MONTH else "Weekly"
+
+
+def _coerce_date_value(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return timezone.localtime(value).date()
+    return value
+
+
+def _period_start_label(period, period_start):
+    return period_start.strftime("%b %d, %Y").replace(" 0", " ")
+
+
+def _report_anchor_options(*, request_user, period, today, selected_anchor):
+    visible_tasks = _scope_queryset_to_user_team(Task.objects.all(), request_user)
+    task_dates = visible_tasks.aggregate(
+        earliest_due=Min("due_date"),
+        earliest_created=Min("created_at"),
+        earliest_completed=Min("completed_at"),
+    )
+    audit_dates = _scope_queryset_to_user_team(
+        TaskAuditEvent.objects.all(),
+        request_user,
+        field_name="task__team",
+    ).aggregate(earliest_created=Min("created_at"))
+
+    date_candidates = [
+        today,
+        selected_anchor,
+        _coerce_date_value(task_dates["earliest_due"]),
+        _coerce_date_value(task_dates["earliest_created"]),
+        _coerce_date_value(task_dates["earliest_completed"]),
+        _coerce_date_value(audit_dates["earliest_created"]),
+    ]
+    earliest_date = min(candidate for candidate in date_candidates if candidate is not None)
+    earliest_period_start = _normalize_period_anchor(period, earliest_date)
+    current_period_start = _normalize_period_anchor(period, today)
+
+    options = []
+    cursor = current_period_start
+    while cursor >= earliest_period_start:
+        options.append(
+            {
+                "value": cursor.isoformat(),
+                "label": _period_start_label(period, cursor),
+            }
+        )
+        cursor = _shift_period_anchor(cursor, period, -1)
+    return options
 
 
 def _hours_from_minutes(minutes):
@@ -175,7 +225,13 @@ def _build_report_context(request, *, today, period, selected_anchor):
         "period_unit": period_unit,
         "period_start": period_start,
         "period_end": period_end,
-        "anchor_value": selected_anchor.isoformat(),
+        "anchor_value": period_start.isoformat(),
+        "anchor_options": _report_anchor_options(
+            request_user=request.user,
+            period=period,
+            today=today,
+            selected_anchor=period_start,
+        ),
         "period_options": [
             {"value": REPORT_PERIOD_WEEK, "label": "Weekly"},
             {"value": REPORT_PERIOD_MONTH, "label": "Monthly"},
@@ -236,7 +292,10 @@ def _export_report_csv(context):
 def reports_view(request):
     today = timezone.localdate()
     period = _parse_period(request)
-    selected_anchor = _parse_anchor_date(request, today)
+    selected_anchor = _normalize_period_anchor(period, _parse_anchor_date(request, today))
+    current_period_start = _normalize_period_anchor(period, today)
+    if selected_anchor > current_period_start:
+        selected_anchor = current_period_start
     context = _build_report_context(request, today=today, period=period, selected_anchor=selected_anchor)
     if request.GET.get("export") == "csv":
         return _export_report_csv(context)

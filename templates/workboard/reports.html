@@ -26,7 +26,11 @@
             </p>
             <p>
                 <label for="id_anchor">Reference date</label>
-                <input type="date" name="anchor" id="id_anchor" value="{{ anchor_value }}">
+                <select name="anchor" id="id_anchor">
+                    {% for option in anchor_options %}
+                        <option value="{{ option.value }}"{% if option.value == anchor_value %} selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                </select>
             </p>
         </div>
         <div class="inline-form board-filter-actions">

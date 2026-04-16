@@ -45,7 +45,7 @@
         </div>
     </article>
     <article class="card">
-        <h2>Recently handled</h2>
+        <h2>Recently applied</h2>
         <div class="stack">
             {% for adjustment_request in recent_requests %}
                 <article class="note schedule-override-note">
@@ -57,7 +57,7 @@
                     <p class="meta">Handled by {{ adjustment_request.reviewed_by.display_label|default:"TaskForge" }}{% if adjustment_request.reviewed_at %} on {{ adjustment_request.reviewed_at|date:"M j, Y g:i A" }}{% endif %}.</p>
                 </article>
             {% empty %}
-                <p class="empty-state">No handled schedule requests yet.</p>
+                <p class="empty-state">No applied schedule requests yet.</p>
             {% endfor %}
         </div>
     </article>
