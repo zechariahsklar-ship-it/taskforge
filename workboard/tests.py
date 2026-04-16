@@ -2892,6 +2892,8 @@ class ScheduleAdjustmentRequestTests(TestCase):
         schedule_override = StudentScheduleOverride.objects.get(profile=self.profile, override_date=date(2026, 3, 24))
         self.assertEqual(schedule_override.blocks.count(), 2)
         self.assertIn("Applied from request by Schedule Student", schedule_override.note)
+        self.assertContains(response, "Edit temporary schedule")
+        self.assertContains(response, reverse("worker-schedule", args=[self.profile.pk]) + "?override_date=2026-03-24")
         self.assertTrue(
             TaskAssignmentService.user_is_available_for_window(
                 self.student,
@@ -3038,12 +3040,15 @@ class SelfScheduleViewTests(TestCase):
         self.assertContains(response, "Mar 24, 2026")
         self.assertContains(response, "1:00 PM - 3:00 PM (2 hrs)")
         self.assertContains(response, "Cover afternoon lab.")
+        self.assertContains(response, 'data-weekly-schedule-picker', html=False)
+        self.assertContains(response, 'data-read-only-schedule="true"', html=False)
+        self.assertContains(response, 'data-slot-value="09:00"', html=False)
         self.assertNotContains(response, "Save weekly schedule")
         self.assertNotContains(response, "Save temporary schedule")
         self.assertNotContains(response, "Remove temporary schedule")
-        self.assertNotContains(response, 'data-weekly-schedule-picker', html=False)
-        self.assertNotContains(response, 'name="monday_segments"', html=False)
-        self.assertNotContains(response, 'name="override_segments"', html=False)
+        self.assertNotContains(response, "Edit temporary schedule")
+        self.assertNotContains(response, 'data-clear-week', html=False)
+        self.assertNotContains(response, 'data-copy-day="monday"', html=False)
         content = response.content.decode()
         self.assertLess(content.index(reverse("completed-tasks")), content.index(reverse("self-schedule")))
         self.assertLess(content.index(reverse("self-schedule")), content.index(reverse("schedule-adjustment-request")))

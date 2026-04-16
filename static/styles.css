@@ -1052,6 +1052,15 @@ tr:hover td {
     background: linear-gradient(180deg, rgba(20, 120, 208, 0.95) 0%, rgba(11, 94, 168, 0.82) 100%);
 }
 
+.weekly-schedule-shell[data-read-only-schedule="true"] .weekly-calendar-cell {
+    cursor: default;
+    pointer-events: none;
+}
+
+.weekly-schedule-shell[data-read-only-schedule="true"] .weekly-calendar-frame {
+    box-shadow: inset 0 0 0 1px rgba(77, 120, 165, 0.18);
+}
+
 .weekly-schedule-manual {
     padding: 1rem 1.1rem;
     border: 1px solid var(--line);

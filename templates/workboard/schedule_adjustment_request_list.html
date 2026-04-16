@@ -51,7 +51,10 @@
                 <article class="note schedule-override-note">
                     <div class="split-heading schedule-override-note-header">
                         <p><strong>{{ adjustment_request.profile.display_name }}</strong>{% if request.user.is_admin %} | {{ adjustment_request.team.name|default:"No team" }}{% endif %} | {{ adjustment_request.requested_date }} | {{ adjustment_request.block_summary }}</p>
-                        <span class="meta">{{ adjustment_request.get_status_display }}</span>
+                        <div class="inline-form">
+                            <span class="meta">{{ adjustment_request.get_status_display }}</span>
+                            <a class="button-link button-link-secondary" href="{% url 'worker-schedule' adjustment_request.profile.pk %}?override_date={{ adjustment_request.requested_date|date:'Y-m-d' }}">Edit temporary schedule</a>
+                        </div>
                     </div>
                     <p>{{ adjustment_request.note|default:"No note" }}</p>
                     <p class="meta">Handled by {{ adjustment_request.reviewed_by.display_label|default:"TaskForge" }}{% if adjustment_request.reviewed_at %} on {{ adjustment_request.reviewed_at|date:"M j, Y g:i A" }}{% endif %}.</p>

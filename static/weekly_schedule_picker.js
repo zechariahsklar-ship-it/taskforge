@@ -151,6 +151,7 @@
         }
         root.dataset.pickerBound = "true";
 
+        var readOnly = root.dataset.readOnlySchedule === "true";
         var states = {};
         var dragging = null;
         var frame = root.querySelector(".weekly-calendar-frame");
@@ -327,57 +328,65 @@
             });
         }
 
-        var clearWeekButton = root.querySelector("[data-clear-week]");
-        if (clearWeekButton) {
-            clearWeekButton.addEventListener("click", function () {
-                Object.keys(states).forEach(function (day) {
-                    setSegments(day, []);
+        if (readOnly) {
+            root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
+                cell.disabled = true;
+                cell.tabIndex = -1;
+                cell.setAttribute("aria-disabled", "true");
+            });
+        } else {
+            var clearWeekButton = root.querySelector("[data-clear-week]");
+            if (clearWeekButton) {
+                clearWeekButton.addEventListener("click", function () {
+                    Object.keys(states).forEach(function (day) {
+                        setSegments(day, []);
+                    });
+                });
+            }
+
+            root.querySelectorAll("[data-copy-day]").forEach(function (button) {
+                button.addEventListener("click", function () {
+                    var sourceDay = button.dataset.copyDay;
+                    var scope = button.dataset.copyScope;
+                    var segments = cloneSegments(readSegments(sourceDay));
+                    weekdayTargetDays(sourceDay, scope).forEach(function (targetDay) {
+                        setSegments(targetDay, cloneSegments(segments));
+                    });
                 });
             });
-        }
 
-        root.querySelectorAll("[data-copy-day]").forEach(function (button) {
-            button.addEventListener("click", function () {
-                var sourceDay = button.dataset.copyDay;
-                var scope = button.dataset.copyScope;
-                var segments = cloneSegments(readSegments(sourceDay));
-                weekdayTargetDays(sourceDay, scope).forEach(function (targetDay) {
-                    setSegments(targetDay, cloneSegments(segments));
+            root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
+                cell.addEventListener("pointerdown", function (event) {
+                    startPointerSelection(cell, event);
+                });
+                cell.addEventListener("pointerenter", function (event) {
+                    updatePointerSelection(event);
+                });
+                cell.addEventListener("pointerup", function (event) {
+                    stopPointerSelection(event.pointerId);
+                });
+                cell.addEventListener("pointercancel", function (event) {
+                    stopPointerSelection(event.pointerId);
                 });
             });
-        });
 
-        root.querySelectorAll(".weekly-calendar-cell").forEach(function (cell) {
-            cell.addEventListener("pointerdown", function (event) {
-                startPointerSelection(cell, event);
-            });
-            cell.addEventListener("pointerenter", function (event) {
+            document.addEventListener("pointermove", function (event) {
+                if (!dragging) {
+                    return;
+                }
+                if (event.buttons === 0) {
+                    stopPointerSelection(event.pointerId);
+                    return;
+                }
                 updatePointerSelection(event);
             });
-            cell.addEventListener("pointerup", function (event) {
+            document.addEventListener("pointerup", function (event) {
                 stopPointerSelection(event.pointerId);
             });
-            cell.addEventListener("pointercancel", function (event) {
+            document.addEventListener("pointercancel", function (event) {
                 stopPointerSelection(event.pointerId);
             });
-        });
-
-        document.addEventListener("pointermove", function (event) {
-            if (!dragging) {
-                return;
-            }
-            if (event.buttons === 0) {
-                stopPointerSelection(event.pointerId);
-                return;
-            }
-            updatePointerSelection(event);
-        });
-        document.addEventListener("pointerup", function (event) {
-            stopPointerSelection(event.pointerId);
-        });
-        document.addEventListener("pointercancel", function (event) {
-            stopPointerSelection(event.pointerId);
-        });
+        }
 
         root.taskforgeSchedulePicker = {
             getSegments: function (day) {

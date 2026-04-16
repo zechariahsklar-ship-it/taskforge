@@ -1,19 +1,23 @@
 {% with day_rows=picker_form.day_rows %}
-<div{% if picker_id %} id="{{ picker_id }}"{% endif %} class="weekly-schedule-shell" data-weekly-schedule-picker style="--schedule-columns: {{ day_rows|length }};">
+<div{% if picker_id %} id="{{ picker_id }}"{% endif %} class="weekly-schedule-shell" data-weekly-schedule-picker{% if read_only_schedule %} data-read-only-schedule="true"{% endif %} style="--schedule-columns: {{ day_rows|length }};">
     <div class="weekly-schedule-hidden-fields" hidden aria-hidden="true">
         {% for hidden in picker_form.hidden_fields %}
             {{ hidden }}
         {% endfor %}
     </div>
-    <div class="weekly-schedule-toolbar{% if hide_picker_header %} is-headerless{% endif %}">
-        {% if not hide_picker_header %}
-            <div>
-                <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
-                <p>{{ picker_help_text|default:"Click or drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Click or drag across a blue block again to erase that range." }}</p>
-            </div>
-        {% endif %}
-        <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>{{ clear_all_label|default:"Clear all" }}</button>
-    </div>
+    {% if not hide_picker_header or not read_only_schedule %}
+        <div class="weekly-schedule-toolbar{% if hide_picker_header %} is-headerless{% endif %}">
+            {% if not hide_picker_header %}
+                <div>
+                    <h2>{{ picker_title|default:"Weekly schedule" }}</h2>
+                    <p>{{ picker_help_text|default:"Click or drag across the calendar to add as many 30-minute schedule blocks as needed for each day. Click or drag across a blue block again to erase that range." }}</p>
+                </div>
+            {% endif %}
+            {% if not read_only_schedule %}
+                <button type="button" class="button-link weekly-schedule-clear-week" data-clear-week>{{ clear_all_label|default:"Clear all" }}</button>
+            {% endif %}
+        </div>
+    {% endif %}
     <div class="weekly-schedule-summary-grid">
         {% for row in day_rows %}
             <article class="weekly-schedule-summary-card{% if row.override_entries %} is-temporary-override{% endif %}" data-schedule-summary-card="{{ row.prefix }}" data-weekday="{{ row.weekday }}">
@@ -29,6 +33,7 @@
                         </div>
                     {% endif %}
                 </div>
+                <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{% firstof row.summary_label empty_schedule_text "Not scheduled" %}</p>
                 {% if row.override_entries %}
                     <div class="meta weekly-schedule-override-summary">
                         {% for entry in row.override_entries %}
@@ -38,8 +43,6 @@
                             </p>
                         {% endfor %}
                     </div>
-                {% else %}
-                    <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{{ empty_schedule_text|default:"Not scheduled" }}</p>
                 {% endif %}
                 {% if row.segments.errors %}
                     <div class="weekly-schedule-errors">

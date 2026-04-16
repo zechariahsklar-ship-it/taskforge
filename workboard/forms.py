@@ -108,6 +108,48 @@ def _format_time_label(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
+def _format_hours_label(total_minutes: int) -> str:
+    if not total_minutes:
+        return ""
+    hours = Decimal(total_minutes) / Decimal("60")
+    label = format(hours.normalize(), "f").rstrip("0").rstrip(".")
+    return f"{label} hr" if label == "1" else f"{label} hrs"
+
+
+def _schedule_segments_from_raw(raw_value):
+    if not raw_value:
+        return []
+    try:
+        payload = json.loads(raw_value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+
+    segments = []
+    for item in payload:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return []
+        try:
+            start_value = datetime.strptime(str(item[0]), "%H:%M").time()
+            end_value = datetime.strptime(str(item[1]), "%H:%M").time()
+        except ValueError:
+            return []
+        if end_value <= start_value:
+            return []
+        segments.append((start_value, end_value))
+    return segments
+
+
+def _schedule_segments_summary_label(segments) -> str:
+    if not segments:
+        return "Not scheduled"
+    labels = [f"{_format_time_label(start_value)} - {_format_time_label(end_value)}" for start_value, end_value in segments]
+    total_minutes = sum(_window_minutes(start_value, end_value) for start_value, end_value in segments)
+    hours_label = _format_hours_label(total_minutes)
+    return ", ".join(labels) + (f" ({hours_label})" if hours_label else "")
+
+
 SCHEDULE_DAY_START_MINUTES = 7 * 60
 SCHEDULE_DAY_END_MINUTES = 18 * 60
 SCHEDULE_DAY_START_TIME = time(7, 0)
@@ -393,12 +435,14 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
         override_summary_map = getattr(self, "override_summary_map", {})
         rows = []
         for prefix, label, *rest in self.schedule_day_config:
+            segments_field = self[f"{prefix}_segments"]
             rows.append(
                 {
                     "prefix": prefix,
                     "label": label,
-                    "segments": self[f"{prefix}_segments"],
+                    "segments": segments_field,
                     "weekday": rest[0] if rest else "",
+                    "summary_label": _schedule_segments_summary_label(_schedule_segments_from_raw(segments_field.value())),
                     "override_entries": override_summary_map.get(prefix, []),
                 }
             )

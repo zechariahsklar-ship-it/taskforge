@@ -590,12 +590,14 @@ def self_schedule_view(request):
         return HttpResponseForbidden("Student worker access required.")
 
     schedule_overrides = list(profile.schedule_overrides.prefetch_related("blocks").all())
+    weekly_form = WeeklyAvailabilityForm(initial=_weekly_schedule_initial(profile))
+    weekly_form.override_summary_map = _weekly_override_summary_map(schedule_overrides)
     return render(
         request,
         "workboard/self_schedule.html",
         {
             "profile": profile,
-            "weekly_schedule_rows": _weekly_schedule_rows(profile, schedule_overrides),
+            "weekly_form": weekly_form,
             "schedule_overrides": schedule_overrides,
         },
     )
