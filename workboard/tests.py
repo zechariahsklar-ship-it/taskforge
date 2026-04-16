@@ -2962,6 +2962,108 @@ class ScheduleAdjustmentRequestTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
+class SelfScheduleViewTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="self-schedule-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.student = User.objects.create_user(
+            username="self-schedule-student",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Taylor",
+            last_name="Student",
+        )
+        self.student_profile = StudentWorkerProfile.objects.create(
+            user=self.student,
+            display_name="Taylor Student",
+            email="taylor.student@example.com",
+            normal_shift_availability="",
+        )
+        self.student_supervisor = User.objects.create_user(
+            username="self-schedule-lead",
+            password="password123",
+            role=UserRole.STUDENT_SUPERVISOR,
+            first_name="Jordan",
+            last_name="Lead",
+        )
+        self.student_supervisor_profile = StudentWorkerProfile.objects.create(
+            user=self.student_supervisor,
+            display_name="Jordan Lead",
+            email="jordan.lead@example.com",
+            normal_shift_availability="",
+        )
+        self._set_blocks(self.student_profile, Weekday.MONDAY, [(time(9, 0), time(12, 0))])
+        self._set_blocks(self.student_supervisor_profile, Weekday.TUESDAY, [(time(13, 0), time(16, 0))])
+        override = self.student_profile.schedule_overrides.create(
+            override_date=date(2026, 3, 24),
+            note="Cover afternoon lab.",
+            created_by=self.supervisor,
+        )
+        override.blocks.create(start_time=time(13, 0), end_time=time(15, 0), position=1)
+
+    def _set_blocks(self, profile, weekday, blocks):
+        availability, _ = StudentAvailability.objects.update_or_create(
+            profile=profile,
+            weekday=weekday,
+            defaults={
+                "start_time": blocks[0][0] if blocks else None,
+                "end_time": blocks[-1][1] if blocks else None,
+                "hours_available": sum(
+                    (datetime.combine(date.today(), end_value) - datetime.combine(date.today(), start_value)).total_seconds() // 60
+                    for start_value, end_value in blocks
+                ) / 60 if blocks else 0,
+            },
+        )
+        availability.blocks.all().delete()
+        for position, (start_value, end_value) in enumerate(blocks, start=1):
+            StudentAvailabilityBlock.objects.create(
+                availability=availability,
+                start_time=start_value,
+                end_time=end_value,
+                position=position,
+            )
+
+    def test_worker_can_view_read_only_self_schedule_and_nav_order(self):
+        self.client.force_login(self.student)
+        response = self.client.get(reverse("self-schedule"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "My Schedule")
+        self.assertContains(response, "Taylor Student")
+        self.assertContains(response, "9:00 AM - 12:00 PM (3 hrs)")
+        self.assertContains(response, "Mar 24, 2026")
+        self.assertContains(response, "1:00 PM - 3:00 PM (2 hrs)")
+        self.assertContains(response, "Cover afternoon lab.")
+        self.assertNotContains(response, "Save weekly schedule")
+        self.assertNotContains(response, "Save temporary schedule")
+        self.assertNotContains(response, "Remove temporary schedule")
+        self.assertNotContains(response, 'data-weekly-schedule-picker', html=False)
+        self.assertNotContains(response, 'name="monday_segments"', html=False)
+        self.assertNotContains(response, 'name="override_segments"', html=False)
+        content = response.content.decode()
+        self.assertLess(content.index(reverse("completed-tasks")), content.index(reverse("self-schedule")))
+        self.assertLess(content.index(reverse("self-schedule")), content.index(reverse("schedule-adjustment-request")))
+
+    def test_student_supervisor_can_view_their_own_schedule(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("self-schedule"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Jordan Lead")
+        self.assertContains(response, "1:00 PM - 4:00 PM (3 hrs)")
+        self.assertNotContains(response, "Cover afternoon lab.")
+
+    def test_supervisor_cannot_open_self_schedule_page(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("self-schedule"))
+
+        self.assertEqual(response.status_code, 403)
+
+
 class PeopleManagementTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(username="people-sup", password="password123", role=UserRole.SUPERVISOR)

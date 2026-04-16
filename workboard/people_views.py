@@ -32,6 +32,7 @@ from .models import (
     User,
     WorkerTag,
     UserRole,
+    _format_time_window,
 )
 from .task_views import (
     _save_schedule_override,
@@ -346,12 +347,48 @@ def _hours_summary_label(total_minutes: int) -> str:
     return f"{label} {suffix}"
 
 
-def _schedule_override_summary(blocks) -> str:
+def _schedule_blocks_summary(blocks, *, empty_label: str) -> str:
     if not blocks:
-        return "Off (0 hrs)"
+        return empty_label
     total_minutes = sum(_block_minutes(block.start_time, block.end_time) for block in blocks)
     block_labels = ", ".join(block.display_label for block in blocks)
     return f"{block_labels} ({_hours_summary_label(total_minutes)})"
+
+
+def _schedule_override_summary(blocks) -> str:
+    return _schedule_blocks_summary(blocks, empty_label="Off (0 hrs)")
+
+
+def _weekly_schedule_summary(availability) -> str:
+    if availability is None:
+        return "Not scheduled"
+    blocks = list(availability.blocks.order_by("position", "start_time", "end_time", "pk"))
+    if blocks:
+        return _schedule_blocks_summary(blocks, empty_label="Not scheduled")
+    if availability.start_time and availability.end_time:
+        total_minutes = _block_minutes(availability.start_time, availability.end_time)
+        return f"{_format_time_window(availability.start_time, availability.end_time)} ({_hours_summary_label(total_minutes)})"
+    if availability.hours_available:
+        return _hours_summary_label(int(float(availability.hours_available) * 60))
+    return "Not scheduled"
+
+
+def _weekly_schedule_rows(profile: StudentWorkerProfile, schedule_overrides) -> list[dict[str, object]]:
+    weekly_map = {
+        item.weekday: item
+        for item in profile.weekly_availability.prefetch_related("blocks").all()
+    }
+    override_summary_map = _weekly_override_summary_map(schedule_overrides)
+    rows = []
+    for prefix, label, weekday in DAY_FIELD_CONFIG:
+        rows.append(
+            {
+                "label": label,
+                "summary_label": _weekly_schedule_summary(weekly_map.get(weekday)),
+                "override_entries": override_summary_map.get(prefix, []),
+            }
+        )
+    return rows
 
 
 def _weekly_override_summary_map(schedule_overrides) -> dict[str, list[dict[str, str]]]:
@@ -542,6 +579,24 @@ def worker_edit_view(request, pk):
             "profile": profile,
             "worker_form": worker_form,
             **context_labels,
+        },
+    )
+
+
+@app_login_required
+def self_schedule_view(request):
+    profile = _current_worker_profile_for_request(request)
+    if profile is None:
+        return HttpResponseForbidden("Student worker access required.")
+
+    schedule_overrides = list(profile.schedule_overrides.prefetch_related("blocks").all())
+    return render(
+        request,
+        "workboard/self_schedule.html",
+        {
+            "profile": profile,
+            "weekly_schedule_rows": _weekly_schedule_rows(profile, schedule_overrides),
+            "schedule_overrides": schedule_overrides,
         },
     )
 

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}My Schedule | TaskForge{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>My Schedule</h1>
+        <p>View your weekly schedule and temporary schedule changes. This page is read-only.</p>
+    </div>
+</section>
+<section class="stack">
+    <article class="card">
+        <div class="split-heading">
+            <div>
+                <h2>Weekly schedule</h2>
+                <p class="meta">{{ profile.display_name }} | {{ profile.user.get_role_display }}</p>
+            </div>
+        </div>
+        <div class="weekly-schedule-summary-grid">
+            {% for row in weekly_schedule_rows %}
+                <article class="weekly-schedule-summary-card{% if row.override_entries %} is-temporary-override{% endif %}">
+                    <div class="weekly-schedule-summary-head">
+                        <h3>{{ row.label }}</h3>
+                    </div>
+                    <p class="meta">{{ row.summary_label }}</p>
+                    {% if row.override_entries %}
+                        <div class="meta weekly-schedule-override-summary">
+                            {% for entry in row.override_entries %}
+                                <p class="weekly-schedule-override-entry">
+                                    <span class="weekly-schedule-override-date">{{ entry.date_label }}</span>
+                                    <span class="weekly-schedule-override-details">{{ entry.summary_label }}</span>
+                                </p>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    </article>
+    <article class="card">
+        <h2>Temporary schedule changes</h2>
+        <div class="stack">
+            {% for schedule_override in schedule_overrides %}
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ schedule_override.override_date|date:"M j, Y" }}</strong> | {{ schedule_override.block_summary }}</p>
+                        {% if schedule_override.created_by %}<span class="meta">Added by {{ schedule_override.created_by.display_label }}</span>{% endif %}
+                    </div>
+                    <p>{{ schedule_override.note|default:"No note" }}</p>
+                </article>
+            {% empty %}
+                <p class="empty-state">No temporary schedule changes.</p>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

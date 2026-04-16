@@ -21,6 +21,7 @@
                 <a href="{% url 'my-tasks' %}">My Tasks</a>
                 <a href="{% url 'completed-tasks' %}">Completed Tasks</a>
                 {% if request.user.is_worker_role %}
+                    <a href="{% url 'self-schedule' %}">My Schedule</a>
                     <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
                 {% endif %}
                 {% if request.user.is_supervisor %}
