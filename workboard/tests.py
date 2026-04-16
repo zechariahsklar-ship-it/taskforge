@@ -3751,6 +3751,17 @@ class ReportsViewTests(TestCase):
         self.assertEqual(response.context["period_end"], date(2026, 3, 22))
         self.assertEqual(response.context["anchor_value"], "2026-03-16")
         self.assertEqual(response.context["anchor_options"], [{"value": "2026-03-16", "label": "Mar 16, 2026"}])
+        self.assertEqual(
+            response.context["anchor_options_by_period"],
+            {
+                "week": [{"value": "2026-03-16", "label": "Mar 16, 2026"}],
+                "month": [{"value": "2026-03-01", "label": "March 2026"}],
+            },
+        )
+        self.assertEqual(
+            response.context["selected_anchor_by_period"],
+            {"week": "2026-03-16", "month": "2026-03-01"},
+        )
         summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
         self.assertEqual(summary["Completed this week"], 1)
         self.assertEqual(summary["Created this week"], 4)
@@ -3763,6 +3774,8 @@ class ReportsViewTests(TestCase):
         self.assertContains(response, "Export CSV")
         self.assertContains(response, "Taylor Reports")
         self.assertContains(response, '<select name="anchor" id="id_anchor">', html=False)
+        self.assertContains(response, 'id="report-anchor-options"', html=False)
+        self.assertContains(response, 'id="report-selected-anchors"', html=False)
         self.assertNotContains(response, 'type="date" name="anchor"', html=False)
         self.assertEqual(response.context["export_url"], f"{reverse('reports')}?period=week&anchor=2026-03-16&export=csv")
 
@@ -3774,6 +3787,7 @@ class ReportsViewTests(TestCase):
         self.assertEqual(response.context["period"], "month")
         self.assertEqual(response.context["period_start"], date(2026, 3, 1))
         self.assertEqual(response.context["period_end"], date(2026, 3, 31))
+        self.assertEqual(response.context["anchor_options"], [{"value": "2026-03-01", "label": "March 2026"}])
         summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
         self.assertEqual(summary["Completed this month"], 1)
         self.assertEqual(summary["Created this month"], 4)
@@ -3824,10 +3838,11 @@ class ReportsViewTests(TestCase):
         self.assertEqual(
             response.context["anchor_options"][:2],
             [
-                {"value": "2026-03-01", "label": "Mar 1, 2026"},
-                {"value": "2026-02-01", "label": "Feb 1, 2026"},
+                {"value": "2026-03-01", "label": "March 2026"},
+                {"value": "2026-02-01", "label": "February 2026"},
             ],
         )
+        self.assertEqual(response.context["selected_anchor_by_period"]["week"], "2026-02-09")
         summary = {card["label"]: card["value"] for card in response.context["summary_cards"]}
         self.assertEqual(summary["Completed this month"], 1)
         self.assertEqual(summary["Created this month"], 2)

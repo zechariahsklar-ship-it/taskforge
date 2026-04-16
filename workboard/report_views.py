@@ -84,10 +84,12 @@ def _coerce_date_value(value):
 
 
 def _period_start_label(period, period_start):
+    if period == REPORT_PERIOD_MONTH:
+        return period_start.strftime("%B %Y")
     return period_start.strftime("%b %d, %Y").replace(" 0", " ")
 
 
-def _report_anchor_options(*, request_user, period, today, selected_anchor):
+def _earliest_report_date(*, request_user, today):
     visible_tasks = _scope_queryset_to_user_team(Task.objects.all(), request_user)
     task_dates = visible_tasks.aggregate(
         earliest_due=Min("due_date"),
@@ -102,14 +104,27 @@ def _report_anchor_options(*, request_user, period, today, selected_anchor):
 
     date_candidates = [
         today,
-        selected_anchor,
         _coerce_date_value(task_dates["earliest_due"]),
         _coerce_date_value(task_dates["earliest_created"]),
         _coerce_date_value(task_dates["earliest_completed"]),
         _coerce_date_value(audit_dates["earliest_created"]),
     ]
-    earliest_date = min(candidate for candidate in date_candidates if candidate is not None)
-    earliest_period_start = _normalize_period_anchor(period, earliest_date)
+    return min(candidate for candidate in date_candidates if candidate is not None)
+
+
+def _clamp_period_anchor(*, request_user, period, today, anchor):
+    earliest_period_start = _normalize_period_anchor(period, _earliest_report_date(request_user=request_user, today=today))
+    current_period_start = _normalize_period_anchor(period, today)
+    normalized_anchor = _normalize_period_anchor(period, anchor)
+    if normalized_anchor < earliest_period_start:
+        return earliest_period_start
+    if normalized_anchor > current_period_start:
+        return current_period_start
+    return normalized_anchor
+
+
+def _report_anchor_options(*, request_user, period, today):
+    earliest_period_start = _normalize_period_anchor(period, _earliest_report_date(request_user=request_user, today=today))
     current_period_start = _normalize_period_anchor(period, today)
 
     options = []
@@ -218,6 +233,33 @@ def _build_report_context(request, *, today, period, selected_anchor):
     newer_period_start = _shift_period_anchor(period_start, period, 1)
     older_period_start = _shift_period_anchor(period_start, period, -1)
 
+    anchor_options_by_period = {
+        REPORT_PERIOD_WEEK: _report_anchor_options(
+            request_user=request.user,
+            period=REPORT_PERIOD_WEEK,
+            today=today,
+        ),
+        REPORT_PERIOD_MONTH: _report_anchor_options(
+            request_user=request.user,
+            period=REPORT_PERIOD_MONTH,
+            today=today,
+        ),
+    }
+    selected_anchor_by_period = {
+        REPORT_PERIOD_WEEK: _clamp_period_anchor(
+            request_user=request.user,
+            period=REPORT_PERIOD_WEEK,
+            today=today,
+            anchor=period_start,
+        ).isoformat(),
+        REPORT_PERIOD_MONTH: _clamp_period_anchor(
+            request_user=request.user,
+            period=REPORT_PERIOD_MONTH,
+            today=today,
+            anchor=period_start,
+        ).isoformat(),
+    }
+
     return {
         "today": today,
         "period": period,
@@ -225,13 +267,10 @@ def _build_report_context(request, *, today, period, selected_anchor):
         "period_unit": period_unit,
         "period_start": period_start,
         "period_end": period_end,
-        "anchor_value": period_start.isoformat(),
-        "anchor_options": _report_anchor_options(
-            request_user=request.user,
-            period=period,
-            today=today,
-            selected_anchor=period_start,
-        ),
+        "anchor_value": selected_anchor_by_period[period],
+        "anchor_options": anchor_options_by_period[period],
+        "anchor_options_by_period": anchor_options_by_period,
+        "selected_anchor_by_period": selected_anchor_by_period,
         "period_options": [
             {"value": REPORT_PERIOD_WEEK, "label": "Weekly"},
             {"value": REPORT_PERIOD_MONTH, "label": "Monthly"},
@@ -292,10 +331,12 @@ def _export_report_csv(context):
 def reports_view(request):
     today = timezone.localdate()
     period = _parse_period(request)
-    selected_anchor = _normalize_period_anchor(period, _parse_anchor_date(request, today))
-    current_period_start = _normalize_period_anchor(period, today)
-    if selected_anchor > current_period_start:
-        selected_anchor = current_period_start
+    selected_anchor = _clamp_period_anchor(
+        request_user=request.user,
+        period=period,
+        today=today,
+        anchor=_parse_anchor_date(request, today),
+    )
     context = _build_report_context(request, today=today, period=period, selected_anchor=selected_anchor)
     if request.GET.get("export") == "csv":
         return _export_report_csv(context)

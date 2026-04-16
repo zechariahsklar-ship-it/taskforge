@@ -51,6 +51,51 @@
         </div>
     </form>
 </section>
+{{ anchor_options_by_period|json_script:"report-anchor-options" }}
+{{ selected_anchor_by_period|json_script:"report-selected-anchors" }}
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const periodSelect = document.getElementById("id_period");
+        const anchorSelect = document.getElementById("id_anchor");
+        const anchorOptionsElement = document.getElementById("report-anchor-options");
+        const selectedAnchorsElement = document.getElementById("report-selected-anchors");
+        if (!periodSelect || !anchorSelect || !anchorOptionsElement || !selectedAnchorsElement) {
+            return;
+        }
+
+        const anchorOptionsByPeriod = JSON.parse(anchorOptionsElement.textContent);
+        const selectedAnchorByPeriod = JSON.parse(selectedAnchorsElement.textContent);
+
+        function rebuildAnchorOptions(period) {
+            const options = anchorOptionsByPeriod[period] || [];
+            const preferredValue = selectedAnchorByPeriod[period];
+            anchorSelect.innerHTML = "";
+            for (const option of options) {
+                const optionElement = document.createElement("option");
+                optionElement.value = option.value;
+                optionElement.textContent = option.label;
+                if (option.value === preferredValue) {
+                    optionElement.selected = true;
+                }
+                anchorSelect.appendChild(optionElement);
+            }
+            if (options.length && !anchorSelect.value) {
+                anchorSelect.value = options[0].value;
+            }
+            if (anchorSelect.value) {
+                selectedAnchorByPeriod[period] = anchorSelect.value;
+            }
+        }
+
+        periodSelect.addEventListener("change", function () {
+            rebuildAnchorOptions(periodSelect.value);
+        });
+
+        anchorSelect.addEventListener("change", function () {
+            selectedAnchorByPeriod[periodSelect.value] = anchorSelect.value;
+        });
+    });
+</script>
 <section class="report-metric-grid">
     {% for card in summary_cards %}
         <article class="card report-metric-card">
