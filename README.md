@@ -80,6 +80,13 @@ python manage.py test workboard.tests
 python manage.py test workboard.tests.RecurringTaskListViewTests workboard.tests.ReportsViewTests
 ```
 
+For manual visual/browser checks, install the dev extras and Playwright's browser binary (not required for the automated test suite, and not installed in production):
+
+```bash
+pip install -r requirements-dev.txt
+playwright install chromium
+```
+
 ## OpenAI key setup
 
 Store the real OpenAI key only in your local `.env` file or in deployment environment variables. Do not commit it to GitHub.
