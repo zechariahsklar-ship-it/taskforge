@@ -4,8 +4,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="TaskForge is an internal task and scheduling tool for supervising student workers.">
+    <meta name="theme-color" content="#003a70">
+    <link rel="icon" href="{% static 'taskforge-mark.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'taskforge-mark.png' %}">
     <title>{% block title %}TaskForge{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260804a">
+    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260805a">
     <script>
         (function () {
             try {
@@ -32,19 +36,29 @@
                     <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
                 {% endif %}
                 {% if request.user.is_supervisor %}
-                    <a href="{% url 'task-intake' %}">Intake</a>
-                    <a href="{% url 'task-create' %}">New Task</a>
-                    <a href="{% url 'recurring-list' %}">Recurring</a>
-                    <a href="{% url 'worker-list' %}">Workers</a>
-                    <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
-                    <a href="{% url 'reports' %}">Reports</a>
-                    <a href="{% url 'admin-guide' %}">Guide</a>
+                    <div class="nav-dropdown" data-nav-dropdown>
+                        <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">Manage</button>
+                        <div class="nav-dropdown-menu">
+                            <a href="{% url 'task-intake' %}">Intake</a>
+                            <a href="{% url 'task-create' %}">New Task</a>
+                            <a href="{% url 'recurring-list' %}">Recurring</a>
+                            <a href="{% url 'worker-list' %}">Workers</a>
+                            <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
+                            <a href="{% url 'reports' %}">Reports</a>
+                        </div>
+                    </div>
                 {% endif %}
-                <a href="{% url 'password-change' %}">Change Password</a>
-                <form action="{% url 'logout' %}" method="post">
-                    {% csrf_token %}
-                    <button type="submit" class="link-button">Logout</button>
-                </form>
+                <div class="nav-dropdown" data-nav-dropdown>
+                    <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">{{ request.user.display_label }}</button>
+                    <div class="nav-dropdown-menu">
+                        {% if request.user.is_supervisor %}<a href="{% url 'admin-guide' %}">Guide</a>{% endif %}
+                        <a href="{% url 'password-change' %}">Change Password</a>
+                        <form action="{% url 'logout' %}" method="post">
+                            {% csrf_token %}
+                            <button type="submit" class="link-button">Logout</button>
+                        </form>
+                    </div>
+                </div>
             </nav>
         {% endif %}
     </header>
@@ -59,6 +73,7 @@
         {% block content %}{% endblock %}
     </main>
     <script src="{% static 'password_toggle.js' %}?v=20260423a" defer></script>
+    <script src="{% static 'nav_dropdown.js' %}?v=20260805a" defer></script>
 </body>
 </html>
 
