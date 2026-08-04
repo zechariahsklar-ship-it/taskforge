@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .models import (
+    BlackoutDate,
     RecurringTaskTemplate,
     StudentAvailability,
     StudentWorkerProfile,
@@ -108,6 +109,12 @@ class TaskAdmin(admin.ModelAdmin):
 class RecurringTaskTemplateAdmin(admin.ModelAdmin):
     list_display = ("title", "team", "recurrence_pattern", "next_run_date", "assign_to", "active")
     list_filter = ("team", "recurrence_pattern", "active")
+
+
+@admin.register(BlackoutDate)
+class BlackoutDateAdmin(admin.ModelAdmin):
+    list_display = ("date", "label", "team", "created_by")
+    list_filter = ("team",)
 
 
 class TaskIntakeDraftAttachmentInline(admin.TabularInline):

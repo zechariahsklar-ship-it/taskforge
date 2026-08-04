@@ -46,10 +46,17 @@
         <ul>
             <li>Drag across the weekly calendar to add blocks in 30-minute increments.</li>
             <li>Use the weekday copy buttons to copy one day across the rest of the week.</li>
+            <li>Paste a student's class schedule (one class per line, like "MWF 9:00-9:50am") into <strong>Import from class schedule</strong> to fill in when they're free, then review the calendar before saving.</li>
             <li>Use <strong>Temporary schedule change</strong> for a one-date exception such as time off or a special shift.</li>
             <li>The <strong>Load normal schedule</strong> button pulls that weekday's normal schedule into the one-date override so you can adjust it instead of rebuilding it from scratch.</li>
         </ul>
         <p class="meta">A temporary schedule overrides the weekly schedule only for that date.</p>
+    </article>
+
+    <article class="card">
+        <h2>Schedule requests and blackout dates</h2>
+        <p><a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a> lists students' pending and applied schedule adjustment requests. Submitting one also creates a review task assigned to whichever supervisor currently has the lightest load.</p>
+        <p>The same page lets you add team-wide <strong>blackout dates</strong>, like college breaks. Recurring tasks skip those dates automatically and pick back up on the next cycle; students can still submit a schedule adjustment request for a blackout date if they want to work.</p>
     </article>
 
     <article class="card">

@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, F, Max, Q, Sum
+from django.db.models import F, Max, Q, Sum
 from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -17,11 +17,7 @@ from .forms import (
     AppPasswordChangeForm,
     TaskBoardFilterForm,
     CompletedTaskFilterForm,
-    RecurringTaskTemplateForm,
     StudentScheduleOverrideForm,
-    StudentWorkerProfileForm,
-    SupervisorForm,
-    SupervisorStudentPasswordResetForm,
     TaskForm,
     TaskManualForm,
     TaskChecklistItemForm,
@@ -1368,7 +1364,6 @@ def task_detail_view(request, pk):
                 return HttpResponseBadRequest("Checklist update payload was incomplete.")
             ordered_items = []
             seen_ids = set()
-            deleted_any = False
             for index, raw_id in enumerate(item_ids):
                 try:
                     item_id = int(raw_id)
@@ -1384,7 +1379,6 @@ def task_detail_view(request, pk):
                 should_delete = not updated_title or delete_item_id == str(item_id)
                 if should_delete:
                     item.delete()
-                    deleted_any = True
                     continue
                 item.updated_title = updated_title
                 item.updated_completed = str(item_id) in completed_ids

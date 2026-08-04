@@ -6,11 +6,11 @@ TaskForge is a standalone internal Django web app for supervising student worker
 
 - Django monolith with server-rendered templates
 - PostgreSQL as the primary database
-- Custom user model with `supervisor` and `student_worker` roles
-- Student worker profiles and workload summary
-- Task intake flow with a placeholder AI parsing service
-- Shared task board and worker task view
-- Recurring task templates with a simple built-in generation command
+- Custom user model with `supervisor`, `student_supervisor`, and `student_worker` roles, scoped by team
+- Student worker profiles, weekly availability, and workload reporting
+- Task intake flow with an OpenAI-backed parser (structured extraction, few-shot corrections) and a deterministic mock fallback for local dev/CI
+- Shared task board and worker task view, with schedule- and skill-tag-aware auto-assignment
+- Recurring task templates with rotation, team blackout dates, and a built-in generation command
 - Django admin and sample seed data
 
 ## Local setup
@@ -78,6 +78,13 @@ Useful commands during development:
 python manage.py check
 python manage.py test workboard.tests
 python manage.py test workboard.tests.RecurringTaskListViewTests workboard.tests.ReportsViewTests
+```
+
+Lint with [ruff](https://docs.astral.sh/ruff/) (config lives in `pyproject.toml`):
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
 ```
 
 For manual visual/browser checks, install the dev extras and Playwright's browser binary (not required for the automated test suite, and not installed in production):

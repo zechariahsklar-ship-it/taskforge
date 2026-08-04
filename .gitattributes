@@ -1,0 +1,8 @@
+# Normalize line endings so contributors on different OSes don't produce
+# noisy whitespace-only diffs. Git stores everything as LF; checkouts on
+# Windows still get CRLF for text files unless overridden below.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary

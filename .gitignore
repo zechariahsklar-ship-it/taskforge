@@ -9,3 +9,16 @@ media/
 !.env.example
 runserver_stdout.log
 runserver_stderr.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
