@@ -33,7 +33,6 @@
                         </div>
                     {% endif %}
                 </div>
-                <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{% firstof row.summary_label empty_schedule_text "Not scheduled" %}</p>
                 {% if row.override_entries %}
                     <div class="meta weekly-schedule-override-summary">
                         {% for entry in row.override_entries %}
@@ -43,6 +42,8 @@
                             </p>
                         {% endfor %}
                     </div>
+                {% else %}
+                    <p class="meta weekly-schedule-summary-text" data-schedule-summary-text="{{ row.prefix }}">{% firstof row.summary_label empty_schedule_text "Not scheduled" %}</p>
                 {% endif %}
                 {% if row.segments.errors %}
                     <div class="weekly-schedule-errors">
