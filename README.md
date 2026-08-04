@@ -1,5 +1,7 @@
 # TaskForge
 
+[![CI](https://github.com/zechariahsklar-ship-it/taskforge/actions/workflows/ci.yml/badge.svg)](https://github.com/zechariahsklar-ship-it/taskforge/actions/workflows/ci.yml)
+
 TaskForge is a standalone internal Django web app for supervising student workers. It is intended as a temporary, self-contained solution for intake, assignment, and tracking of student worker tasks. Supervisors can paste a freeform request, review AI-extracted fields, create and assign tasks, manage recurring work, and track progress on a shared board. Student workers can review assigned tasks, update status, and add notes.
 
 ## MVP scope
