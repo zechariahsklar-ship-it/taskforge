@@ -4,7 +4,7 @@ import json
 from decimal import Decimal
 
 from django import forms
-from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
+from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm, SetPasswordForm
 from django.db.models import Q
 from django.utils import timezone
 
@@ -228,10 +228,16 @@ class MultipleFileField(forms.FileField):
 class StyledFormMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for field in self.fields.values():
+        for field_name, field in self.fields.items():
             widget = field.widget
             if isinstance(widget, forms.HiddenInput):
                 continue
+            if isinstance(widget, forms.PasswordInput):
+                widget.attrs["data-password-toggle"] = "true"
+                if field_name == "old_password":
+                    widget.attrs.setdefault("autocomplete", "current-password")
+                elif "password" in field_name:
+                    widget.attrs.setdefault("autocomplete", "new-password")
             if isinstance(widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple)):
                 widget.attrs["class"] = f"{widget.attrs.get('class', '')} form-check-input".strip()
             else:
@@ -1512,6 +1518,10 @@ class TaskChecklistItemForm(StyledFormMixin, forms.ModelForm):
         fields = ["title"]
         widgets = {"title": forms.TextInput(attrs={"placeholder": "Add checklist item"})}
         labels = {"title": ""}
+
+
+class AppAuthenticationForm(StyledFormMixin, AuthenticationForm):
+    pass
 
 
 class AppPasswordChangeForm(StyledFormMixin, PasswordChangeForm):

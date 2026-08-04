@@ -8,12 +8,12 @@
     <form method="post">
         {% csrf_token %}
         <p><label for="id_username">Username</label><input class="form-control" type="text" name="username" id="id_username" required></p>
-        <p><label for="id_password">Password</label><input class="form-control" type="text" name="password" id="id_password"></p>
+        <p><label for="id_password">Password</label><input class="form-control" type="password" name="password" id="id_password" data-password-toggle="true" autocomplete="new-password"></p>
         <p class="meta">Optional. Leave blank to generate a secure temporary password that you can share once.</p>
         <p><label for="id_first_name">First name</label><input class="form-control" type="text" name="first_name" id="id_first_name"></p>
         <p><label for="id_last_name">Last name</label><input class="form-control" type="text" name="last_name" id="id_last_name"></p>
         {{ form.as_p }}
-        {% include "workboard/includes/weekly_schedule_picker.html" %}
+        {% include "workboard/includes/weekly_schedule_picker.html" with show_day_actions=False %}
         <button type="submit">{{ submit_label|default:"Create student" }}</button>
     </form>
 </section>

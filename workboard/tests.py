@@ -1801,6 +1801,14 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
 
+    def test_board_uses_single_row_horizontal_scroll_layout(self):
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-board-shell-scroll="horizontal"', html=False)
+        self.assertContains(response, 'data-board-layout="single-row"', html=False)
+        self.assertContains(response, 'board-grid-single-row', html=False)
+
     def test_board_groups_overdue_tasks_into_overdue_column_between_new_and_in_progress(self):
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
             response = self.client.get(reverse("board"))
@@ -3350,8 +3358,8 @@ class PeopleManagementTests(TestCase):
         self.assertContains(create_response, 'data-slot-end="18:00"')
         self.assertNotContains(create_response, 'data-slot-value="06:30"')
         self.assertNotContains(create_response, 'data-slot-end="18:30"')
-        self.assertContains(create_response, 'data-copy-day="monday"')
-        self.assertContains(create_response, 'data-clear-day="monday"')
+        self.assertNotContains(create_response, 'data-copy-day="monday"')
+        self.assertNotContains(create_response, 'data-clear-day="monday"')
         self.assertNotContains(details_response, 'data-weekly-schedule-picker')
         self.assertContains(details_response, 'Remove student')
         self.assertContains(schedule_response, 'data-weekly-schedule-picker')
@@ -3662,6 +3670,63 @@ class SupervisorRoutePermissionTests(TestCase):
         self.client.force_login(self.student_supervisor)
         response = self.client.post(reverse("recurring-run-now", args=[self.template.pk]))
         self.assertEqual(response.status_code, 403)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False, SESSION_COOKIE_SECURE=False, CSRF_COOKIE_SECURE=False)
+class PasswordToggleUiTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="password-ui-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.worker = User.objects.create_user(
+            username="password-ui-worker",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Taylor",
+            last_name="Helper",
+        )
+        self.worker_profile = StudentWorkerProfile.objects.create(
+            user=self.worker,
+            display_name="Taylor Helper",
+            email="taylor.helper@example.com",
+            normal_shift_availability="",
+        )
+
+    def test_login_page_renders_password_toggle_hook(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "password_toggle.js")
+        self.assertContains(response, 'data-password-toggle="true"', html=False)
+
+    def test_password_change_and_reset_pages_render_password_toggle_hooks(self):
+        self.client.force_login(self.supervisor)
+
+        change_response = self.client.get(reverse("password-change"))
+        reset_response = self.client.get(reverse("worker-password-reset", args=[self.worker.pk]))
+
+        self.assertEqual(change_response.status_code, 200)
+        self.assertContains(change_response, "password_toggle.js")
+        self.assertContains(change_response, 'data-password-toggle="true"', count=3, html=False)
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertContains(reset_response, 'data-password-toggle="true"', count=2, html=False)
+
+    def test_create_account_pages_use_password_fields_with_toggle_hooks(self):
+        self.client.force_login(self.supervisor)
+
+        worker_response = self.client.get(reverse("worker-create"))
+        supervisor_response = self.client.get(reverse("supervisor-create"))
+
+        self.assertEqual(worker_response.status_code, 200)
+        self.assertContains(worker_response, 'type="password"', html=False)
+        self.assertContains(worker_response, 'name="password"', html=False)
+        self.assertContains(worker_response, 'data-password-toggle="true"', html=False)
+        self.assertEqual(supervisor_response.status_code, 200)
+        self.assertContains(supervisor_response, 'type="password"', html=False)
+        self.assertContains(supervisor_response, 'name="password"', html=False)
+        self.assertContains(supervisor_response, 'data-password-toggle="true"', html=False)
 
 
 

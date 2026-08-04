@@ -49,8 +49,8 @@
         </div>
     </form>
 </section>
-<section class="board-shell">
-    <section class="board-grid" data-board-grid>
+<section class="board-shell board-shell-horizontal" data-board-shell-scroll="horizontal">
+    <section class="board-grid board-grid-single-row" data-board-grid data-board-layout="single-row">
         {% for column in grouped_tasks %}
             <div class="board-column{% if column.is_overdue_column %} board-column-overdue{% endif %}" data-column-status="{{ column.value }}" data-column-droppable="{{ column.droppable|yesno:'true,false' }}" draggable="true">
                 <h2 class="board-column-title">{{ column.label }}</h2>

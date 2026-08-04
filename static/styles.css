@@ -105,6 +105,13 @@ body a:focus-visible {
     margin: 0 auto;
 }
 
+.board-shell-horizontal {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.5rem;
+    scrollbar-gutter: stable;
+}
+
 .site-nav a,
 .site-nav a:visited,
 .site-nav .link-button {
@@ -145,11 +152,17 @@ body a:focus-visible {
 
 .board-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 1rem;
     width: 100%;
     min-width: 0;
     align-items: start;
+}
+
+.board-grid-single-row {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 340px);
+    width: max-content;
+    min-width: 100%;
 }
 
 .board-column {
@@ -275,6 +288,57 @@ button,
     font: inherit;
 }
 
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.password-toggle-field {
+    position: relative;
+    display: block;
+}
+
+.password-toggle-field > input {
+    padding-right: 3.4rem;
+}
+
+.password-toggle-button {
+    position: absolute;
+    top: 50%;
+    right: 0.55rem;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #9ebbd6;
+    box-shadow: none;
+}
+
+.password-toggle-button:hover,
+.password-toggle-button:focus-visible {
+    background: rgba(20, 120, 208, 0.18);
+    color: #ffffff;
+}
+
+.password-toggle-icon {
+    width: 1.15rem;
+    height: 1.15rem;
+}
+
 button,
 .button-link {
     width: auto;
@@ -348,7 +412,7 @@ td {
         align-items: flex-start;
     }
 
-    .board-grid {
+    .board-grid:not(.board-grid-single-row) {
         grid-template-columns: 1fr;
     }
 }
