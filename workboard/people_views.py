@@ -59,11 +59,15 @@ def _scoped_worker_profiles(user):
 
 
 def _scoped_users(user, queryset=None):
-    return _scope_queryset_to_user_team(queryset or User.objects.all(), user)
+    if queryset is None:
+        queryset = User.objects.all()
+    return _scope_queryset_to_user_team(queryset, user)
 
 
 def _scoped_worker_tags(user, queryset=None):
-    return _scope_queryset_to_user_team(queryset or WorkerTag.objects.all(), user)
+    if queryset is None:
+        queryset = WorkerTag.objects.all()
+    return _scope_queryset_to_user_team(queryset, user)
 
 
 def _scoped_supervisors(user):
@@ -537,7 +541,9 @@ def schedule_adjustment_request_view(request):
 
 
 def _scoped_blackout_dates(user, queryset=None):
-    return _scope_queryset_to_user_team(queryset or BlackoutDate.objects.all(), user)
+    if queryset is None:
+        queryset = BlackoutDate.objects.all()
+    return _scope_queryset_to_user_team(queryset, user)
 
 
 @supervisor_required

@@ -17,7 +17,8 @@ from .task_views import (
 
 
 def _scoped_recurring_templates(user, queryset=None):
-    queryset = queryset or RecurringTaskTemplate.objects.all()
+    if queryset is None:
+        queryset = RecurringTaskTemplate.objects.all()
     return _scope_queryset_to_user_team(queryset, user)
 
 
@@ -27,8 +28,8 @@ def recurring_template_list_view(request):
     templates = (
         _scoped_recurring_templates(
             request.user,
-            RecurringTaskTemplate.objects.select_related("team", "assign_to", "requested_by")
-            .prefetch_related("additional_assignees", "required_worker_tags")
+            RecurringTaskTemplate.objects.select_related("team", "assign_to__worker_profile", "requested_by")
+            .prefetch_related("additional_assignees__worker_profile", "required_worker_tags")
             .annotate(generated_task_count=Count("generated_tasks")),
         )
         .order_by(F("display_order").asc(nulls_last=True), "next_run_date", "title", "pk")

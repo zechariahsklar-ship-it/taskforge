@@ -293,14 +293,19 @@
             event.preventDefault();
 
             if (draggedCard) {
+                // Capture the card now: dragend fires on the source element
+                // almost immediately after drop and nulls out draggedCard for
+                // cleanup, which would otherwise race the pending fetch below
+                // and throw once it resolves (falling into the catch/reload).
+                const card = draggedCard;
                 if (column.dataset.columnDroppable === 'false') {
                     clearDropIndicators();
                     return;
                 }
                 suppressClick = true;
                 try {
-                    const result = await moveTask(draggedCard, column);
-                    draggedCard.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
+                    const result = await moveTask(card, column);
+                    card.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
                     clearDropIndicators();
                 } catch (error) {
                     window.location.reload();

@@ -463,7 +463,11 @@ class RecurringTaskTemplate(models.Model):
 
     @property
     def required_worker_tag_labels(self):
-        labels = list(self.required_worker_tags.order_by("name", "pk").values_list("name", flat=True))
+        # WorkerTag's default ordering is already name/pk, and using .all()
+        # here (instead of .order_by()/.values_list()) lets this reuse a
+        # prefetch_related("required_worker_tags") cache instead of issuing
+        # a fresh query per row when listing many of these at once.
+        labels = [tag.name for tag in self.required_worker_tags.all()]
         return ", ".join(labels) if labels else "None"
 
     def advance_next_run_date(self):
@@ -640,7 +644,11 @@ class Task(models.Model):
 
     @property
     def required_worker_tag_labels(self):
-        labels = list(self.required_worker_tags.order_by("name", "pk").values_list("name", flat=True))
+        # WorkerTag's default ordering is already name/pk, and using .all()
+        # here (instead of .order_by()/.values_list()) lets this reuse a
+        # prefetch_related("required_worker_tags") cache instead of issuing
+        # a fresh query per row when listing many of these at once.
+        labels = [tag.name for tag in self.required_worker_tags.all()]
         return ", ".join(labels) if labels else "None"
 
 

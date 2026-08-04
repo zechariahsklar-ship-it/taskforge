@@ -11,7 +11,7 @@
                 <h1>{{ task.title }}</h1>
                 <div class="board-task-meta-row">
                     <span class="priority-pill priority-{{ task.priority }}">{{ task.get_priority_display }}</span>
-                    <span class="meta">Status: {{ task.get_status_display }}</span>
+                    <span class="meta" data-task-status-label>Status: {{ task.get_status_display }}</span>
                     <span class="meta">Due: {{ task.detail_due_date|date:"M j, Y" }}</span>
                 </div>
             </div>
@@ -22,12 +22,13 @@
 
         <section class="task-detail-section task-detail-section-tight">
             <h2>Update status</h2>
-            <form method="post" class="inline-form inline-form-status">
+            <form method="post" class="inline-form inline-form-status" data-status-form data-status-url="{% url 'task-detail' task.pk %}">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="status">
                 {{ status_form.status }}
                 <button type="submit">Save status</button>
             </form>
+            <p class="meta" data-status-message aria-live="polite"></p>
         </section>
 
         <section class="task-detail-section">
@@ -295,6 +296,71 @@
                 clearIndicators();
             } catch (error) {
                 window.location.reload();
+            }
+        });
+    }());
+</script>
+<script>
+    (function () {
+        const form = document.querySelector('[data-status-form]');
+        if (!form) {
+            return;
+        }
+
+        const statusLabel = document.querySelector('[data-task-status-label]');
+        const statusMessage = form.parentElement.querySelector('[data-status-message]');
+        const select = form.querySelector('select[name="status"]');
+
+        function getCookie(name) {
+            const cookies = document.cookie ? document.cookie.split('; ') : [];
+            for (const cookie of cookies) {
+                const parts = cookie.split('=');
+                const key = parts.shift();
+                if (key === name) {
+                    return decodeURIComponent(parts.join('='));
+                }
+            }
+            return '';
+        }
+
+        // Save the status in place instead of a full page POST/redirect, so
+        // moving a task between board columns from its detail page feels as
+        // instant as dragging it on the board itself.
+        form.addEventListener('submit', async function (event) {
+            event.preventDefault();
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            if (statusMessage) {
+                statusMessage.textContent = 'Saving...';
+            }
+            try {
+                const formData = new URLSearchParams(new FormData(form));
+                const response = await fetch(form.dataset.statusUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: formData.toString(),
+                });
+                if (!response.ok) {
+                    throw new Error('Status update failed');
+                }
+                const result = await response.json();
+                if (statusLabel) {
+                    statusLabel.textContent = 'Status: ' + (result.label || (select && select.options[select.selectedIndex].text));
+                }
+                if (statusMessage) {
+                    statusMessage.textContent = 'Status updated.';
+                    window.setTimeout(function () {
+                        statusMessage.textContent = '';
+                    }, 2500);
+                }
+            } catch (error) {
+                window.location.reload();
+            } finally {
+                button.disabled = false;
             }
         });
     }());

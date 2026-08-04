@@ -221,7 +221,9 @@ def _scope_queryset_to_user_team(queryset, user: User, *, field_name: str = "tea
 
 
 def _team_scoped_task_queryset(user: User, queryset=None):
-    return _scope_queryset_to_user_team(queryset or _task_board_queryset(), user)
+    if queryset is None:
+        queryset = _task_board_queryset()
+    return _scope_queryset_to_user_team(queryset, user)
 
 
 def _next_board_order(status: str, exclude_pk: int | None = None, team: Team | None = None) -> int:
@@ -1315,8 +1317,18 @@ def task_detail_view(request, pk):
                 if previous_bucket != _board_bucket_status(updated_task.status):
                     _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=updated_task.team)
                 TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    return JsonResponse(
+                        {
+                            "ok": True,
+                            "status": updated_task.status,
+                            "label": TaskStatus(updated_task.status).label,
+                        }
+                    )
                 messages.success(request, "Task status updated.")
                 return redirect("task-detail", pk=task.pk)
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse({"ok": False, "errors": status_form.errors}, status=400)
         elif action == "note":
             note_form = TaskNoteForm(request.POST)
             if note_form.is_valid():
