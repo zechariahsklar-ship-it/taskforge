@@ -2,9 +2,11 @@ from django.utils import timezone  # Re-exported for callers and tests that patc
 
 from .assignment_service import TaskAssignmentService
 from .estimate_feedback_service import TaskEstimateFeedbackService
-from .parsing_service import ParsedTaskData, TaskParsingService
+from .parsing_service import AvailabilityParsingService, ParsedAvailabilityData, ParsedTaskData, TaskParsingService
 
 __all__ = [
+    "AvailabilityParsingService",
+    "ParsedAvailabilityData",
     "ParsedTaskData",
     "TaskAssignmentService",
     "TaskEstimateFeedbackService",

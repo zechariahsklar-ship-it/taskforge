@@ -89,6 +89,30 @@ class TaskAssignmentService:
         return queryset.order_by("first_name", "last_name", "username", "pk").first()
 
     @staticmethod
+    def next_available_supervisor(*, team=None):
+        # Route system-generated review tasks to whichever supervisor currently
+        # has the lightest open-task load, rotating to the longest-idle one on ties.
+        supervisors = User.objects.filter(role=UserRole.SUPERVISOR, assignable_to_tasks=True)
+        if team is not None:
+            supervisors = supervisors.filter(team=team)
+        candidates = []
+        for supervisor in supervisors:
+            active_tasks = TaskAssignmentService._active_task_queryset_for_user(supervisor)
+            open_tasks = active_tasks.count()
+            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
+            candidates.append((supervisor, open_tasks, last_assigned_at))
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda candidate: (
+                candidate[1],
+                candidate[2] is not None,
+                candidate[2] or timezone.make_aware(datetime(2000, 1, 1)),
+            )
+        )
+        return candidates[0][0]
+
+    @staticmethod
     def _single_window_blocks(*, scheduled_date=None, scheduled_start_time=None, scheduled_end_time=None):
         if scheduled_date and scheduled_start_time and scheduled_end_time:
             return {scheduled_date: [(scheduled_start_time, scheduled_end_time)]}

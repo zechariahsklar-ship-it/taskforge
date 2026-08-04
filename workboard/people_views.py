@@ -1,13 +1,16 @@
 from datetime import date
 
 from django.contrib import messages
+from django.db import IntegrityError
 from django.db.models import Count, Q, Sum
-from django.http import HttpResponseBadRequest, HttpResponseForbidden
+from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
+from .audit_service import TaskAuditService
 from .forms import (
+    BlackoutDateForm,
     DAY_FIELD_CONFIG,
     ScheduleAdjustmentRequestForm,
     StudentScheduleOverrideForm,
@@ -19,6 +22,8 @@ from .forms import (
     WeeklyAvailabilityForm,
 )
 from .models import (
+    BlackoutDate,
+    Priority,
     RecurringTaskTemplate,
     ScheduleAdjustmentRequest,
     ScheduleAdjustmentRequestBlock,
@@ -34,7 +39,9 @@ from .models import (
     UserRole,
     _format_time_window,
 )
+from .services import AvailabilityParsingService, TaskAssignmentService
 from .task_views import (
+    _append_task_to_status,
     _save_schedule_override,
     _save_weekly_schedule,
     _scope_queryset_to_user_team,
@@ -475,6 +482,29 @@ def _apply_schedule_adjustment_request(adjustment_request: ScheduleAdjustmentReq
     return schedule_override
 
 
+def _create_schedule_change_review_task(adjustment_request: ScheduleAdjustmentRequest, *, requested_by: User) -> Task:
+    supervisor = TaskAssignmentService.next_available_supervisor(team=adjustment_request.team)
+    task = Task(
+        team=adjustment_request.team,
+        title=f"Review schedule change: {adjustment_request.profile.display_name}",
+        description=(
+            f"{adjustment_request.profile.display_name} requested a schedule change for "
+            f"{adjustment_request.requested_date}."
+            + (f" Note: {adjustment_request.note}" if adjustment_request.note else "")
+        ),
+        priority=Priority.MEDIUM,
+        status=TaskStatus.NEW,
+        due_date=adjustment_request.requested_date,
+        assigned_to=supervisor,
+        requested_by=requested_by,
+        created_by=requested_by,
+    )
+    task = _append_task_to_status(task)
+    task.save()
+    TaskAuditService.record_created(task, actor=requested_by, source="schedule_request")
+    return task
+
+
 @app_login_required
 def schedule_adjustment_request_view(request):
     profile = _current_worker_profile_for_request(request)
@@ -489,6 +519,7 @@ def schedule_adjustment_request_view(request):
         adjustment_request.requested_by = request.user
         adjustment_request.save()
         _save_schedule_adjustment_request(adjustment_request, request_form)
+        _create_schedule_change_review_task(adjustment_request, requested_by=request.user)
         messages.success(request, f"Schedule adjustment request submitted for {adjustment_request.requested_date}.")
         return redirect("schedule-adjustment-request")
 
@@ -505,10 +536,41 @@ def schedule_adjustment_request_view(request):
     )
 
 
+def _scoped_blackout_dates(user, queryset=None):
+    return _scope_queryset_to_user_team(queryset or BlackoutDate.objects.all(), user)
+
+
 @supervisor_required
 def schedule_adjustment_request_list_view(request):
     _auto_decline_expired_schedule_requests(_scoped_schedule_requests(request.user))
     if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "add_blackout_date":
+            blackout_form = BlackoutDateForm(request.POST)
+            if blackout_form.is_valid():
+                blackout_date = blackout_form.save(commit=False)
+                blackout_date.created_by = request.user
+                if not request.user.is_admin:
+                    blackout_date.team = request.user.team
+                try:
+                    blackout_date.save()
+                except IntegrityError:
+                    messages.error(request, f"{blackout_date.date} is already a blackout date.")
+                else:
+                    messages.success(request, f"Added blackout date for {blackout_date.date}.")
+            else:
+                messages.error(request, "Could not add that blackout date. Choose a valid date.")
+            return redirect("schedule-adjustment-requests")
+        if action == "delete_blackout_date":
+            blackout_date = get_object_or_404(
+                _scoped_blackout_dates(request.user),
+                pk=request.POST.get("blackout_date_id"),
+            )
+            blackout_date_date = blackout_date.date
+            blackout_date.delete()
+            messages.success(request, f"Removed blackout date for {blackout_date_date}.")
+            return redirect("schedule-adjustment-requests")
+
         adjustment_request = get_object_or_404(
             _scoped_schedule_requests(
                 request.user,
@@ -520,7 +582,6 @@ def schedule_adjustment_request_list_view(request):
             messages.error(request, "That schedule request has already been handled.")
             return redirect("schedule-adjustment-requests")
 
-        action = request.POST.get("action")
         if action == "apply_request":
             schedule_override = _apply_schedule_adjustment_request(adjustment_request, acted_by=request.user)
             messages.success(request, f"Applied the requested schedule for {adjustment_request.profile.display_name} on {schedule_override.override_date}.")
@@ -534,6 +595,8 @@ def schedule_adjustment_request_list_view(request):
             return redirect("schedule-adjustment-requests")
         return HttpResponseBadRequest("Unknown action.")
 
+    blackout_dates = list(_scoped_blackout_dates(request.user).order_by("date", "pk"))
+    blackout_form = BlackoutDateForm()
     pending_requests = list(
         _scoped_schedule_requests(
             request.user,
@@ -558,6 +621,8 @@ def schedule_adjustment_request_list_view(request):
         {
             "pending_requests": pending_requests,
             "recent_requests": recent_requests,
+            "blackout_dates": blackout_dates,
+            "blackout_form": blackout_form,
         },
     )
 
@@ -601,6 +666,18 @@ def self_schedule_view(request):
             "schedule_overrides": schedule_overrides,
         },
     )
+
+
+@supervisor_required
+def parse_class_schedule_view(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required.")
+    parsed = AvailabilityParsingService.parse_class_schedule(request.POST.get("raw_schedule", ""))
+    segments_by_day = {
+        prefix: [[block[0].strftime("%H:%M"), block[1].strftime("%H:%M")] for block in parsed.segments_by_weekday.get(int(weekday), [])]
+        for prefix, _label, weekday in DAY_FIELD_CONFIG
+    }
+    return JsonResponse({"segments_by_day": segments_by_day, "warnings": parsed.warnings})
 
 
 @supervisor_required

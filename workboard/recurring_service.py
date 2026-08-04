@@ -6,7 +6,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .audit_service import TaskAuditService
-from .models import RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole
+from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole
 from .services import TaskAssignmentService
 
 RECURRING_RELEASE_TIME = time(18, 0)
@@ -272,6 +272,16 @@ class RecurringTaskService:
         return task, 'created'
 
     @staticmethod
+    def _is_blackout_date(team, run_date: date) -> bool:
+        return BlackoutDate.objects.filter(team=team, date=run_date).exists()
+
+    @staticmethod
+    def _skip_blacked_out_run(template: RecurringTaskTemplate, run_date: date) -> None:
+        template.next_run_date = run_date
+        template.advance_next_run_date()
+        template.save(update_fields=['next_run_date', 'updated_at'])
+
+    @staticmethod
     def run_templates_ready_today(*, now=None) -> tuple[int, int]:
         local_now = timezone.localtime(now or timezone.now())
         created_count = 0
@@ -283,6 +293,9 @@ class RecurringTaskService:
         )
         for template in templates:
             while RecurringTaskService._run_is_ready(template, local_now=local_now):
+                if RecurringTaskService._is_blackout_date(template.team, template.next_run_date):
+                    RecurringTaskService._skip_blacked_out_run(template, template.next_run_date)
+                    continue
                 _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
                 if outcome == 'created':
                     created_count += 1

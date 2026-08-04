@@ -16,6 +16,15 @@
 <section class="stack">
     <article class="card">
         <h2>Weekly schedule</h2>
+        <div class="class-schedule-import" data-class-schedule-import data-target-picker="weekly-schedule-picker" data-parse-url="{% url 'parse-class-schedule' %}">
+            <h3>Import from class schedule</h3>
+            <p class="meta">Paste the student's class schedule, one class per line (e.g. "MWF 9:00-9:50am"), and TaskForge will fill in when they're free to work. Review the calendar below before saving.</p>
+            <textarea class="form-control" data-class-schedule-input rows="4" placeholder="MWF 9:00-9:50am&#10;TR 2:00-3:15pm"></textarea>
+            <div class="inline-form">
+                <button type="button" data-class-schedule-parse>Parse class schedule</button>
+                <p class="meta" data-class-schedule-status></p>
+            </div>
+        </div>
         <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="weekly">

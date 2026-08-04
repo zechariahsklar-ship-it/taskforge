@@ -9,6 +9,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
+    BlackoutDate,
     Priority,
     RecurringTaskTemplate,
     ScheduleAdjustmentRequest,
@@ -658,6 +659,21 @@ class StudentScheduleOverrideForm(BaseScheduleBlocksForm, forms.ModelForm):
             "hours_available": hours_value,
         }
         return cleaned_data
+
+
+class BlackoutDateForm(StyledFormMixin, forms.ModelForm):
+    date = forms.DateField(widget=forms.DateInput(attrs={"type": "date"}))
+
+    class Meta:
+        model = BlackoutDate
+        fields = ["date", "label"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["date"].label = "Blackout date"
+        self.fields["label"].required = False
+        self.fields["label"].label = "Note"
+        self.fields["label"].help_text = 'Optional, like "Thanksgiving break."'
 
 
 class ScheduleAdjustmentRequestForm(BaseScheduleBlocksForm, forms.ModelForm):

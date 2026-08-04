@@ -455,11 +455,88 @@
         });
     }
 
+    function getCookie(name) {
+        var cookies = document.cookie ? document.cookie.split("; ") : [];
+        for (var index = 0; index < cookies.length; index += 1) {
+            var parts = cookies[index].split("=");
+            if (parts[0] === name) {
+                return decodeURIComponent(parts.slice(1).join("="));
+            }
+        }
+        return "";
+    }
+
+    function initClassScheduleImport() {
+        document.querySelectorAll("[data-class-schedule-import]").forEach(function (container) {
+            if (container.dataset.classScheduleBound === "true") {
+                return;
+            }
+            container.dataset.classScheduleBound = "true";
+
+            var targetRoot = document.getElementById(container.dataset.targetPicker);
+            var textarea = container.querySelector("[data-class-schedule-input]");
+            var button = container.querySelector("[data-class-schedule-parse]");
+            var status = container.querySelector("[data-class-schedule-status]");
+            var url = container.dataset.parseUrl;
+            if (!targetRoot || !textarea || !button || !url) {
+                return;
+            }
+
+            button.addEventListener("click", function () {
+                var rawSchedule = textarea.value.trim();
+                if (!rawSchedule) {
+                    if (status) {
+                        status.textContent = "Paste a class schedule first.";
+                    }
+                    return;
+                }
+                button.disabled = true;
+                if (status) {
+                    status.textContent = "Parsing...";
+                }
+                var body = new URLSearchParams();
+                body.set("raw_schedule", rawSchedule);
+                fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                        "X-CSRFToken": getCookie("csrftoken"),
+                    },
+                    body: body.toString(),
+                }).then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Parse failed");
+                    }
+                    return response.json();
+                }).then(function (data) {
+                    var picker = targetRoot.taskforgeSchedulePicker;
+                    if (picker) {
+                        Object.keys(data.segments_by_day || {}).forEach(function (day) {
+                            picker.setSegments(day, data.segments_by_day[day]);
+                        });
+                    }
+                    if (status) {
+                        status.textContent = (data.warnings && data.warnings.length)
+                            ? data.warnings.join(" ")
+                            : "Applied below. Review the calendar, then save.";
+                    }
+                }).catch(function () {
+                    if (status) {
+                        status.textContent = "Could not parse that schedule. Try again.";
+                    }
+                }).finally(function () {
+                    button.disabled = false;
+                });
+            });
+        });
+    }
+
     function initAllPickers() {
         document.querySelectorAll("[data-weekly-schedule-picker]").forEach(function (root) {
             initPicker(root);
         });
         initOverrideTools();
+        initClassScheduleImport();
     }
 
     if (document.readyState === "loading") {

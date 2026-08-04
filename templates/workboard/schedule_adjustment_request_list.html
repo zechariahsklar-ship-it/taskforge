@@ -64,5 +64,39 @@
             {% endfor %}
         </div>
     </article>
+    <article class="card">
+        <h2>Blackout dates</h2>
+        <p class="meta">Recurring tasks will not be generated for the whole team on these dates. Students can still submit a schedule adjustment request for a blackout date if they want to work.</p>
+        <form method="post" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="add_blackout_date">
+            <p>
+                <label for="{{ blackout_form.date.id_for_label }}">{{ blackout_form.date.label }}</label>
+                {{ blackout_form.date }}
+            </p>
+            <p>
+                <label for="{{ blackout_form.label.id_for_label }}">{{ blackout_form.label.label }}</label>
+                {{ blackout_form.label }}
+            </p>
+            <button type="submit">Add blackout date</button>
+        </form>
+        <div class="stack">
+            {% for blackout_date in blackout_dates %}
+                <article class="note schedule-override-note">
+                    <div class="split-heading schedule-override-note-header">
+                        <p><strong>{{ blackout_date.date }}</strong>{% if blackout_date.label %} | {{ blackout_date.label }}{% endif %}</p>
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="delete_blackout_date">
+                            <input type="hidden" name="blackout_date_id" value="{{ blackout_date.pk }}">
+                            <button type="submit" class="button-link button-link-secondary">Remove</button>
+                        </form>
+                    </div>
+                </article>
+            {% empty %}
+                <p class="empty-state">No blackout dates.</p>
+            {% endfor %}
+        </div>
+    </article>
 </section>
 {% endblock %}

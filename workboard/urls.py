@@ -39,6 +39,7 @@ urlpatterns = [
     path("workers/teams/<int:pk>/edit/", views.team_edit_view, name="team-edit"),
     path("workers/teams/<int:pk>/delete/", views.team_delete_view, name="team-delete"),
     path("workers/<int:pk>/edit/", views.worker_edit_view, name="worker-edit"),
+    path("workers/schedule/parse-class-schedule/", views.parse_class_schedule_view, name="parse-class-schedule"),
     path("workers/<int:pk>/schedule/", views.worker_schedule_view, name="worker-schedule"),
     path("workers/<int:pk>/availability/", views.worker_schedule_view, name="worker-availability"),
     path("workers/<int:pk>/delete/", views.worker_profile_delete_view, name="worker-delete"),

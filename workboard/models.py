@@ -360,6 +360,26 @@ class ScheduleAdjustmentRequestBlock(models.Model):
         return _format_time_window(self.start_time, self.end_time)
 
 
+class BlackoutDate(models.Model):
+    team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="blackout_dates")
+    date = models.DateField()
+    label = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_blackout_dates")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date", "pk"]
+        unique_together = ("team", "date")
+
+    def save(self, *args, **kwargs):
+        if not self.team_id:
+            self.team = _resolved_team_or_default(self.created_by if self.created_by_id else None)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.date} blackout" + (f" ({self.label})" if self.label else "")
+
+
 class RecurringTaskTemplate(models.Model):
     team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="recurring_templates")
     title = models.CharField(max_length=255)

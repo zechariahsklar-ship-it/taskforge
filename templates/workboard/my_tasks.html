@@ -277,6 +277,114 @@
                 event.stopPropagation();
             }
         }, true);
+
+        // Touch support: the native HTML5 Drag and Drop API above does not
+        // fire from touch input, so a short tap still opens the task (the
+        // browser's normal tap-to-click) while a press-and-hold starts a
+        // reorder drag that follows the finger.
+        const LONG_PRESS_MS = 450;
+        const MOVE_CANCEL_PX = 10;
+        let touchState = null;
+
+        function bucketFromPoint(x, y) {
+            const target = document.elementFromPoint(x, y);
+            if (!target || typeof target.closest !== 'function') {
+                return null;
+            }
+            return target.closest('.task-bucket');
+        }
+
+        function cancelTouchPress() {
+            if (touchState && touchState.timer) {
+                window.clearTimeout(touchState.timer);
+            }
+            touchState = null;
+        }
+
+        function endTouchDrag(touch) {
+            if (!touchState || !touchState.dragging) {
+                cancelTouchPress();
+                return;
+            }
+            const card = draggedCard;
+            suppressClick = true;
+            const bucket = touch ? bucketFromPoint(touch.clientX, touch.clientY) : null;
+            if (card) {
+                card.classList.remove('is-dragging');
+            }
+            clearDropIndicators();
+            cancelTouchPress();
+            if (card && bucket && bucket.dataset.columnDroppable !== 'false') {
+                moveTask(card, bucket).then(function (result) {
+                    card.dataset.taskOverdue = result.status_bucket === 'overdue' ? 'true' : 'false';
+                }).catch(function () {
+                    window.location.reload();
+                });
+            }
+            draggedCard = null;
+            window.setTimeout(function () {
+                suppressClick = false;
+            }, 0);
+        }
+
+        groups.addEventListener('touchstart', function (event) {
+            const card = event.target.closest('.board-task-card');
+            if (!card || event.touches.length !== 1) {
+                return;
+            }
+            const touch = event.touches[0];
+            cancelTouchPress();
+            touchState = {
+                startX: touch.clientX,
+                startY: touch.clientY,
+                dragging: false,
+                timer: window.setTimeout(function () {
+                    if (!touchState) {
+                        return;
+                    }
+                    touchState.dragging = true;
+                    draggedCard = card;
+                    suppressClick = false;
+                    card.classList.add('is-dragging');
+                    if (window.navigator.vibrate) {
+                        window.navigator.vibrate(15);
+                    }
+                }, LONG_PRESS_MS),
+            };
+        }, { passive: true });
+
+        groups.addEventListener('touchmove', function (event) {
+            if (!touchState || event.touches.length !== 1) {
+                return;
+            }
+            const touch = event.touches[0];
+            if (!touchState.dragging) {
+                const movedX = Math.abs(touch.clientX - touchState.startX);
+                const movedY = Math.abs(touch.clientY - touchState.startY);
+                if (movedX > MOVE_CANCEL_PX || movedY > MOVE_CANCEL_PX) {
+                    cancelTouchPress();
+                }
+                return;
+            }
+            event.preventDefault();
+            const bucket = bucketFromPoint(touch.clientX, touch.clientY);
+            if (bucket && bucket.dataset.columnDroppable !== 'false') {
+                positionDraggedCard(bucket, touch.clientY);
+            }
+        }, { passive: false });
+
+        groups.addEventListener('touchend', function (event) {
+            endTouchDrag(event.changedTouches[0]);
+        });
+
+        groups.addEventListener('touchcancel', function () {
+            if (draggedCard) {
+                draggedCard.classList.remove('is-dragging');
+            }
+            draggedCard = null;
+            clearDropIndicators();
+            cancelTouchPress();
+        });
     }());
 </script>
 {% endblock %}

@@ -4,6 +4,14 @@
 {% block page_shell_class %}page-shell-board{% endblock %}
 
 {% block content %}
+<script>
+    // Safety net for the rare case where the viewport-width cookie hasn't
+    // been set yet (first page load of a fresh session). The server-side
+    // redirect in board_view handles every later visit.
+    if (window.innerWidth > 0 && window.innerWidth < 1100) {
+        window.location.replace("{% url 'my-tasks' %}");
+    }
+</script>
 <!-- Keep the drag-and-drop endpoint in markup so the script can stay generic. -->
 <div id="board-dnd-config" data-move-url-template="{% url 'board-task-move' 0 %}"></div>
 <section class="page-heading">
@@ -49,8 +57,8 @@
         </div>
     </form>
 </section>
-<section class="board-shell board-shell-horizontal" data-board-shell-scroll="horizontal">
-    <section class="board-grid board-grid-single-row" data-board-grid data-board-layout="single-row">
+<section class="board-shell">
+    <section class="board-grid" data-board-grid>
         {% for column in grouped_tasks %}
             <div class="board-column{% if column.is_overdue_column %} board-column-overdue{% endif %}" data-column-status="{{ column.value }}" data-column-droppable="{{ column.droppable|yesno:'true,false' }}" draggable="true">
                 <h2 class="board-column-title">{{ column.label }}</h2>

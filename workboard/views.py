@@ -2,6 +2,7 @@ from .services import TaskParsingService  # Stable patch target for tests and lo
 
 from .help_views import admin_guide_view
 from .people_views import (
+    parse_class_schedule_view,
     schedule_adjustment_request_list_view,
     schedule_adjustment_request_view,
     self_schedule_view,

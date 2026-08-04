@@ -72,6 +72,11 @@ BOARD_COLUMN_DEFINITIONS = [
 
 BOARD_BUCKET_DISPLAY_ORDER = {definition["value"]: index for index, definition in enumerate(BOARD_COLUMN_DEFINITIONS)}
 
+# Minimum viewport width (px) needed to show all board columns without
+# crowding them. Narrower screens are sent to My Tasks instead, which stacks
+# vertically and never needs horizontal scrolling.
+BOARD_MIN_VIEWPORT_WIDTH = 1100
+
 COMPLETED_TASK_BOARD_RETENTION_DAYS = 7
 
 WEEKLY_SCHEDULE_FIELDS = [
@@ -976,8 +981,20 @@ def dashboard(request):
     return redirect("my-tasks")
 
 
+def _viewport_too_narrow_for_board(request) -> bool:
+    raw_width = request.COOKIES.get("tf_vw", "")
+    try:
+        width = int(raw_width)
+    except (TypeError, ValueError):
+        return False
+    return 0 < width < BOARD_MIN_VIEWPORT_WIDTH
+
+
 @app_login_required
 def board_view(request):
+    if _viewport_too_narrow_for_board(request):
+        return redirect("my-tasks")
+
     tasks = _team_scoped_task_queryset(request.user)
     if not request.user.can_view_full_board:
         tasks = tasks.filter(_task_membership_filter(request.user))

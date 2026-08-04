@@ -4,12 +4,14 @@ from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
-from .services import ParsedTaskData, TaskAssignmentService, TaskParsingService
+from .models import BlackoutDate, Priority, RecurringTaskTemplate, ScheduleAdjustmentRequest, ScheduleAdjustmentRequestStatus, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskIntakeDraft, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
+from .recurring_service import RecurringTaskService
+from .services import AvailabilityParsingService, ParsedTaskData, TaskAssignmentService, TaskParsingService
 
 
 class TaskParsingServiceTests(TestCase):
@@ -1801,13 +1803,29 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertContains(response, "Front desk shift prep")
         self.assertNotContains(response, "Waiting on vendor reply")
 
-    def test_board_uses_single_row_horizontal_scroll_layout(self):
+    def test_board_has_no_horizontal_scroll_markup(self):
         response = self.client.get(reverse("board"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'data-board-shell-scroll="horizontal"', html=False)
-        self.assertContains(response, 'data-board-layout="single-row"', html=False)
-        self.assertContains(response, 'board-grid-single-row', html=False)
+        self.assertNotContains(response, 'board-shell-horizontal', html=False)
+        self.assertNotContains(response, 'board-grid-single-row', html=False)
+
+    def test_board_redirects_to_my_tasks_when_viewport_too_narrow(self):
+        self.client.cookies["tf_vw"] = "600"
+        response = self.client.get(reverse("board"))
+
+        self.assertRedirects(response, reverse("my-tasks"))
+
+    def test_board_loads_normally_when_viewport_wide_enough(self):
+        self.client.cookies["tf_vw"] = "1400"
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_board_loads_normally_when_viewport_cookie_missing(self):
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
 
     def test_board_groups_overdue_tasks_into_overdue_column_between_new_and_in_progress(self):
         with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 12, 0))):
@@ -2845,6 +2863,26 @@ class ScheduleAdjustmentRequestTests(TestCase):
         self.assertEqual(adjustment_request.blocks.count(), 2)
         self.assertContains(response, "Schedule adjustment request submitted for 2026-03-24")
         self.assertContains(response, "Pending")
+
+    def test_submitting_schedule_adjustment_request_creates_supervisor_review_task(self):
+        self.client.force_login(self.student)
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 20, 9, 0))):
+            self.client.post(
+                reverse("schedule-adjustment-request"),
+                {
+                    "requested_date": "2026-03-24",
+                    "note": "Need to swap tutoring hours.",
+                    "request_segments": json.dumps([["13:00", "15:00"]]),
+                },
+                follow=True,
+            )
+
+        review_task = Task.objects.get(title__startswith="Review schedule change")
+        self.assertEqual(review_task.assigned_to, self.supervisor)
+        self.assertEqual(review_task.status, TaskStatus.NEW)
+        self.assertEqual(review_task.due_date, date(2026, 3, 24))
+        self.assertIn("Schedule Student", review_task.description)
+        self.assertTrue(TaskAuditEvent.objects.filter(task=review_task, action=TaskAuditAction.CREATED).exists())
 
     def test_student_supervisor_can_open_schedule_adjustment_page(self):
         self.client.force_login(self.student_supervisor)
@@ -4296,5 +4334,199 @@ class TeamHierarchyTests(TestCase):
         response = self.client.get(reverse("team-create"))
 
         self.assertEqual(response.status_code, 403)
+
+
+class NextAvailableSupervisorTests(TestCase):
+    def setUp(self):
+        self.team = Team.objects.create(name="Front Office")
+        self.busy_supervisor = User.objects.create_user(
+            username="next-sup-busy", password="password123", role=UserRole.SUPERVISOR, team=self.team,
+        )
+        self.free_supervisor = User.objects.create_user(
+            username="next-sup-free", password="password123", role=UserRole.SUPERVISOR, team=self.team,
+        )
+
+    def test_picks_supervisor_with_fewer_open_tasks(self):
+        Task.objects.create(title="Existing 1", status=TaskStatus.NEW, assigned_to=self.busy_supervisor, team=self.team)
+        Task.objects.create(title="Existing 2", status=TaskStatus.NEW, assigned_to=self.busy_supervisor, team=self.team)
+
+        chosen = TaskAssignmentService.next_available_supervisor(team=self.team)
+
+        self.assertEqual(chosen, self.free_supervisor)
+
+    def test_returns_none_when_no_supervisor_on_team(self):
+        empty_team = Team.objects.create(name="No Supervisors")
+
+        self.assertIsNone(TaskAssignmentService.next_available_supervisor(team=empty_team))
+
+
+class BlackoutDateTests(TestCase):
+    def setUp(self):
+        self.team = Team.objects.create(name="Blackout Team")
+        self.supervisor = User.objects.create_user(
+            username="blackout-supervisor", password="password123", role=UserRole.SUPERVISOR, team=self.team,
+        )
+        self.worker = User.objects.create_user(
+            username="blackout-worker", password="password123", role=UserRole.STUDENT_WORKER, team=self.team,
+        )
+        self.worker_profile = StudentWorkerProfile.objects.create(
+            user=self.worker, display_name="Blackout Worker", email="blackout-worker@example.com",
+        )
+        self.template = RecurringTaskTemplate.objects.create(
+            team=self.team,
+            title="Lobby check",
+            priority=Priority.MEDIUM,
+            estimated_minutes=15,
+            assign_to=self.worker,
+            requested_by=self.supervisor,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 20),
+        )
+
+    def test_blackout_date_is_unique_per_team(self):
+        BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Break")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Duplicate")
+
+    def test_supervisor_can_add_and_remove_blackout_date(self):
+        self.client.force_login(self.supervisor)
+
+        add_response = self.client.post(
+            reverse("schedule-adjustment-requests"),
+            {"action": "add_blackout_date", "date": "2026-11-26", "label": "Thanksgiving break"},
+            follow=True,
+        )
+        self.assertEqual(add_response.status_code, 200)
+        blackout_date = BlackoutDate.objects.get(team=self.team, date=date(2026, 11, 26))
+        self.assertEqual(blackout_date.label, "Thanksgiving break")
+        self.assertContains(add_response, "Thanksgiving break")
+
+        delete_response = self.client.post(
+            reverse("schedule-adjustment-requests"),
+            {"action": "delete_blackout_date", "blackout_date_id": str(blackout_date.pk)},
+            follow=True,
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertFalse(BlackoutDate.objects.filter(pk=blackout_date.pk).exists())
+
+    def test_recurring_generation_skips_blackout_date_and_advances(self):
+        BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Break")
+
+        created_count, reopened_count = RecurringTaskService.run_templates_ready_today(
+            now=timezone.make_aware(datetime(2026, 3, 20, 12, 0))
+        )
+
+        self.assertEqual(created_count, 0)
+        self.assertEqual(reopened_count, 0)
+        self.assertFalse(Task.objects.filter(recurring_template=self.template).exists())
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 21))
+
+    def test_recurring_generation_creates_task_on_non_blackout_date(self):
+        created_count, _ = RecurringTaskService.run_templates_ready_today(
+            now=timezone.make_aware(datetime(2026, 3, 20, 12, 0))
+        )
+
+        self.assertEqual(created_count, 1)
+        self.assertTrue(Task.objects.filter(recurring_template=self.template, due_date=date(2026, 3, 20)).exists())
+
+    def test_student_can_still_request_schedule_change_on_blackout_date(self):
+        BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Break")
+        self.client.force_login(self.worker)
+
+        with patch("workboard.people_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 15, 9, 0))):
+            response = self.client.post(
+                reverse("schedule-adjustment-request"),
+                {
+                    "requested_date": "2026-03-20",
+                    "note": "Want to come in anyway.",
+                    "request_segments": json.dumps([["09:00", "11:00"]]),
+                },
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            ScheduleAdjustmentRequest.objects.filter(profile=self.worker_profile, requested_date=date(2026, 3, 20)).exists()
+        )
+
+
+class AvailabilityParsingServiceTests(TestCase):
+    def test_mock_parser_extracts_compact_day_codes_and_inverts_to_free_blocks(self):
+        raw_text = "MWF 9:00-9:50am\nTR 2:00pm-3:15pm"
+
+        with patch.object(TaskParsingService, "parser_settings", return_value={
+            "use_mock_parser": True,
+            "openai_api_key": "",
+            "model": "gpt-test",
+            "endpoint": "https://api.openai.com/v1/chat/completions",
+        }):
+            parsed = AvailabilityParsingService.parse_class_schedule(raw_text)
+
+        monday_blocks = parsed.segments_by_weekday[0]
+        self.assertEqual(
+            [(b[0].strftime("%H:%M"), b[1].strftime("%H:%M")) for b in monday_blocks],
+            [("07:00", "09:00"), ("10:00", "18:00")],
+        )
+        tuesday_blocks = parsed.segments_by_weekday[1]
+        self.assertEqual(
+            [(b[0].strftime("%H:%M"), b[1].strftime("%H:%M")) for b in tuesday_blocks],
+            [("07:00", "14:00"), ("15:30", "18:00")],
+        )
+        saturday_blocks = parsed.segments_by_weekday[5]
+        self.assertEqual(
+            [(b[0].strftime("%H:%M"), b[1].strftime("%H:%M")) for b in saturday_blocks],
+            [("07:00", "18:00")],
+        )
+
+    def test_mock_parser_warns_when_nothing_recognized(self):
+        with patch.object(TaskParsingService, "parser_settings", return_value={
+            "use_mock_parser": True,
+            "openai_api_key": "",
+            "model": "gpt-test",
+            "endpoint": "https://api.openai.com/v1/chat/completions",
+        }):
+            parsed = AvailabilityParsingService.parse_class_schedule("not a schedule at all")
+
+        self.assertTrue(parsed.warnings)
+
+
+class ParseClassScheduleViewTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="parse-schedule-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="parse-schedule-worker", password="password123", role=UserRole.STUDENT_WORKER)
+
+    def test_supervisor_can_parse_class_schedule_into_segments(self):
+        self.client.force_login(self.supervisor)
+
+        with patch.object(TaskParsingService, "parser_settings", return_value={
+            "use_mock_parser": True,
+            "openai_api_key": "",
+            "model": "gpt-test",
+            "endpoint": "https://api.openai.com/v1/chat/completions",
+        }):
+            response = self.client.post(reverse("parse-class-schedule"), {"raw_schedule": "MWF 9:00-9:50am"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["segments_by_day"]["monday"], [["07:00", "09:00"], ["10:00", "18:00"]])
+        self.assertEqual(payload["segments_by_day"]["tuesday"], [["07:00", "18:00"]])
+
+    def test_worker_cannot_access_parse_endpoint(self):
+        self.client.force_login(self.worker)
+
+        response = self.client.post(reverse("parse-class-schedule"), {"raw_schedule": "MWF 9:00-9:50am"})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_request_is_rejected(self):
+        self.client.force_login(self.supervisor)
+
+        response = self.client.get(reverse("parse-class-schedule"))
+
+        self.assertEqual(response.status_code, 400)
 
 

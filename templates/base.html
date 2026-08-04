@@ -5,7 +5,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}TaskForge{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260423a">
+    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260804a">
+    <script>
+        (function () {
+            try {
+                document.cookie = "tf_vw=" + window.innerWidth + ";path=/;max-age=86400;SameSite=Lax";
+            } catch (error) {}
+        }());
+    </script>
 </head>
 <body>
     <header class="site-header">
@@ -17,7 +24,7 @@
         </div>
         {% if request.user.is_authenticated %}
             <nav class="site-nav">
-                <a href="{% url 'board' %}">Board</a>
+                <a href="{% url 'board' %}" class="nav-board-link">Board</a>
                 <a href="{% url 'my-tasks' %}">My Tasks</a>
                 <a href="{% url 'completed-tasks' %}">Completed Tasks</a>
                 {% if request.user.is_worker_role %}

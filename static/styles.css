@@ -103,13 +103,7 @@ body a:focus-visible {
 .board-shell {
     width: 100%;
     margin: 0 auto;
-}
-
-.board-shell-horizontal {
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 0.5rem;
-    scrollbar-gutter: stable;
+    overflow-x: hidden;
 }
 
 .site-nav a,
@@ -152,17 +146,19 @@ body a:focus-visible {
 
 .board-grid {
     display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 1rem;
     width: 100%;
     min-width: 0;
     align-items: start;
 }
 
-.board-grid-single-row {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(300px, 340px);
-    width: max-content;
-    min-width: 100%;
+/* Below this width the board's five columns can't fit without crowding, so
+   the nav link is hidden and board_view redirects to My Tasks instead. */
+@media (max-width: 1099px) {
+    .nav-board-link {
+        display: none;
+    }
 }
 
 .board-column {
@@ -192,6 +188,9 @@ body a:focus-visible {
 
 .board-task-card {
     min-height: 220px;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .board-task-card article {
@@ -743,6 +742,25 @@ tr:hover td {
 .table-action-links {
     display: grid;
     gap: 0.35rem;
+}
+
+.class-schedule-import {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    display: grid;
+    gap: 0.5rem;
+}
+
+.class-schedule-import h3 {
+    margin: 0;
+}
+
+.class-schedule-import textarea {
+    width: 100%;
+    min-height: 5.5rem;
+    resize: vertical;
 }
 
 .inline-form {
