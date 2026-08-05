@@ -797,28 +797,34 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         return user
 
     def test_create_task_can_add_fixed_and_rotating_additional_assignees(self):
-        response = self.client.post(
-            reverse("task-create"),
-            {
-                "title": "Collaborative task",
-                "description": "Needs a main worker, one fixed helper, and rotating helpers.",
-                "priority": Priority.MEDIUM,
-                "status": TaskStatus.NEW,
-                "due_date": "2026-03-20",
-                "respond_to_text": "",
-                "estimated_minutes": "45",
-                "assigned_to": str(self.primary_student.pk),
-                "additional_assignees": [str(self.fixed_student.pk)],
-                "rotating_additional_assignee_count": "2",
-                "requested_by": "",
-                "recurring_task": "",
-                "recurrence_pattern": "",
-                "recurrence_interval": "",
-                "recurrence_day_of_week": "",
-                "recurrence_day_of_month": "",
-            },
-            follow=True,
-        )
+        # The assignment service sizes each candidate's remaining capacity
+        # from "now" through the due date, so "now" needs to stay fixed
+        # before that date - otherwise this silently loses its capacity
+        # window (and thus its rotating candidates) once the real calendar
+        # catches up to the hardcoded due date below.
+        with patch("workboard.task_views.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 9, 0))):
+            response = self.client.post(
+                reverse("task-create"),
+                {
+                    "title": "Collaborative task",
+                    "description": "Needs a main worker, one fixed helper, and rotating helpers.",
+                    "priority": Priority.MEDIUM,
+                    "status": TaskStatus.NEW,
+                    "due_date": "2026-03-20",
+                    "respond_to_text": "",
+                    "estimated_minutes": "45",
+                    "assigned_to": str(self.primary_student.pk),
+                    "additional_assignees": [str(self.fixed_student.pk)],
+                    "rotating_additional_assignee_count": "2",
+                    "requested_by": "",
+                    "recurring_task": "",
+                    "recurrence_pattern": "",
+                    "recurrence_interval": "",
+                    "recurrence_day_of_week": "",
+                    "recurrence_day_of_month": "",
+                },
+                follow=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         task = Task.objects.get(title="Collaborative task")
