@@ -246,6 +246,134 @@ body a:focus-visible {
     color: #ffffff;
 }
 
+.header-brand-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.mobile-nav-toggle {
+    display: none;
+    width: auto;
+    align-items: center;
+    justify-content: center;
+    padding: 0.6rem;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 10px;
+    background: transparent;
+}
+
+.mobile-nav-toggle:hover,
+.mobile-nav-toggle:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.mobile-nav-toggle-bars,
+.mobile-nav-toggle-bars::before,
+.mobile-nav-toggle-bars::after {
+    display: block;
+    width: 20px;
+    height: 2px;
+    background: #ffffff;
+    border-radius: 1px;
+}
+
+.mobile-nav-toggle-bars::before,
+.mobile-nav-toggle-bars::after {
+    content: "";
+}
+
+.mobile-nav-toggle-bars::before {
+    margin-bottom: 5px;
+}
+
+.mobile-nav-toggle-bars::after {
+    margin-top: 5px;
+}
+
+/* Below this width the flat nav links plus the Manage/account dropdowns wrap
+   onto multiple lines, growing the fixed header past the space `body`
+   reserves for it (see padding-top above) and covering page content. Collapse
+   everything into a single off-canvas panel instead so the header height
+   stays constant and the "Manage"/account dropdown contents are flattened
+   into the same scrollable list. */
+@media (max-width: 760px) {
+    .mobile-nav-toggle {
+        display: inline-flex;
+    }
+
+    .site-nav {
+        display: none;
+        position: fixed;
+        top: 108px;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        padding: 0.5rem 1.25rem 2rem;
+        overflow-y: auto;
+        background: linear-gradient(180deg, #002b54 0%, #001b38 100%);
+        border-top: 1px solid #0c518e;
+        z-index: 999;
+    }
+
+    .site-nav.is-open {
+        display: flex;
+    }
+
+    .site-nav a,
+    .site-nav .link-button {
+        width: 100%;
+        padding: 0.85rem 0.1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        text-align: left;
+    }
+
+    .site-nav form {
+        width: 100%;
+    }
+
+    .nav-dropdown-toggle {
+        display: flex;
+        width: 100%;
+        pointer-events: none;
+        justify-content: flex-start;
+        padding: 0.85rem 0.1rem 0.35rem;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+    }
+
+    .nav-dropdown-toggle::after {
+        display: none;
+    }
+
+    .nav-dropdown-menu {
+        position: static;
+        display: block;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        min-width: 0;
+        padding: 0 0 0 1rem;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .nav-dropdown-menu a,
+    .nav-dropdown-menu .link-button {
+        padding: 0.7rem 0.1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 0;
+    }
+}
+
 .card,
 .table-card,
 .task-card,

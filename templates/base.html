@@ -9,7 +9,7 @@
     <link rel="icon" href="{% static 'taskforge-mark.png' %}">
     <link rel="apple-touch-icon" href="{% static 'taskforge-mark.png' %}">
     <title>{% block title %}TaskForge{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260805a">
+    <link rel="stylesheet" href="{% static 'styles.css' %}?v=20260819a">
     <script>
         (function () {
             try {
@@ -20,14 +20,20 @@
 </head>
 <body>
     <header class="site-header">
-        <div>
+        <div class="header-brand-row">
             <a href="{% url 'dashboard' %}" class="brand-lockup">
                 <span class="brand">TaskForge</span>
                 <img src="{% static 'taskforge-mark.png' %}" alt="" class="brand-mark">
             </a>
+            {% if request.user.is_authenticated %}
+                <button type="button" class="mobile-nav-toggle" id="mobile-nav-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="site-nav">
+                    <span class="visually-hidden">Menu</span>
+                    <span class="mobile-nav-toggle-bars" aria-hidden="true"></span>
+                </button>
+            {% endif %}
         </div>
         {% if request.user.is_authenticated %}
-            <nav class="site-nav">
+            <nav class="site-nav" id="site-nav">
                 <a href="{% url 'board' %}" class="nav-board-link">Board</a>
                 <a href="{% url 'my-tasks' %}">My Tasks</a>
                 <a href="{% url 'completed-tasks' %}">Completed Tasks</a>
@@ -74,6 +80,7 @@
     </main>
     <script src="{% static 'password_toggle.js' %}?v=20260423a" defer></script>
     <script src="{% static 'nav_dropdown.js' %}?v=20260805a" defer></script>
+    <script src="{% static 'mobile_nav_toggle.js' %}?v=20260819a" defer></script>
 </body>
 </html>
 
