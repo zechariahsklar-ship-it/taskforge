@@ -72,6 +72,26 @@
                         </p>
                     </div>
                 </section>
+            {% elif field.name == "duplicate_to_students" %}
+                <section class="review-field assignee-panel">
+                    <div class="stack">
+                        <div>
+                            <label>{{ field.label }}</label>
+                            {% if field.help_text %}<p class="meta">{{ field.help_text }}</p>{% endif %}
+                        </div>
+                        <div class="assignee-choice-grid">
+                            {% for checkbox in field %}
+                                <label class="assignee-choice-card" for="{{ checkbox.id_for_label }}">
+                                    {{ checkbox.tag }}
+                                    <span>{{ checkbox.choice_label }}</span>
+                                </label>
+                            {% empty %}
+                                <p class="empty-state">No students are available yet.</p>
+                            {% endfor %}
+                        </div>
+                        {% if field.errors %}<div class="meta">{{ field.errors }}</div>{% endif %}
+                    </div>
+                </section>
             {% elif field.name not in form.non_rendered_field_names %}
                 <p>
                     <label for="{{ field.id_for_label }}">{{ field.label }}</label>

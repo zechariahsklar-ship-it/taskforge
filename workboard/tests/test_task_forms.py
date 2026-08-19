@@ -7,6 +7,90 @@ from ..models import Priority, StudentAvailability, StudentAvailabilityBlock, St
 from ..services import TaskAssignmentService
 
 
+class TaskCreateDuplicateToStudentsTests(TestCase):
+    def setUp(self):
+        self.supervisor = User.objects.create_user(
+            username="dup-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+        )
+        self.worker_a = User.objects.create_user(
+            username="dup-worker-a",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Ada",
+            last_name="Worker",
+        )
+        self.worker_b = User.objects.create_user(
+            username="dup-worker-b",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Bo",
+            last_name="Worker",
+        )
+        for worker in (self.worker_a, self.worker_b):
+            StudentWorkerProfile.objects.create(
+                user=worker,
+                display_name=f"{worker.first_name} {worker.last_name}",
+                email=f"{worker.username}@example.com",
+                normal_shift_availability="",
+            )
+        self.client.force_login(self.supervisor)
+
+    def _post_data(self, **overrides):
+        data = {
+            "title": "Prep welcome packets",
+            "description": "Assemble packets for new hires",
+            "priority": Priority.MEDIUM,
+            "status": TaskStatus.NEW,
+            "due_date": "",
+            "respond_to_text": "",
+            "estimated_minutes": "",
+            "assigned_to": "",
+            "recurring_task": "",
+            "recurrence_pattern": "",
+            "recurrence_interval": "",
+            "recurrence_day_of_week": "",
+            "recurrence_day_of_month": "",
+        }
+        data.update(overrides)
+        return data
+
+    def test_duplicate_to_students_creates_independent_tasks(self):
+        response = self.client.post(
+            reverse("task-create"),
+            self._post_data(duplicate_to_students=[str(self.worker_a.pk), str(self.worker_b.pk)]),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        tasks = list(Task.objects.filter(title="Prep welcome packets").order_by("pk"))
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual({task.assigned_to_id for task in tasks}, {self.worker_a.pk, self.worker_b.pk})
+        self.assertEqual(tasks[0].additional_assignees.count(), 0)
+        self.assertEqual(tasks[1].additional_assignees.count(), 0)
+
+        # Fully independent copies: updating one leaves the other untouched.
+        tasks[0].status = TaskStatus.IN_PROGRESS
+        tasks[0].save()
+        self.assertEqual(Task.objects.get(pk=tasks[1].pk).status, TaskStatus.NEW)
+
+    def test_duplicate_to_students_rejects_student_missing_required_tag(self):
+        required_tag = WorkerTag.objects.create(name="Front desk trained")
+        self.worker_a.worker_profile.tags.add(required_tag)
+
+        response = self.client.post(
+            reverse("task-create"),
+            self._post_data(
+                duplicate_to_students=[str(self.worker_a.pk), str(self.worker_b.pk)],
+                required_worker_tags=[str(required_tag.pk)],
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Task.objects.filter(title="Prep welcome packets").exists())
+
+
 class TaskCreateDueDateFallbackTests(TestCase):
     def setUp(self):
         self.supervisor = User.objects.create_user(

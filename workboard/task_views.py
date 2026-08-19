@@ -39,6 +39,7 @@ from .models import (
     TaskChecklistItem,
     TaskIntakeDraft,
     TaskIntakeDraftAttachment,
+    TaskScheduleBlock,
     TaskStatus,
     Team,
     User,
@@ -1240,11 +1241,63 @@ def task_intake_review_view(request, pk):
     )
 
 
+def _create_duplicate_tasks_for_students(form, students, actor):
+    template_task = form.save(commit=False)
+    required_tags = list(form.cleaned_data.get("required_worker_tags") or [])
+    schedule_blocks = form.cleaned_data.get("task_schedule_blocks", [])
+    created_tasks = []
+    for student in students:
+        clone = Task(
+            team=form.cleaned_data["team"],
+            title=template_task.title,
+            description=template_task.description,
+            priority=template_task.priority,
+            status=template_task.status,
+            due_date=template_task.due_date,
+            scheduled_date=template_task.scheduled_date,
+            scheduled_start_time=template_task.scheduled_start_time,
+            scheduled_end_time=template_task.scheduled_end_time,
+            respond_to_text=template_task.respond_to_text,
+            estimated_minutes=template_task.estimated_minutes,
+            created_by=actor,
+            assigned_to=student,
+        )
+        clone = _ensure_task_due_date(clone)
+        clone = _append_task_to_status(clone, previous_team_id=clone.team_id)
+        if clone.status == TaskStatus.DONE and not clone.completed_at:
+            clone.mark_complete()
+        clone.save()
+        if required_tags:
+            clone.required_worker_tags.set(required_tags)
+        for block in schedule_blocks:
+            TaskScheduleBlock.objects.create(
+                task=clone,
+                work_date=block["work_date"],
+                start_time=block["start_time"],
+                end_time=block["end_time"],
+                position=block["position"],
+            )
+        TaskAuditService.record_created(clone, actor=actor)
+        created_tasks.append(clone)
+    return created_tasks
+
+
 @supervisor_required
 def task_create_view(request):
     if request.method == "POST":
         form = TaskManualForm(request.POST, actor=request.user)
         if form.is_valid():
+            duplicate_students = list(form.cleaned_data.get("duplicate_to_students") or [])
+            if duplicate_students:
+                created_tasks = _create_duplicate_tasks_for_students(form, duplicate_students, request.user)
+                messages.success(
+                    request,
+                    f"Created {len(created_tasks)} separate task "
+                    f"{'copy' if len(created_tasks) == 1 else 'copies'} for the selected students.",
+                )
+                if len(created_tasks) == 1:
+                    return redirect("task-detail", pk=created_tasks[0].pk)
+                return redirect("board")
             task_window_blocks = form.scheduled_task_window_map()
             task = form.save(commit=False)
             task.created_by = request.user

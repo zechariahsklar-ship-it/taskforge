@@ -1378,6 +1378,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
 
 
 class TaskManualForm(TaskForm):
+    duplicate_to_students = forms.ModelMultipleChoiceField(
+        required=False,
+        queryset=User.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+    )
+
     class Meta(TaskForm.Meta):
         fields = [
             "team",
@@ -1408,6 +1414,43 @@ class TaskManualForm(TaskForm):
         self.fields["description"].help_text = ""
         self.fields["due_date"].label = "Due date"
         self.fields["due_date"].help_text = ""
+        selected_team = self._resolve_selected_team()
+        restrict_to_teamless = bool(self.actor and not self.actor.is_admin and not self.actor.team_id and selected_team is None)
+        _configure_additional_assignees_field(
+            self.fields["duplicate_to_students"],
+            help_text=(
+                "Create an independent copy of this task for each student picked here. Each copy gets its own "
+                "status, checklist, and due date, and is assigned solely to that student instead of using the "
+                "assignment fields above."
+            ),
+            team=selected_team,
+            teamless_only=restrict_to_teamless,
+        )
+        self.fields["duplicate_to_students"].label = "Duplicate to students"
+
+    @property
+    def non_rendered_field_names(self):
+        return (*super().non_rendered_field_names, "duplicate_to_students")
+
+    def clean(self):
+        cleaned_data = super().clean()
+        duplicate_to_students = cleaned_data.get("duplicate_to_students")
+        if not duplicate_to_students:
+            return cleaned_data
+        team = cleaned_data.get("team")
+        required_worker_tags = cleaned_data.get("required_worker_tags")
+        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
+        mismatched_students = [student.display_label for student in duplicate_to_students if team and student.team_id != team.id]
+        if mismatched_students:
+            self.add_error("duplicate_to_students", "Not on that team: " + ", ".join(mismatched_students))
+        missing_tag_labels = []
+        for student in duplicate_to_students:
+            missing_tags = TaskAssignmentService.missing_required_tag_names(student, required_tag_ids=required_tag_ids)
+            if missing_tags:
+                missing_tag_labels.append(f"{student.display_label} ({', '.join(missing_tags)})")
+        if missing_tag_labels:
+            self.add_error("duplicate_to_students", "Missing required worker tags: " + ", ".join(missing_tag_labels))
+        return cleaned_data
 
 
 class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
