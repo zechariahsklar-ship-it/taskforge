@@ -32,12 +32,12 @@
         <tbody>
             {% for team in teams %}
                 <tr>
-                    <td>{{ team.name }}</td>
-                    <td>{{ team.description|default:"-" }}</td>
-                    <td>{{ team.member_count }}</td>
-                    <td>{{ team.task_count }}</td>
-                    <td>{{ team.recurring_count }}</td>
-                    <td><a href="{% url 'team-edit' team.pk %}">Edit team</a></td>
+                    <td data-label="Team">{{ team.name }}</td>
+                    <td data-label="Description">{{ team.description|default:"-" }}</td>
+                    <td data-label="Members">{{ team.member_count }}</td>
+                    <td data-label="Tasks">{{ team.task_count }}</td>
+                    <td data-label="Recurring">{{ team.recurring_count }}</td>
+                    <td data-label="Actions"><a href="{% url 'team-edit' team.pk %}">Edit team</a></td>
                 </tr>
             {% empty %}
                 <tr><td colspan="6">No teams yet.</td></tr>
@@ -62,12 +62,12 @@
         <tbody>
             {% for worker_tag in worker_tags %}
                 <tr>
-                    <td>{{ worker_tag.name }}</td>
-                    {% if show_tag_team_column %}<td>{{ worker_tag.team.name|default:"-" }}</td>{% endif %}
-                    <td>{{ worker_tag.worker_count }}</td>
-                    <td>{{ worker_tag.task_count }}</td>
-                    <td>{{ worker_tag.recurring_count }}</td>
-                    <td><a href="{% url 'worker-tag-edit' worker_tag.pk %}">Edit tag</a></td>
+                    <td data-label="Tag">{{ worker_tag.name }}</td>
+                    {% if show_tag_team_column %}<td data-label="Team">{{ worker_tag.team.name|default:"-" }}</td>{% endif %}
+                    <td data-label="Workers">{{ worker_tag.worker_count }}</td>
+                    <td data-label="Tasks">{{ worker_tag.task_count }}</td>
+                    <td data-label="Recurring">{{ worker_tag.recurring_count }}</td>
+                    <td data-label="Actions"><a href="{% url 'worker-tag-edit' worker_tag.pk %}">Edit tag</a></td>
                 </tr>
             {% empty %}
                 <tr><td colspan="{% if show_tag_team_column %}6{% else %}5{% endif %}">No worker tags yet.</td></tr>
@@ -93,14 +93,14 @@
         <tbody>
             {% for item in students %}
                 <tr>
-                    <td>{{ item.profile.display_name }}</td>
-                    {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
-                    <td>{{ item.profile.email }}</td>
-                    <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
-                    <td>{{ item.profile.tag_labels }}</td>
-                    <td>{{ item.workload.active_tasks|default:0 }}</td>
-                    <td>{{ item.workload.estimated_minutes|default:0 }}</td>
-                    <td>
+                    <td data-label="Name">{{ item.profile.display_name }}</td>
+                    {% if show_team_column %}<td data-label="Team">{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
+                    <td data-label="Email">{{ item.profile.email }}</td>
+                    <td data-label="Active">{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td data-label="Tags">{{ item.profile.tag_labels }}</td>
+                    <td data-label="Open Tasks">{{ item.workload.active_tasks|default:0 }}</td>
+                    <td data-label="Estimated Minutes">{{ item.workload.estimated_minutes|default:0 }}</td>
+                    <td data-label="Actions">
                         <div class="table-action-links">
                             <a href="{% url 'worker-edit' item.profile.pk %}">Edit worker</a>
                             <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a>
@@ -132,14 +132,14 @@
         <tbody>
             {% for item in student_supervisors %}
                 <tr>
-                    <td>{{ item.profile.display_name }}</td>
-                    {% if show_team_column %}<td>{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
-                    <td>{{ item.profile.email }}</td>
-                    <td>{{ item.profile.active_status|yesno:"Yes,No" }}</td>
-                    <td>{{ item.profile.tag_labels }}</td>
-                    <td>{{ item.workload.active_tasks|default:0 }}</td>
-                    <td>{{ item.workload.estimated_minutes|default:0 }}</td>
-                    <td>
+                    <td data-label="Name">{{ item.profile.display_name }}</td>
+                    {% if show_team_column %}<td data-label="Team">{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
+                    <td data-label="Email">{{ item.profile.email }}</td>
+                    <td data-label="Active">{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td data-label="Tags">{{ item.profile.tag_labels }}</td>
+                    <td data-label="Open Tasks">{{ item.workload.active_tasks|default:0 }}</td>
+                    <td data-label="Estimated Minutes">{{ item.workload.estimated_minutes|default:0 }}</td>
+                    <td data-label="Actions">
                         <div class="table-action-links">
                             <a href="{% url 'worker-edit' item.profile.pk %}">Edit student supervisor</a>
                             <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a>
@@ -170,13 +170,13 @@
         <tbody>
             {% for supervisor in supervisors %}
                 <tr>
-                    <td>{{ supervisor.display_label }}</td>
-                    {% if show_team_column %}<td>{{ supervisor.team.name|default:"-" }}</td>{% endif %}
-                    <td>{{ supervisor.email|default:"-" }}</td>
-                    <td>{{ supervisor.assignable_to_tasks|yesno:"Yes,No" }}</td>
-                    <td>{{ supervisor.active_tasks }}</td>
-                    <td>{{ supervisor.estimated_minutes|default:0 }}</td>
-                    <td>
+                    <td data-label="Name">{{ supervisor.display_label }}</td>
+                    {% if show_team_column %}<td data-label="Team">{{ supervisor.team.name|default:"-" }}</td>{% endif %}
+                    <td data-label="Email">{{ supervisor.email|default:"-" }}</td>
+                    <td data-label="Can Receive Tasks">{{ supervisor.assignable_to_tasks|yesno:"Yes,No" }}</td>
+                    <td data-label="Open Tasks">{{ supervisor.active_tasks }}</td>
+                    <td data-label="Estimated Minutes">{{ supervisor.estimated_minutes|default:0 }}</td>
+                    <td data-label="Actions">
                         <div class="table-action-links">
                             <a href="{% url 'supervisor-edit' supervisor.pk %}">Edit supervisor</a>
                             <a href="{% url 'worker-password-reset' supervisor.pk %}">Reset password</a>

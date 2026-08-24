@@ -60,14 +60,14 @@
         <tbody>
             {% for task in tasks %}
                 <tr>
-                    <td>{% if task.completed_at %}{{ task.completed_at|date:"M j, Y g:i A" }}{% else %}Earlier completion{% endif %}</td>
-                    <td>
+                    <td data-label="Completed">{% if task.completed_at %}{{ task.completed_at|date:"M j, Y g:i A" }}{% else %}Earlier completion{% endif %}</td>
+                    <td data-label="Task">
                         <a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a>
                         <p class="meta">{{ task.description|default:task.raw_message|truncatechars:120 }}</p>
                     </td>
-                    <td>{{ task.assignee_labels }}</td>
-                    <td>{{ task.get_priority_display }}</td>
-                    <td>{% if task.estimated_minutes %}{{ task.estimated_minutes }} min{% else %}TBD{% endif %}</td>
+                    <td data-label="Assignees">{{ task.assignee_labels }}</td>
+                    <td data-label="Priority">{{ task.get_priority_display }}</td>
+                    <td data-label="Estimate">{% if task.estimated_minutes %}{{ task.estimated_minutes }} min{% else %}TBD{% endif %}</td>
                 </tr>
             {% empty %}
                 <tr>

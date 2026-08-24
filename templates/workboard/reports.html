@@ -125,13 +125,13 @@
             <tbody>
                 {% for row in workload_rows %}
                     <tr>
-                        <td>{{ row.profile.display_name }}</td>
-                        <td>{{ row.profile.user.get_role_display }}</td>
-                        <td>{{ row.open_tasks }}</td>
-                        <td>{{ row.open_estimated_hours }}</td>
-                        <td>{{ row.scheduled_hours }}</td>
-                        <td>{% if row.load_percent is not None %}{{ row.load_percent }}%{% else %}-{% endif %}</td>
-                        <td>{{ row.completed_in_period }}</td>
+                        <td data-label="Teammate">{{ row.profile.display_name }}</td>
+                        <td data-label="Role">{{ row.profile.user.get_role_display }}</td>
+                        <td data-label="Open Tasks At End">{{ row.open_tasks }}</td>
+                        <td data-label="Open Hours At End">{{ row.open_estimated_hours }}</td>
+                        <td data-label="Scheduled Hours">{{ row.scheduled_hours }}</td>
+                        <td data-label="Load">{% if row.load_percent is not None %}{{ row.load_percent }}%{% else %}-{% endif %}</td>
+                        <td data-label="Completed In Period">{{ row.completed_in_period }}</td>
                     </tr>
                 {% empty %}
                     <tr>
