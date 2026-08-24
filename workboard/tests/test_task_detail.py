@@ -2,7 +2,7 @@ from datetime import date, time
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
-from ..models import Priority, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskStatus, User, UserRole, Weekday
+from ..models import Priority, StudentAvailability, StudentWorkerProfile, Task, TaskAuditAction, TaskAuditEvent, TaskChecklistItem, TaskEstimateFeedback, TaskStatus, Team, User, UserRole, Weekday
 
 
 class TaskDetailChecklistTests(TestCase):
@@ -444,3 +444,128 @@ class TaskAuditHistoryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Task.objects.filter(pk=self.task.pk).exists())
         self.assertTrue(TaskAuditEvent.objects.filter(task_title="Audit task", action=TaskAuditAction.DELETED).exists())
+
+
+class TaskHandoffTests(TestCase):
+    def setUp(self):
+        self.assignee = self._create_worker("handoff-assignee", "Assignee Student")
+        self.teammate = self._create_worker("handoff-teammate", "Teammate Student")
+        self.task = Task.objects.create(
+            title="Handoff task",
+            description="Needs finishing",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=self.assignee,
+            created_by=self.assignee,
+            estimated_minutes=60,
+        )
+
+    def _create_worker(self, username, display_name, weekday_hours=4, role=UserRole.STUDENT_WORKER):
+        user = User.objects.create_user(username=username, password="password123", role=role)
+        profile = StudentWorkerProfile.objects.create(user=user, display_name=display_name, email=f"{username}@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(
+                profile=profile,
+                weekday=weekday,
+                hours_available=weekday_hours if weekday < 5 else 0,
+            )
+        return user
+
+    def test_assignee_can_hand_off_task_to_available_teammate(self):
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 30},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("my-tasks"))
+        self.assertContains(response, "Task handed off to")
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assigned_to, self.teammate)
+        self.assertEqual(self.task.estimated_minutes, 30)
+        self.assertEqual(self.task.status, TaskStatus.IN_PROGRESS)
+        event = self.task.audit_events.first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.action, TaskAuditAction.HANDED_OFF)
+        self.assertIn("Handed off from", event.summary)
+
+    def test_non_assignee_cannot_hand_off_task(self):
+        outsider = self._create_worker("handoff-outsider", "Outsider Student")
+        self.client.force_login(outsider)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 30},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assigned_to, self.assignee)
+
+    def test_handoff_rejected_when_task_not_in_progress(self):
+        self.task.status = TaskStatus.NEW
+        self.task.save()
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 30},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("task-detail", args=[self.task.pk]))
+        self.assertContains(response, "Only a task that is In Progress can be handed off.")
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, TaskStatus.NEW)
+        self.assertEqual(self.task.assigned_to, self.assignee)
+
+    def test_handoff_falls_back_to_supervisor_when_no_worker_has_capacity(self):
+        StudentAvailability.objects.update(hours_available=0)
+        supervisor = User.objects.create_user(username="handoff-supervisor", password="password123", role=UserRole.SUPERVISOR)
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 500},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("my-tasks"))
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assigned_to, supervisor)
+        self.assertTrue(self.task.audit_events.filter(action=TaskAuditAction.HANDED_OFF).exists())
+
+    def test_handoff_falls_back_to_any_supervisor_when_none_on_the_task_team(self):
+        StudentAvailability.objects.update(hours_available=0)
+        other_team = Team.objects.create(name="Other Team")
+        other_team_supervisor = User.objects.create_user(
+            username="handoff-other-team-supervisor",
+            password="password123",
+            role=UserRole.SUPERVISOR,
+            team=other_team,
+        )
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 500},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("my-tasks"))
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assigned_to, other_team_supervisor)
+        self.assertTrue(self.task.audit_events.filter(action=TaskAuditAction.HANDED_OFF).exists())
+
+    def test_handoff_leaves_task_with_original_student_when_nobody_available(self):
+        StudentAvailability.objects.update(hours_available=0)
+        self.client.force_login(self.assignee)
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "handoff", "minutes_remaining": 500},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("task-detail", args=[self.task.pk]))
+        self.assertContains(response, "Nobody is currently available to take this task.")
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assigned_to, self.assignee)
+        self.assertEqual(self.task.status, TaskStatus.IN_PROGRESS)
+        self.assertFalse(self.task.audit_events.filter(action=TaskAuditAction.HANDED_OFF).exists())

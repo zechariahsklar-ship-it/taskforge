@@ -68,6 +68,7 @@ class TaskAuditAction(models.TextChoices):
     CHECKLIST_UPDATED = "checklist_updated", "Checklist Updated"
     DELETED = "deleted", "Deleted"
     RECURRING_RUN = "recurring_run", "Recurring Run"
+    HANDED_OFF = "handed_off", "Handed Off"
 
 
 class RecurrencePattern(models.TextChoices):

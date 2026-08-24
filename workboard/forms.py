@@ -1463,6 +1463,10 @@ class TaskUpdateForm(StyledFormMixin, forms.ModelForm):
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
 
 
+class TaskHandoffForm(StyledFormMixin, forms.Form):
+    minutes_remaining = forms.IntegerField(min_value=1, label="About how many minutes are left?")
+
+
 class SupervisorForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = User

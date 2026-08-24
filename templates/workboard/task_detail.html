@@ -31,6 +31,22 @@
             <p class="meta" data-status-message aria-live="polite"></p>
         </section>
 
+        {% if can_handoff %}
+        <section class="task-detail-section task-detail-section-tight">
+            <h2>Can't finish this task?</h2>
+            <form method="post" class="inline-form" onsubmit="return window.confirm('Hand this task off to the next available teammate?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="handoff">
+                <label for="{{ handoff_form.minutes_remaining.id_for_label }}">About how many minutes are left?</label>
+                {{ handoff_form.minutes_remaining }}
+                <button type="submit">Hand off task</button>
+            </form>
+            {% if handoff_form.minutes_remaining.errors %}
+                <p class="meta">{{ handoff_form.minutes_remaining.errors.0 }}</p>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <section class="task-detail-section">
             <div class="task-section-header">
                 <h2>Checklist</h2>

@@ -92,6 +92,13 @@ class TaskAuditService:
         return TaskAuditService.record_event(task, actor=actor, action=TaskAuditAction.CHECKLIST_UPDATED, summary=summary)
 
     @staticmethod
+    def record_handoff(task, *, actor, previous_assignee, new_assignee, minutes_remaining):
+        previous_label = previous_assignee.display_label if previous_assignee else "Unassigned"
+        new_label = new_assignee.display_label if new_assignee else "Unassigned"
+        summary = f"Handed off from {previous_label} to {new_label} (~{minutes_remaining} min remaining)."
+        return TaskAuditService.record_event(task, actor=actor, action=TaskAuditAction.HANDED_OFF, summary=summary)
+
+    @staticmethod
     def record_recurring_reopened(task, *, summary):
         return TaskAuditService.record_event(task, actor=None, action=TaskAuditAction.RECURRING_RUN, summary=summary)
 

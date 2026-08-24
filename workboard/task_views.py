@@ -21,6 +21,7 @@ from .forms import (
     TaskForm,
     TaskManualForm,
     TaskChecklistItemForm,
+    TaskHandoffForm,
     TaskIntakeForm,
     TaskNoteForm,
     TaskAttachmentForm,
@@ -1347,6 +1348,7 @@ def task_detail_view(request, pk):
     status_form = TaskUpdateForm(instance=task)
     checklist_form = TaskChecklistItemForm()
     attachment_form = TaskAttachmentForm()
+    handoff_form = TaskHandoffForm()
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -1378,6 +1380,48 @@ def task_detail_view(request, pk):
                 return redirect("task-detail", pk=task.pk)
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"ok": False, "errors": status_form.errors}, status=400)
+        elif action == "handoff":
+            if task.assigned_to_id != request.user.id:
+                return HttpResponseForbidden("You can only hand off tasks assigned to you.")
+            if task.status != TaskStatus.IN_PROGRESS:
+                messages.error(request, "Only a task that is In Progress can be handed off.")
+                return redirect("task-detail", pk=task.pk)
+            handoff_form = TaskHandoffForm(request.POST)
+            if handoff_form.is_valid():
+                minutes_remaining = handoff_form.cleaned_data["minutes_remaining"]
+                required_tag_ids = list(task.required_worker_tags.values_list("pk", flat=True))
+                next_assignee, message, rationale = TaskAssignmentService.suggest_assignee(
+                    due_date=task.due_date,
+                    estimated_minutes=minutes_remaining,
+                    exclude_user_ids=[task.assigned_to_id],
+                    scheduled_date=task.scheduled_date,
+                    scheduled_start_time=task.scheduled_start_time,
+                    scheduled_end_time=task.scheduled_end_time,
+                    exclude_task_id=task.pk,
+                    team=task.team,
+                    required_tag_ids=required_tag_ids,
+                )
+                if next_assignee is None:
+                    # No worker has capacity and the task's own team has no
+                    # supervisor to fall back to - widen the search to any
+                    # supervisor who can take tasks so the handoff still lands.
+                    next_assignee = TaskAssignmentService.next_available_supervisor()
+                if next_assignee is None:
+                    messages.error(request, "Nobody is currently available to take this task. A supervisor will need to step in.")
+                    return redirect("task-detail", pk=task.pk)
+                previous_assignee = task.assigned_to
+                task.assigned_to = next_assignee
+                task.estimated_minutes = minutes_remaining
+                task.save()
+                TaskAuditService.record_handoff(
+                    task,
+                    actor=request.user,
+                    previous_assignee=previous_assignee,
+                    new_assignee=next_assignee,
+                    minutes_remaining=minutes_remaining,
+                )
+                messages.success(request, f"Task handed off to {next_assignee.display_label}.")
+                return redirect("my-tasks")
         elif action == "note":
             note_form = TaskNoteForm(request.POST)
             if note_form.is_valid():
@@ -1498,6 +1542,8 @@ def task_detail_view(request, pk):
             "attachment_form": attachment_form,
             "audit_events": audit_events,
             "can_manage_checklist_items": request.user.is_supervisor,
+            "can_handoff": task.assigned_to_id == request.user.id and task.status == TaskStatus.IN_PROGRESS,
+            "handoff_form": handoff_form,
         },
     )
 
