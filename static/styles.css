@@ -48,6 +48,11 @@ body {
 body {
     margin: 0;
     padding-top: 108px;
+    /* A task title/description (or any other free-text field) can contain a
+       single unbroken run - a URL, a long token - with no space to wrap at.
+       Without this, that text pokes out past its card instead of wrapping. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -462,6 +467,8 @@ body a:focus-visible {
 
 pre {
     overflow-x: auto;
+    overflow-wrap: normal;
+    word-break: normal;
 }
 
 .narrow {
