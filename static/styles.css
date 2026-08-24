@@ -37,6 +37,12 @@ html,
 body {
     background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
     color: var(--ink);
+    /* A single stray wide element anywhere on a page (a long unbroken code
+       line, a table, etc.) would otherwise let the page scroll sideways,
+       which on mobile browsers can also throw off where `position: fixed`
+       elements like the header and its nav panel land until the user
+       scrolls. Clip horizontal overflow at the root so that can't happen. */
+    overflow-x: hidden;
 }
 
 body {
@@ -438,6 +444,11 @@ body a:focus-visible {
 .task-card,
 .board-column,
 .note {
+    /* Grid/flex items default to min-width: auto, so a descendant with
+       unbreakable content (a long <pre> line, a wide table) can force the
+       whole track wider than the page instead of scrolling internally.
+       Let each card shrink below its content's natural width. */
+    min-width: 0;
     background: linear-gradient(180deg, var(--paper-elevated) 0%, var(--paper) 100%);
     border: 1px solid var(--line);
     border-radius: 16px;
@@ -447,6 +458,10 @@ body a:focus-visible {
 .card,
 .table-card {
     padding: 1.5rem;
+}
+
+pre {
+    overflow-x: auto;
 }
 
 .narrow {
