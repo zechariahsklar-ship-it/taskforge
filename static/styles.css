@@ -50,7 +50,13 @@ body {
     padding-top: 108px;
     /* A task title/description (or any other free-text field) can contain a
        single unbroken run - a URL, a long token - with no space to wrap at.
-       Without this, that text pokes out past its card instead of wrapping. */
+       Without this, that text pokes out past its card instead of wrapping.
+       overflow-wrap: break-word alone doesn't force a break here (Chromium
+       won't break a single unbroken token with no other wrap opportunity in
+       the line), so word-break: break-word is load-bearing too - but both
+       properties also make every element's min-content size act as if it
+       could shrink to nothing, which let small buttons (e.g. "Delete") get
+       squeezed down and wrap mid-word. Buttons opt back out below. */
     overflow-wrap: anywhere;
     word-break: break-word;
     font-family: var(--font-sans);
@@ -677,6 +683,17 @@ button,
     color: white;
     text-decoration: none;
     cursor: pointer;
+}
+
+/* Buttons/links carry short, fixed labels (e.g. "Delete") - they should
+   size to fit that label, not inherit body's aggressive text-wrapping
+   (see the comment on body above) which lets them get squeezed down to a
+   sliver and wrap mid-word instead. */
+button,
+.button-link,
+.link-button {
+    overflow-wrap: normal;
+    word-break: normal;
 }
 
 .form-check-input {
