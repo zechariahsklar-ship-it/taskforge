@@ -419,3 +419,43 @@ class RecurringTaskGenerationRotationTests(TestCase):
         legacy_task.refresh_from_db()
         self.assertIsNotNone(legacy_task.recurring_template)
         self.assertEqual(legacy_task.recurring_template.assign_to, self.alex)
+
+
+class RecurringTaskPageLoadSweepTests(TestCase):
+    # Backfilling a legacy recurring task onto a template used to happen only
+    # from the generate_recurring_tasks management command or a visit to the
+    # Recurring page - never from ordinary page traffic. If the scheduled
+    # job wasn't running and nobody happened to open the Recurring page, that
+    # task's daily/weekly/monthly cycle would never advance no matter how
+    # much of the rest of the site got used. Regular page loads now run the
+    # same backfill as part of the request-time recurring sweep.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="sweep-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="sweep-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.legacy_task = Task.objects.create(
+            title="Legacy daily watering",
+            description="Water the plants",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.DONE,
+            due_date=date(2026, 3, 12),
+            assigned_to=self.worker,
+            requested_by=self.supervisor,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            completed_at=timezone.make_aware(datetime(2026, 3, 12, 17, 0)),
+        )
+
+    def test_ordinary_page_load_backfills_legacy_task_and_generates_next_cycle(self):
+        self.assertIsNone(self.legacy_task.recurring_template)
+
+        self.client.force_login(self.worker)
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 13, 9, 0))):
+            response = self.client.get(reverse("my-tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.legacy_task.refresh_from_db()
+        self.assertIsNotNone(self.legacy_task.recurring_template)
+        generated = Task.objects.filter(recurring_template=self.legacy_task.recurring_template).exclude(pk=self.legacy_task.pk)
+        self.assertTrue(generated.exists())

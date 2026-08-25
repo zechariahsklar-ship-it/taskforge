@@ -113,7 +113,13 @@ def _process_ready_recurring_tasks(request) -> None:
         return
     if request.resolver_match and request.resolver_match.url_name in {"logout", "password-change"}:
         return
-    # Sweep recurring releases on normal app traffic when no scheduler is available.
+    # Sweep recurring releases on normal app traffic when no scheduler is
+    # available. Backfill first (same order as the generate_recurring_tasks
+    # management command) so a legacy recurring task that hasn't been synced
+    # to a template yet still gets its next cycle generated in this pass,
+    # instead of only ever being caught up by someone visiting the Recurring
+    # page or a working cron job.
+    _backfill_orphan_recurring_tasks()
     RecurringTaskService.run_templates_ready_today()
 
 
