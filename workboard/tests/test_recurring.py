@@ -459,3 +459,96 @@ class RecurringTaskPageLoadSweepTests(TestCase):
         self.assertIsNotNone(self.legacy_task.recurring_template)
         generated = Task.objects.filter(recurring_template=self.legacy_task.recurring_template).exclude(pk=self.legacy_task.pk)
         self.assertTrue(generated.exists())
+
+
+class DailyWeekdayRecurrenceTests(TestCase):
+    # "Daily" means weekday-daily (no Saturday/Sunday cycles), and a daily
+    # template that's fallen multiple days behind should only generate its
+    # most recently due cycle - not flood the board with one task per day
+    # that was missed while nobody checked the site.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="weekday-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="weekday-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Weekday Worker", email="weekday@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=4 if weekday < 5 else 0)
+        self.template = RecurringTaskTemplate.objects.create(
+            title="Daily plant watering",
+            description="Water the office plants",
+            priority=Priority.LOW,
+            estimated_minutes=15,
+            assign_to=None,
+            requested_by=self.supervisor,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            # Thursday, 2026-08-20
+            next_run_date=date(2026, 8, 20),
+        )
+        self.previous_task = Task.objects.create(
+            title="Daily plant watering",
+            status=TaskStatus.DONE,
+            due_date=date(2026, 8, 19),
+            assigned_to=self.worker,
+            requested_by=self.supervisor,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurring_template=self.template,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            estimated_minutes=15,
+            completed_at=timezone.make_aware(datetime(2026, 8, 19, 17, 0)),
+        )
+
+    def _run_generator_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            from ..recurring_service import RecurringTaskService
+
+            return RecurringTaskService.run_templates_ready_today(now=when)
+
+    def test_next_cycle_after_friday_skips_the_weekend(self):
+        # next_run_date starts Thu 2026-08-20. A same-day check releases
+        # Thursday's own task and advances to Friday (no weekend involved
+        # yet); a second check on Friday releases Friday's task and must
+        # advance past the weekend straight to Monday, not Saturday.
+        self._run_generator_at(timezone.make_aware(datetime(2026, 8, 20, 9, 0)))
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 8, 21))  # Friday
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 8, 21, 9, 0)))
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 8, 24))  # Monday, not Saturday
+
+        tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk).order_by("due_date"))
+        self.assertEqual([t.due_date for t in tasks], [date(2026, 8, 20), date(2026, 8, 21)])
+
+    def test_multi_day_backlog_only_creates_the_most_recent_cycle(self):
+        # Simulate the site going unchecked from Thu 8/20 (next_run_date,
+        # the first ungenerated cycle) all the way to Thu 8/27 - five
+        # weekdays are overdue (8/20, 8/21, 8/24, 8/25, 8/26, 8/27, skipping
+        # the 8/22-8/23 weekend). Only 8/27's task should be created.
+        created, _ = self._run_generator_at(timezone.make_aware(datetime(2026, 8, 27, 9, 0)))
+
+        self.assertEqual(created, 1)
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].due_date, date(2026, 8, 27))
+        self.assertEqual(tasks[0].assigned_to, self.worker)
+        # Next cycle should be the following weekday, not a pile-up of
+        # every skipped day.
+        self.assertEqual(self.template.next_run_date, date(2026, 8, 28))
+
+    def test_legacy_weekend_next_run_date_is_normalized_forward(self):
+        # A template that somehow ended up with next_run_date on a Saturday
+        # (legacy data, or a hand-edited date) should get nudged to the
+        # following Monday instead of never becoming ready.
+        self.template.next_run_date = date(2026, 8, 22)  # Saturday
+        self.template.save(update_fields=["next_run_date", "updated_at"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 8, 24, 18, 5)))
+
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].due_date, date(2026, 8, 24))  # Monday
+        self.assertEqual(self.template.next_run_date, date(2026, 8, 25))

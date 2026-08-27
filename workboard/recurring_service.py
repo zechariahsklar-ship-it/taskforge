@@ -12,6 +12,18 @@ from .services import TaskAssignmentService
 RECURRING_RELEASE_TIME = time(18, 0)
 
 
+def _subtract_weekdays(start_date: date, count: int) -> date:
+    # Mirrors models._add_weekdays - "daily" means weekday-daily, so the
+    # previous cycle for a Monday run is the prior Friday, not Saturday.
+    current = start_date
+    remaining = count
+    while remaining > 0:
+        current -= timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
 @dataclass
 class RecurringRunPreview:
     run_date: date
@@ -30,7 +42,7 @@ class RecurringTaskService:
     @staticmethod
     def _previous_run_date(template: RecurringTaskTemplate, run_date: date) -> date:
         if template.recurrence_pattern == "daily":
-            return run_date - timedelta(days=template.recurrence_interval)
+            return _subtract_weekdays(run_date, template.recurrence_interval)
         if template.recurrence_pattern == "weekly":
             return run_date - timedelta(weeks=template.recurrence_interval)
         month_index = run_date.month - 1 - template.recurrence_interval
@@ -41,6 +53,13 @@ class RecurringTaskService:
 
     @staticmethod
     def _run_is_ready(template: RecurringTaskTemplate, *, local_now: datetime) -> bool:
+        if template.recurrence_pattern == 'daily':
+            # A daily (weekday-daily) cycle becomes ready at the start of its
+            # own due day, not the evening before. With a 1-day interval, the
+            # "evening before" model below would make tomorrow's cycle ready
+            # the moment today's own cutoff passes - releasing two cycles the
+            # same evening even with zero real backlog.
+            return local_now.date() >= template.next_run_date
         # next_run_date stores the due date of the upcoming cycle. Release that
         # cycle once the prior scheduled due day has crossed the evening cutoff.
         release_date = RecurringTaskService._previous_run_date(template, template.next_run_date)
@@ -282,6 +301,40 @@ class RecurringTaskService:
         template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
+    def _normalize_daily_next_run_date(template: RecurringTaskTemplate) -> None:
+        # A daily template's next_run_date should never sit on a weekend -
+        # nudge legacy/manually-edited data (from before weekday-only daily
+        # recurrence, or a hand-picked Saturday/Sunday) onto the next
+        # weekday instead of silently never becoming ready.
+        if template.next_run_date.weekday() < 5:
+            return
+        while template.next_run_date.weekday() >= 5:
+            template.next_run_date += timedelta(days=1)
+        template.save(update_fields=['next_run_date', 'updated_at'])
+
+    @staticmethod
+    def _skip_stale_daily_cycles(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
+        # A daily template only needs its most recently due cycle generated.
+        # If nobody checked the site for several days, don't flood the board
+        # with one task per day that was missed - fast-forward next_run_date
+        # past every stale cycle except the last ready one, without creating
+        # tasks for the ones being skipped.
+        preview = RecurringTaskTemplate(
+            recurrence_pattern=template.recurrence_pattern,
+            recurrence_interval=template.recurrence_interval,
+            next_run_date=template.next_run_date,
+        )
+        advanced = False
+        while True:
+            preview.advance_next_run_date()
+            if not RecurringTaskService._run_is_ready(preview, local_now=local_now):
+                break
+            template.next_run_date = preview.next_run_date
+            advanced = True
+        if advanced:
+            template.save(update_fields=['next_run_date', 'updated_at'])
+
+    @staticmethod
     def run_templates_ready_today(*, now=None) -> tuple[int, int]:
         local_now = timezone.localtime(now or timezone.now())
         created_count = 0
@@ -292,6 +345,9 @@ class RecurringTaskService:
             .distinct()
         )
         for template in templates:
+            if template.recurrence_pattern == 'daily':
+                RecurringTaskService._normalize_daily_next_run_date(template)
+                RecurringTaskService._skip_stale_daily_cycles(template, local_now=local_now)
             while RecurringTaskService._run_is_ready(template, local_now=local_now):
                 if RecurringTaskService._is_blackout_date(template.team, template.next_run_date):
                     RecurringTaskService._skip_blacked_out_run(template, template.next_run_date)

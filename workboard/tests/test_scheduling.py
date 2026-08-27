@@ -354,6 +354,9 @@ class BlackoutDateTests(TestCase):
         self.assertFalse(BlackoutDate.objects.filter(pk=blackout_date.pk).exists())
 
     def test_recurring_generation_skips_blackout_date_and_advances(self):
+        # 2026-03-20 is a Friday, so the daily (weekday-only) template's next
+        # cycle after skipping the blackout lands on Monday 2026-03-23, not
+        # calendar-day Saturday 2026-03-21.
         BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Break")
 
         created_count, reopened_count = RecurringTaskService.run_templates_ready_today(
@@ -364,7 +367,7 @@ class BlackoutDateTests(TestCase):
         self.assertEqual(reopened_count, 0)
         self.assertFalse(Task.objects.filter(recurring_template=self.template).exists())
         self.template.refresh_from_db()
-        self.assertEqual(self.template.next_run_date, date(2026, 3, 21))
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 23))
 
     def test_recurring_generation_creates_task_on_non_blackout_date(self):
         created_count, _ = RecurringTaskService.run_templates_ready_today(

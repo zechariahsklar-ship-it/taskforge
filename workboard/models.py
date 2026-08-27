@@ -6,6 +6,18 @@ from django.db import models
 from django.utils import timezone
 
 
+def _add_weekdays(start_date, count):
+    # "Daily" recurrence means weekday-daily - Saturday/Sunday never count
+    # as a step, in either direction.
+    current = start_date
+    remaining = count
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
 def _format_clock_time(value):
     return value.strftime("%I:%M %p").lstrip("0")
 
@@ -473,7 +485,7 @@ class RecurringTaskTemplate(models.Model):
 
     def advance_next_run_date(self):
         if self.recurrence_pattern == RecurrencePattern.DAILY:
-            self.next_run_date = self.next_run_date + timedelta(days=self.recurrence_interval)
+            self.next_run_date = _add_weekdays(self.next_run_date, self.recurrence_interval)
         elif self.recurrence_pattern == RecurrencePattern.WEEKLY:
             self.next_run_date = self.next_run_date + timedelta(weeks=self.recurrence_interval)
         else:
