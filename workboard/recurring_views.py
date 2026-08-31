@@ -127,6 +127,8 @@ def recurring_template_edit_view(request, pk):
                 if previous_team is not None:
                     _resequence_recurring_templates(_ordered_recurring_templates(team=previous_team))
                 _resequence_recurring_templates(_ordered_recurring_templates(team=updated_template.team))
+            if form.dropped_extra_window_days:
+                messages.info(request, "Only one scheduled time block is supported for a recurring task - the extra day(s)/time(s) were skipped.")
             messages.success(request, "Recurring task updated.")
             return redirect("recurring-detail", pk=updated_template.pk)
     else:

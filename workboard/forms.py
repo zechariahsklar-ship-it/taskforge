@@ -94,9 +94,13 @@ TASK_INTAKE_REVIEW_NON_RENDERED_FIELD_NAMES = (
     "due_date",
     *TASK_FORM_NON_RENDERED_FIELD_NAMES,
 )
-RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES = (
+RECURRING_TEMPLATE_WINDOW_HIDDEN_FIELD_NAMES = (
     "scheduled_start_time",
     "scheduled_end_time",
+    *TASK_WINDOW_SEGMENT_FIELD_NAMES,
+)
+RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES = (
+    *RECURRING_TEMPLATE_WINDOW_HIDDEN_FIELD_NAMES,
     "additional_assignees",
     "rotating_additional_assignee_count",
     "recurrence_pattern",
@@ -269,6 +273,53 @@ def _window_minutes(start_value: time, end_value: time) -> int:
 
 def _schedule_block_within_workday(start_value: time, end_value: time) -> bool:
     return start_value >= SCHEDULE_DAY_START_TIME and end_value <= SCHEDULE_DAY_END_TIME
+
+
+def _parse_schedule_segments_payload(raw_value):
+    """Parse one day's JSON [[start,end],...] segments payload from the weekly
+    schedule picker. Returns (blocks, error_message) - blocks is a list of
+    (start_time, end_time) tuples (possibly empty) on success, or None paired
+    with an error message on failure. Shared by every form that embeds the
+    picker, so parsing/validation stays identical everywhere it's used."""
+    if not raw_value:
+        return [], None
+    try:
+        payload = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None, "The task windows have an invalid schedule payload."
+    if not isinstance(payload, list):
+        return None, "The task windows have an invalid schedule payload."
+
+    parsed_blocks = []
+    for item in payload:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return None, "The task windows have an invalid schedule block."
+        start_raw, end_raw = item
+        try:
+            start_value = datetime.strptime(str(start_raw), "%H:%M").time()
+            end_value = datetime.strptime(str(end_raw), "%H:%M").time()
+        except ValueError:
+            return None, "The task windows must use 30-minute times."
+        if end_value <= start_value:
+            return None, "Each task window must end after it starts."
+        if _window_minutes(start_value, end_value) % 30 != 0:
+            return None, "The task windows must use 30-minute increments."
+        if not _schedule_block_within_workday(start_value, end_value):
+            return None, "Task windows must stay between 7:00 AM and 6:00 PM."
+        parsed_blocks.append((start_value, end_value))
+
+    parsed_blocks.sort(key=lambda block: (block[0], block[1]))
+    normalized_blocks = []
+    for start_value, end_value in parsed_blocks:
+        if not normalized_blocks:
+            normalized_blocks.append([start_value, end_value])
+            continue
+        last_start, last_end = normalized_blocks[-1]
+        if start_value <= last_end:
+            normalized_blocks[-1][1] = max(last_end, end_value)
+        else:
+            normalized_blocks.append([start_value, end_value])
+    return [(start_value, end_value) for start_value, end_value in normalized_blocks], None
 
 
 def _legacy_hours_to_window(hours_value: Decimal | None) -> tuple[time | None, time | None, Decimal]:
@@ -1049,52 +1100,11 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         )
 
     def _parse_task_window_segments(self, raw_value):
-        if not raw_value:
-            return []
-        try:
-            payload = json.loads(raw_value)
-        except json.JSONDecodeError:
-            self.add_error("scheduled_window_segments", "The task windows have an invalid schedule payload.")
+        blocks, error = _parse_schedule_segments_payload(raw_value)
+        if error:
+            self.add_error("scheduled_window_segments", error)
             return None
-        if not isinstance(payload, list):
-            self.add_error("scheduled_window_segments", "The task windows have an invalid schedule payload.")
-            return None
-
-        parsed_blocks = []
-        for item in payload:
-            if not isinstance(item, (list, tuple)) or len(item) != 2:
-                self.add_error("scheduled_window_segments", "The task windows have an invalid schedule block.")
-                return None
-            start_raw, end_raw = item
-            try:
-                start_value = datetime.strptime(str(start_raw), "%H:%M").time()
-                end_value = datetime.strptime(str(end_raw), "%H:%M").time()
-            except ValueError:
-                self.add_error("scheduled_window_segments", "The task windows must use 30-minute times.")
-                return None
-            if end_value <= start_value:
-                self.add_error("scheduled_window_segments", "Each task window must end after it starts.")
-                return None
-            if _window_minutes(start_value, end_value) % 30 != 0:
-                self.add_error("scheduled_window_segments", "The task windows must use 30-minute increments.")
-                return None
-            if not _schedule_block_within_workday(start_value, end_value):
-                self.add_error("scheduled_window_segments", "Task windows must stay between 7:00 AM and 6:00 PM.")
-                return None
-            parsed_blocks.append((start_value, end_value))
-
-        parsed_blocks.sort(key=lambda block: (block[0], block[1]))
-        normalized_blocks = []
-        for start_value, end_value in parsed_blocks:
-            if not normalized_blocks:
-                normalized_blocks.append([start_value, end_value])
-                continue
-            last_start, last_end = normalized_blocks[-1]
-            if start_value <= last_end:
-                normalized_blocks[-1][1] = max(last_end, end_value)
-            else:
-                normalized_blocks.append([start_value, end_value])
-        return [(start_value, end_value) for start_value, end_value in normalized_blocks]
+        return blocks
 
     def _selected_task_window_days(self, cleaned_data):
         selected_days = []
@@ -1626,8 +1636,13 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         coerce=lambda value: int(value) if value not in ("", None) else None,
         empty_value=None,
     )
-    scheduled_start_time = HalfHourTimeField()
-    scheduled_end_time = HalfHourTimeField()
+    scheduled_start_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
+    scheduled_end_time = HalfHourTimeField(required=False, widget=forms.HiddenInput())
+    task_window_day_0_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_1_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_2_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_3_segments = forms.CharField(required=False, widget=forms.HiddenInput())
+    task_window_day_4_segments = forms.CharField(required=False, widget=forms.HiddenInput())
 
     class Meta:
         model = RecurringTaskTemplate
@@ -1655,6 +1670,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, actor=None, **kwargs):
         self.actor = actor
+        self.dropped_extra_window_days = False
         super().__init__(*args, **kwargs)
         selected_team = self._resolve_selected_team()
         restrict_to_teamless = bool(actor and not actor.is_admin and not actor.team_id and selected_team is None)
@@ -1673,10 +1689,14 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["description"].label = "Task details"
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
-        self.fields["scheduled_start_time"].label = "Scheduled start time"
-        self.fields["scheduled_start_time"].help_text = "Optional. Generated tasks will use this start time on each run."
-        self.fields["scheduled_end_time"].label = "Scheduled end time"
-        self.fields["scheduled_end_time"].help_text = "Optional. Generated tasks will use this end time on each run."
+        if not self.is_bound:
+            instance_start = getattr(self.instance, "scheduled_start_time", None)
+            instance_end = getattr(self.instance, "scheduled_end_time", None)
+            if instance_start and instance_end:
+                self.initial.setdefault(
+                    f"{TASK_WINDOW_DAY_CONFIG[0][0]}_segments",
+                    _serialize_schedule_segments([(instance_start, instance_end)]),
+                )
         _configure_worker_tags_field(
             self.fields["required_worker_tags"],
             team=selected_team,
@@ -1716,6 +1736,51 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
     @property
     def non_rendered_field_names(self):
         return RECURRING_TEMPLATE_NON_RENDERED_FIELD_NAMES
+
+    @property
+    def non_rendered_hidden_field_names(self):
+        return RECURRING_TEMPLATE_WINDOW_HIDDEN_FIELD_NAMES
+
+    def day_rows(self):
+        return [
+            {
+                "prefix": prefix,
+                "label": label,
+                "segments": self[f"{prefix}_segments"],
+                "weekday": int(weekday),
+                "override_entries": [],
+            }
+            for prefix, label, weekday in TASK_WINDOW_DAY_CONFIG
+        ]
+
+    def calendar_slots(self):
+        return WEEKLY_CALENDAR_SLOTS
+
+    def _clean_scheduled_window(self, cleaned_data):
+        # A recurring template only stores one flat start/end time (reused
+        # for every generated cycle) - which day the picker's block is on
+        # doesn't matter, only the time does. If more than one day ended up
+        # with a block, keep just the first (by TASK_WINDOW_DAY_CONFIG
+        # order) instead of blocking the save, matching how the Create/Edit
+        # Task form already handles the same ambiguity.
+        selected_blocks = []
+        for prefix, _, _ in TASK_WINDOW_DAY_CONFIG:
+            raw_value = cleaned_data.get(f"{prefix}_segments")
+            if not raw_value:
+                continue
+            blocks, error = _parse_schedule_segments_payload(raw_value)
+            if error:
+                self.add_error(None, error)
+                return cleaned_data
+            if blocks:
+                selected_blocks.append(blocks[0])
+        self.dropped_extra_window_days = len(selected_blocks) > 1
+        if selected_blocks:
+            cleaned_data["scheduled_start_time"], cleaned_data["scheduled_end_time"] = selected_blocks[0]
+        else:
+            cleaned_data["scheduled_start_time"] = None
+            cleaned_data["scheduled_end_time"] = None
+        return cleaned_data
 
     def _resolve_selected_team(self):
         if self.actor and not self.actor.is_admin and self.actor.team_id:
@@ -1774,6 +1839,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         if assign_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
+        cleaned_data = self._clean_scheduled_window(cleaned_data)
 
         recurrence_pattern = cleaned_data.get("recurrence_pattern")
         day_of_week = cleaned_data.get("day_of_week")

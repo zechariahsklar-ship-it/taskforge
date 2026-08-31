@@ -1,9 +1,10 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from unittest.mock import patch
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from ..forms import _serialize_schedule_segments
 from ..models import Priority, RecurringTaskTemplate, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, User, UserRole, Weekday
 
 
@@ -196,14 +197,95 @@ class RecurringTaskListViewTests(TestCase):
         self.assertContains(response, "Monday")
         self.assertContains(response, "Sunday")
         self.assertNotContains(response, 'type="number" name="day_of_week"', html=False)
-        self.assertContains(response, 'value="07:00"')
-        self.assertContains(response, 'value="18:00"')
-        self.assertNotContains(response, 'value="06:30"')
-        self.assertNotContains(response, 'value="18:30"')
+        self.assertContains(response, "data-task-window-toggle", html=False)
+        self.assertContains(response, 'data-slot-value="07:00"', html=False)
+        self.assertContains(response, 'data-slot-end="18:00"', html=False)
+        self.assertNotContains(response, 'data-slot-value="06:30"', html=False)
+        self.assertNotContains(response, 'data-slot-end="18:30"', html=False)
         self.assertContains(response, "Day of month to repeat on")
         self.assertContains(response, "Fixed additional assignees")
         self.assertContains(response, "Add rotating team members")
         self.assertContains(response, "Recurring task is active")
+
+    def _recurring_edit_payload(self, template, **overrides):
+        payload = {
+            "title": template.title,
+            "description": template.description,
+            "priority": template.priority,
+            "estimated_minutes": str(template.estimated_minutes or ""),
+            "assign_to": str(template.assign_to_id or ""),
+            "rotating_additional_assignee_count": "0",
+            "recurrence_pattern": template.recurrence_pattern,
+            "recurrence_interval": str(template.recurrence_interval or 1),
+            "day_of_week": "0" if template.recurrence_pattern == "weekly" else "",
+            "day_of_month": "1" if template.recurrence_pattern == "monthly" else "",
+            "start_date": template.start_date.isoformat(),
+            "next_run_date": template.next_run_date.isoformat(),
+            "active": "on" if template.active else "",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_recurring_edit_saves_picked_window_as_start_and_end_time(self):
+        # No assignee and a window at least as long as the 45-minute
+        # estimate, to isolate this test from the form's separate (and
+        # already-covered-elsewhere) estimate/availability validation.
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.first_template.pk]),
+            self._recurring_edit_payload(self.first_template, assign_to="", task_window_day_0_segments='[["09:00", "10:00"]]'),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.first_template.refresh_from_db()
+        self.assertEqual(self.first_template.scheduled_start_time, time(9, 0))
+        self.assertEqual(self.first_template.scheduled_end_time, time(10, 0))
+
+    def test_recurring_edit_with_multi_day_window_keeps_only_the_first(self):
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.first_template.pk]),
+            self._recurring_edit_payload(
+                self.first_template,
+                assign_to="",
+                task_window_day_0_segments='[["09:00", "10:00"]]',
+                task_window_day_1_segments='[["11:00", "11:30"]]',
+            ),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.first_template.refresh_from_db()
+        self.assertEqual(self.first_template.scheduled_start_time, time(9, 0))
+        self.assertEqual(self.first_template.scheduled_end_time, time(10, 0))
+        self.assertContains(response, "Only one scheduled time block is supported")
+
+    def test_recurring_edit_page_prefills_existing_window_into_picker(self):
+        self.first_template.scheduled_start_time = time(9, 0)
+        self.first_template.scheduled_end_time = time(10, 0)
+        self.first_template.save(update_fields=["scheduled_start_time", "scheduled_end_time", "updated_at"])
+
+        response = self.client.get(reverse("recurring-edit", args=[self.first_template.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        expected = _serialize_schedule_segments([(time(9, 0), time(10, 0))])
+        self.assertEqual(response.context["form"].initial.get("task_window_day_0_segments"), expected)
+
+    def test_recurring_edit_clears_window_when_no_day_segments_submitted(self):
+        self.first_template.scheduled_start_time = time(9, 0)
+        self.first_template.scheduled_end_time = time(10, 0)
+        self.first_template.save(update_fields=["scheduled_start_time", "scheduled_end_time", "updated_at"])
+
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.first_template.pk]),
+            self._recurring_edit_payload(self.first_template),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.first_template.refresh_from_db()
+        self.assertIsNone(self.first_template.scheduled_start_time)
+        self.assertIsNone(self.first_template.scheduled_end_time)
+
     def test_recurring_move_view_reorders_templates(self):
         response = self.client.post(
             reverse("recurring-move", args=[self.second_template.pk]),
