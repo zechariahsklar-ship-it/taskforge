@@ -82,6 +82,7 @@ TASK_FORM_NON_RENDERED_FIELD_NAMES = (
     *TASK_WINDOW_HIDDEN_FIELD_NAMES,
     "additional_assignees",
     "rotating_additional_assignee_count",
+    "respond_to_text",
     "recurring_task",
     "recurrence_pattern",
     "recurrence_interval",
@@ -382,8 +383,7 @@ class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
                 selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team this person belongs to."
-            if selected_team:
-                self.initial.setdefault("team", selected_team.pk)
+            self.initial.setdefault("team", (selected_team or Team.get_default_team()).pk)
         _configure_worker_tags_field(
             self.fields["tags"],
             team=selected_team,
@@ -854,8 +854,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team owns this task."
-            if selected_team:
-                self.initial.setdefault("team", selected_team.pk)
+            self.initial.setdefault("team", (selected_team or Team.get_default_team()).pk)
         _configure_worker_tags_field(
             self.fields["required_worker_tags"],
             team=selected_team,
@@ -1488,6 +1487,8 @@ class SupervisorForm(StyledFormMixin, forms.ModelForm):
             self.initial["team"] = actor.team_id
         else:
             self.fields["team"].help_text = "Choose which team this supervisor belongs to."
+            if not getattr(self.instance, "pk", None):
+                self.initial.setdefault("team", Team.get_default_team().pk)
         self.fields["assignable_to_tasks"].label = "Allow fallback tasks to be assigned to this supervisor"
         self.fields["assignable_to_tasks"].help_text = ""
 
@@ -1529,8 +1530,8 @@ class WorkerTagForm(StyledFormMixin, forms.ModelForm):
             self.initial["team"] = actor.team_id or getattr(selected_team, "pk", None)
             if actor.team_id:
                 selected_team = actor.team
-        elif selected_team:
-            self.initial.setdefault("team", selected_team.pk)
+        else:
+            self.initial.setdefault("team", (selected_team or Team.get_default_team()).pk)
 
     def _resolve_selected_team(self):
         if self.actor and not self.actor.is_admin and self.actor.team_id:
@@ -1660,8 +1661,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
                 selected_team = actor.team
         else:
             self.fields["team"].help_text = "Choose which team owns this recurring task."
-            if selected_team:
-                self.initial.setdefault("team", selected_team.pk)
+            self.initial.setdefault("team", (selected_team or Team.get_default_team()).pk)
         self.fields["description"].label = "Task details"
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"

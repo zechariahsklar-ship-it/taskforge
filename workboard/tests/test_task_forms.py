@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
-from ..models import Priority, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskStatus, User, UserRole, Weekday, WorkerTag
+from ..models import Priority, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
 from ..services import TaskAssignmentService
 
 
@@ -921,3 +921,58 @@ class TaskCreateAdditionalAssigneeRotationTests(TestCase):
         self.assertContains(response, "Fixed Helper")
         self.assertContains(response, "Rotating Helper (rotation)")
         self.assertContains(response, "Taylor Helper (rotation)")
+
+
+class TaskCreateAsAdminWithNoTeamTests(TestCase):
+    # A superuser (is_admin) has no team of its own. The create-task form's
+    # "Team" field is required and visible for admins, and previously had no
+    # pre-selected value when nothing else resolved a team - the browser's
+    # own required-field validation then silently blocked submission with a
+    # native "please select an item" popup, and the assignment pickers
+    # (Assign to, additional assignees, worker tags) rendered with zero
+    # options since they were scoped to a None team. Both should now default
+    # sensibly to the app's default team.
+    def setUp(self):
+        self.admin = User.objects.create_superuser(username="admin-no-team", password="password123", email="admin@example.com")
+        self.assertIsNone(self.admin.team)
+
+    def test_task_create_form_defaults_team_for_admin(self):
+        response = self.client.force_login(self.admin) or self.client.get(reverse("task-create"))
+
+        self.assertEqual(response.status_code, 200)
+        default_team = Team.get_default_team()
+        self.assertContains(response, f'<option value="{default_team.pk}" selected>', html=False)
+
+    def test_admin_can_create_task_without_manually_choosing_team(self):
+        # Simulates the admin leaving the form's pre-selected "Team" option
+        # as-is (rather than the old behavior of the select showing a blank
+        # placeholder) and submitting - "team" is included with the value
+        # the form itself would have pre-filled.
+        self.client.force_login(self.admin)
+        default_team = Team.get_default_team()
+
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "team": str(default_team.pk),
+                "title": "Admin task with default team",
+                "description": "",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "respond_to_text": "",
+                "estimated_minutes": "",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Admin task with default team")
+        self.assertEqual(task.team, Team.get_default_team())
