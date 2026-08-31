@@ -1211,7 +1211,12 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.add_error("estimated_minutes", "The time estimate is longer than the total allowed task windows.")
 
         if cleaned_data.get("recurring_task") and len(task_schedule_blocks) > 1:
-            self.add_error("scheduled_window_segments", "Repeating tasks can only use one continuous scheduled time window right now.")
+            self.add_error(
+                "scheduled_window_segments",
+                "A repeating task can only use one scheduled time block, on one day - that block is reused for "
+                "every repeat. Clear the extra day(s)/time(s) here, or clear this section entirely if the "
+                "repeat doesn't need a fixed time of day.",
+            )
 
         return cleaned_data
 

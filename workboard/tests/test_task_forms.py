@@ -675,6 +675,68 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(task.recurring_template.day_of_week, Weekday.FRIDAY)
         self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 27))
 
+    def test_daily_recurring_task_rejects_a_scheduled_window_spanning_more_than_one_day(self):
+        # Picking a window on two different days for a repeating task (e.g.
+        # trying to represent "every day" by selecting Monday and Tuesday,
+        # rather than relying on the Daily cadence) isn't supported yet and
+        # should be rejected with guidance rather than silently failing.
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Daily standup",
+                "description": "",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:00", "09:30"]]',
+                "task_window_day_1_segments": '[["09:00", "09:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "daily",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Task.objects.filter(title="Daily standup").exists())
+        self.assertContains(response, "A repeating task can only use one scheduled time block")
+
+    def test_daily_recurring_task_accepts_a_single_day_scheduled_window(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Daily standup",
+                "description": "",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "scheduled_week_of": "2026-03-16",
+                "task_window_day_0_segments": '[["09:00", "09:30"]]',
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "daily",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Daily standup")
+        self.assertTrue(task.recurring_task)
+        self.assertIsNotNone(task.recurring_template)
+        self.assertEqual(task.recurring_template.recurrence_pattern, "daily")
+
     def test_split_shift_worker_is_available_inside_second_block_but_not_gap(self):
         self._replace_blocks(
             self.morning_worker,
