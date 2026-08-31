@@ -1334,6 +1334,8 @@ def task_create_view(request):
             task = _apply_task_additional_assignee_settings(task, preserve_existing_rotation=False)
             task = _sync_task_recurring_template(task)
             TaskAuditService.record_created(task, actor=request.user)
+            if form.cleared_recurring_window:
+                messages.info(request, "This repeats, so only one scheduled time block is supported right now - the extra day(s)/time(s) were skipped and the task was created without a fixed time of day.")
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
@@ -1617,6 +1619,8 @@ def task_edit_view(request, pk):
             TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
             if reassigned_from and updated_task.assigned_to:
                 messages.info(request, f"{reassigned_from} {form.reassignment_reason}, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
+            if form.cleared_recurring_window:
+                messages.info(request, "This repeats, so only one scheduled time block is supported right now - the extra day(s)/time(s) were skipped and the task was saved without a fixed time of day.")
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:

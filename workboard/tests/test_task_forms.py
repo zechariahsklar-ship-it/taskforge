@@ -675,11 +675,13 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(task.recurring_template.day_of_week, Weekday.FRIDAY)
         self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 27))
 
-    def test_daily_recurring_task_rejects_a_scheduled_window_spanning_more_than_one_day(self):
+    def test_daily_recurring_task_with_multi_day_window_is_created_without_a_fixed_window(self):
         # Picking a window on two different days for a repeating task (e.g.
         # trying to represent "every day" by selecting Monday and Tuesday,
-        # rather than relying on the Daily cadence) isn't supported yet and
-        # should be rejected with guidance rather than silently failing.
+        # rather than relying on the Daily cadence) isn't supported as a
+        # per-day schedule - rather than blocking creation, TaskForge drops
+        # the ambiguous window and creates the task anyway, relying on the
+        # recurrence cadence and each cycle's normal assignment instead.
         response = self.client.post(
             reverse("task-create"),
             {
@@ -701,11 +703,18 @@ class TaskScheduledWindowTests(TestCase):
                 "recurrence_day_of_week": "",
                 "recurrence_day_of_month": "",
             },
+            follow=True,
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(Task.objects.filter(title="Daily standup").exists())
-        self.assertContains(response, "A repeating task can only use one scheduled time block")
+        task = Task.objects.get(title="Daily standup")
+        self.assertTrue(task.recurring_task)
+        self.assertIsNone(task.scheduled_date)
+        self.assertIsNone(task.scheduled_start_time)
+        self.assertIsNone(task.scheduled_end_time)
+        self.assertIsNotNone(task.recurring_template)
+        self.assertIsNone(task.recurring_template.scheduled_start_time)
+        self.assertContains(response, "only one scheduled time block is supported")
 
     def test_daily_recurring_task_accepts_a_single_day_scheduled_window(self):
         response = self.client.post(

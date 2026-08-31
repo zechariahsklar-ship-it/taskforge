@@ -839,6 +839,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.reassign_unavailable_assignee = False
         self.reassigned_assignee_label = ""
         self.reassignment_reason = ""
+        self.cleared_recurring_window = False
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["team"].queryset = _team_queryset()
@@ -1211,12 +1212,14 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.add_error("estimated_minutes", "The time estimate is longer than the total allowed task windows.")
 
         if cleaned_data.get("recurring_task") and len(task_schedule_blocks) > 1:
-            self.add_error(
-                "scheduled_window_segments",
-                "A repeating task can only use one scheduled time block, on one day - that block is reused for "
-                "every repeat. Clear the extra day(s)/time(s) here, or clear this section entirely if the "
-                "repeat doesn't need a fixed time of day.",
-            )
+            # A repeating task only supports one fixed time-of-day window
+            # right now (reused for every generated cycle). Rather than
+            # blocking creation over an unsupported combination, drop the
+            # window entirely - each cycle still gets assigned from the
+            # team's normal day-to-day availability, the same as any other
+            # repeating task with no fixed time set.
+            cleaned_data = self._clear_task_schedule_fields(cleaned_data)
+            self.cleared_recurring_window = True
 
         return cleaned_data
 
