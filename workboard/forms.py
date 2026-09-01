@@ -1,3 +1,5 @@
+"""Django forms for tasks, recurring templates, worker scheduling, and admin CRUD."""
+
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 import json
@@ -409,6 +411,37 @@ def _configure_rotation_count_field(field, *, count: int, help_text: str) -> Non
     field.widget.attrs.update({"min": "0", "step": "1"})
 
 
+def _validate_team_scoped_tags_and_teammates(form, cleaned_data, *, team) -> list[int]:
+    """Shared by TaskForm and RecurringTaskTemplateForm's clean(): flags
+    required worker tags and additional assignees that aren't on the
+    resolved team, and additional assignees missing a required tag.
+    Returns the required tag ids so the caller can run the same
+    eligibility check against its own primary-assignee field."""
+    required_worker_tags = cleaned_data.get("required_worker_tags")
+    required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
+    if required_worker_tags:
+        mismatched_tags = [tag.name for tag in required_worker_tags if team and tag.team_id != team.id]
+        if mismatched_tags:
+            form.add_error("required_worker_tags", "Not on that team: " + ", ".join(mismatched_tags))
+
+    additional_assignees = cleaned_data.get("additional_assignees")
+    if additional_assignees:
+        mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
+        if mismatched_teammates:
+            form.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
+        missing_tag_labels = []
+        for teammate in additional_assignees:
+            if teammate.role not in UserRole.worker_roles():
+                continue
+            missing_tags = TaskAssignmentService.missing_required_tag_names(teammate, required_tag_ids=required_tag_ids)
+            if missing_tags:
+                missing_tag_labels.append(f"{teammate.display_label} ({', '.join(missing_tags)})")
+        if missing_tag_labels:
+            form.add_error("additional_assignees", "Missing required worker tags: " + ", ".join(missing_tag_labels))
+
+    return required_tag_ids
+
+
 class StudentWorkerProfileForm(StyledFormMixin, forms.ModelForm):
     team = forms.ModelChoiceField(queryset=Team.objects.none(), required=False)
 
@@ -602,6 +635,31 @@ class BaseScheduleBlocksForm(StyledFormMixin, forms.Form):
             return [(start_value, end_value)]
         return []
 
+    def _clean_single_day_schedule(self, cleaned_data, *, prefix, label):
+        """Shared by the single-day schedule forms (a temporary override or
+        a schedule-adjustment request): parses that one day's segments and
+        mirrors the result into both the flat *_start/_end/_hours fields
+        and the schedule_blocks/schedule_windows cleaned_data used by the
+        views that save it."""
+        blocks = self._parse_segments(cleaned_data.get(f"{prefix}_segments"), field_name=f"{prefix}_segments", label=label)
+        if blocks is None:
+            return cleaned_data
+        start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
+        cleaned_data[f"{prefix}_segments"] = _serialize_schedule_segments(blocks)
+        cleaned_data[f"{prefix}_start"] = start_value
+        cleaned_data[f"{prefix}_end"] = end_value
+        cleaned_data[f"{prefix}_hours"] = hours_value
+        cleaned_data["schedule_blocks"] = [
+            {"start_time": start_block, "end_time": end_block}
+            for start_block, end_block in blocks
+        ]
+        cleaned_data["schedule_windows"] = {
+            "start_time": start_value,
+            "end_time": end_value,
+            "hours_available": hours_value,
+        }
+        return cleaned_data
+
 
 class WeeklyAvailabilityForm(BaseScheduleBlocksForm):
     schedule_day_config = DAY_FIELD_CONFIG
@@ -705,24 +763,7 @@ class StudentScheduleOverrideForm(BaseScheduleBlocksForm, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        blocks = self._parse_segments(cleaned_data.get("override_segments"), field_name="override_segments", label="Temporary schedule")
-        if blocks is None:
-            return cleaned_data
-        start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
-        cleaned_data["override_segments"] = _serialize_schedule_segments(blocks)
-        cleaned_data["override_start"] = start_value
-        cleaned_data["override_end"] = end_value
-        cleaned_data["override_hours"] = hours_value
-        cleaned_data["schedule_blocks"] = [
-            {"start_time": start_block, "end_time": end_block}
-            for start_block, end_block in blocks
-        ]
-        cleaned_data["schedule_windows"] = {
-            "start_time": start_value,
-            "end_time": end_value,
-            "hours_available": hours_value,
-        }
-        return cleaned_data
+        return self._clean_single_day_schedule(cleaned_data, prefix="override", label="Temporary schedule")
 
 
 class BlackoutDateForm(StyledFormMixin, forms.ModelForm):
@@ -772,24 +813,7 @@ class ScheduleAdjustmentRequestForm(BaseScheduleBlocksForm, forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        blocks = self._parse_segments(cleaned_data.get("request_segments"), field_name="request_segments", label="Requested schedule")
-        if blocks is None:
-            return cleaned_data
-        start_value, end_value, hours_value = _aggregate_schedule_blocks(blocks)
-        cleaned_data["request_segments"] = _serialize_schedule_segments(blocks)
-        cleaned_data["request_start"] = start_value
-        cleaned_data["request_end"] = end_value
-        cleaned_data["request_hours"] = hours_value
-        cleaned_data["schedule_blocks"] = [
-            {"start_time": start_block, "end_time": end_block}
-            for start_block, end_block in blocks
-        ]
-        cleaned_data["schedule_windows"] = {
-            "start_time": start_value,
-            "end_time": end_value,
-            "hours_available": hours_value,
-        }
-        return cleaned_data
+        return self._clean_single_day_schedule(cleaned_data, prefix="request", label="Requested schedule")
 
 
 class TaskIntakeForm(StyledFormMixin, forms.Form):
@@ -1155,6 +1179,10 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         return cleaned_data
 
     def _clean_schedule_window(self, cleaned_data):
+        """Reduce the weekly picker's per-day segments into the task's
+        scheduled_date/window fields (single day) or its TaskScheduleBlock
+        rows (multiple days), reconciling due_date and the time estimate
+        against whatever was actually selected."""
         due_date = cleaned_data.get("due_date")
         scheduled_date = cleaned_data.get("scheduled_date")
         week_value = due_date or scheduled_date or cleaned_data.get("scheduled_week_of") or self._task_window_week_start or timezone.localdate()
@@ -1318,12 +1346,7 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
             self.add_error("team", "Choose which team owns this task.")
         assigned_to = cleaned_data.get("assigned_to")
         additional_assignees = cleaned_data.get("additional_assignees")
-        required_worker_tags = cleaned_data.get("required_worker_tags")
-        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
-        if required_worker_tags:
-            mismatched_tags = [tag.name for tag in required_worker_tags if team and tag.team_id != team.id]
-            if mismatched_tags:
-                self.add_error("required_worker_tags", "Not on that team: " + ", ".join(mismatched_tags))
+        required_tag_ids = _validate_team_scoped_tags_and_teammates(self, cleaned_data, team=team)
         if assigned_to and team and assigned_to.team_id != team.id:
             self.add_error("assigned_to", f"{assigned_to.display_label} is not on that team.")
         if assigned_to and assigned_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_matches_required_tags(
@@ -1343,19 +1366,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
                 assigned_to = None
             else:
                 self.add_error("assigned_to", f"{assigned_to.display_label} is missing these required worker tags: {', '.join(missing_tags)}.")
-        if additional_assignees:
-            mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
-            if mismatched_teammates:
-                self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
-            missing_tag_labels = []
-            for teammate in additional_assignees:
-                if teammate.role not in UserRole.worker_roles():
-                    continue
-                missing_tags = TaskAssignmentService.missing_required_tag_names(teammate, required_tag_ids=required_tag_ids)
-                if missing_tags:
-                    missing_tag_labels.append(f"{teammate.display_label} ({', '.join(missing_tags)})")
-            if missing_tag_labels:
-                self.add_error("additional_assignees", "Missing required worker tags: " + ", ".join(missing_tag_labels))
         if assigned_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assigned_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
@@ -1818,6 +1828,9 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         return None
 
     def clean(self):
+        """Mirrors TaskForm.clean()'s team/assignee/tag validation for the
+        template's own fields, plus the recurring-specific cadence and
+        scheduled-window checks."""
         cleaned_data = super().clean()
         allow_teamless_scope = bool(
             (self.actor and not self.actor.is_admin and not self.actor.team_id)
@@ -1830,12 +1843,7 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             self.add_error("team", "Choose which team owns this recurring task.")
         assign_to = cleaned_data.get("assign_to")
         additional_assignees = cleaned_data.get("additional_assignees")
-        required_worker_tags = cleaned_data.get("required_worker_tags")
-        required_tag_ids = list(required_worker_tags.values_list("pk", flat=True)) if required_worker_tags is not None else []
-        if required_worker_tags:
-            mismatched_tags = [tag.name for tag in required_worker_tags if team and tag.team_id != team.id]
-            if mismatched_tags:
-                self.add_error("required_worker_tags", "Not on that team: " + ", ".join(mismatched_tags))
+        required_tag_ids = _validate_team_scoped_tags_and_teammates(self, cleaned_data, team=team)
         if assign_to and team and assign_to.team_id != team.id:
             self.add_error("assign_to", f"{assign_to.display_label} is not on that team.")
         if assign_to and assign_to.role in UserRole.worker_roles() and not TaskAssignmentService.user_matches_required_tags(
@@ -1844,19 +1852,6 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         ):
             missing_tags = TaskAssignmentService.missing_required_tag_names(assign_to, required_tag_ids=required_tag_ids)
             self.add_error("assign_to", f"{assign_to.display_label} is missing these required worker tags: {', '.join(missing_tags)}.")
-        if additional_assignees:
-            mismatched_teammates = [user.display_label for user in additional_assignees if team and user.team_id != team.id]
-            if mismatched_teammates:
-                self.add_error("additional_assignees", "Not on that team: " + ", ".join(mismatched_teammates))
-            missing_tag_labels = []
-            for teammate in additional_assignees:
-                if teammate.role not in UserRole.worker_roles():
-                    continue
-                missing_tags = TaskAssignmentService.missing_required_tag_names(teammate, required_tag_ids=required_tag_ids)
-                if missing_tags:
-                    missing_tag_labels.append(f"{teammate.display_label} ({', '.join(missing_tags)})")
-            if missing_tag_labels:
-                self.add_error("additional_assignees", "Missing required worker tags: " + ", ".join(missing_tag_labels))
         if assign_to and additional_assignees:
             cleaned_data["additional_assignees"] = additional_assignees.exclude(pk=assign_to.pk)
         cleaned_data["rotating_additional_assignee_count"] = cleaned_data.get("rotating_additional_assignee_count") or 0
@@ -1915,13 +1910,5 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
                         self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
 
         return cleaned_data
-
-
-
-
-
-
-
-
 
 

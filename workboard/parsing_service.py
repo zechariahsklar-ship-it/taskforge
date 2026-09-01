@@ -1,3 +1,5 @@
+"""Parses raw task-request text and worker availability messages into structured data, optionally via an LLM."""
+
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 import json

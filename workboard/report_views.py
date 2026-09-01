@@ -1,3 +1,5 @@
+"""Views for the reports page: workload and completion summaries, and CSV export."""
+
 import csv
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta

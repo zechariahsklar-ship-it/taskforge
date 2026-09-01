@@ -1,3 +1,5 @@
+"""Views for managing workers, supervisors, teams, worker tags, and schedules."""
+
 from datetime import date
 
 from django.contrib import messages

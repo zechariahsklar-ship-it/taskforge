@@ -1,3 +1,5 @@
+"""Views for listing, editing, and running recurring task templates."""
+
 from django.contrib import messages
 from django.db.models import Count, F
 from django.http import HttpResponseBadRequest, JsonResponse

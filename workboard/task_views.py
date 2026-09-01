@@ -1,3 +1,5 @@
+"""Views for the task board, task CRUD, checklists, and recurring-task page-load sweep."""
+
 from datetime import date, datetime, time, timedelta
 import json
 from functools import wraps
@@ -123,43 +125,30 @@ def _process_ready_recurring_tasks(request) -> None:
     RecurringTaskService.run_templates_ready_today()
 
 
-def supervisor_required(view_func):
-    @wraps(view_func)
-    def wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect("login")
-        if not request.user.is_supervisor:
-            return HttpResponseForbidden("Supervisor access required.")
-        _process_ready_recurring_tasks(request)
-        return view_func(request, *args, **kwargs)
+def _permission_required(predicate, *, error_message: str):
+    """Builds a view decorator that requires login plus `predicate(user)`,
+    running the recurring-task sweep on every successful request. Backs
+    supervisor_required/admin_required/task_editor_required below, which
+    only differ in which permission they check."""
 
-    return wrapped
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                return redirect("login")
+            if not predicate(request.user):
+                return HttpResponseForbidden(error_message)
+            _process_ready_recurring_tasks(request)
+            return view_func(request, *args, **kwargs)
 
+        return wrapped
 
-def admin_required(view_func):
-    @wraps(view_func)
-    def wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect("login")
-        if not request.user.is_admin:
-            return HttpResponseForbidden("Admin access required.")
-        _process_ready_recurring_tasks(request)
-        return view_func(request, *args, **kwargs)
-
-    return wrapped
+    return decorator
 
 
-def task_editor_required(view_func):
-    @wraps(view_func)
-    def wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect("login")
-        if not request.user.can_edit_tasks:
-            return HttpResponseForbidden("Task editor access required.")
-        _process_ready_recurring_tasks(request)
-        return view_func(request, *args, **kwargs)
-
-    return wrapped
+supervisor_required = _permission_required(lambda user: user.is_supervisor, error_message="Supervisor access required.")
+admin_required = _permission_required(lambda user: user.is_admin, error_message="Admin access required.")
+task_editor_required = _permission_required(lambda user: user.can_edit_tasks, error_message="Task editor access required.")
 
 
 def app_login_required(view_func):
@@ -1359,6 +1348,12 @@ def task_detail_view(request, pk):
     handoff_form = TaskHandoffForm()
 
     if request.method == "POST":
+        # This page posts back to itself for every action a task detail
+        # view supports: status, handoff, note, attachment, checklist (add
+        # one item), checklist_save (bulk edit/reorder/delete from the
+        # supervisor editor), checklist_toggle and checklist_reorder (the
+        # lightweight AJAX endpoints the checklist UI uses for a single
+        # check or drag-reorder).
         action = request.POST.get("action")
         if action == "status":
             before_snapshot = TaskAuditService.snapshot(task)
@@ -1641,8 +1636,4 @@ def task_delete_view(request, pk):
     _close_status_gap(_board_bucket_status(previous_status), exclude_pk=0, team=task.team)
     messages.success(request, f'Task "{delete_title}" deleted.')
     return redirect("board")
-
-
-
-
 

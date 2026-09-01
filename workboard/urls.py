@@ -47,4 +47,3 @@ urlpatterns = [
     path("workers/supervisors/<int:pk>/edit/", views.supervisor_edit_view, name="supervisor-edit"),
     path("workers/supervisors/<int:pk>/delete/", views.supervisor_delete_view, name="supervisor-delete"),
 ]
-

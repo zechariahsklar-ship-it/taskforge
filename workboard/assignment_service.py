@@ -1,3 +1,5 @@
+"""Suggests which worker(s) should be assigned a task, based on capacity, availability, and required tags."""
+
 from datetime import date, datetime, timedelta
 
 from django.db.models import Count, Max, Q, Sum

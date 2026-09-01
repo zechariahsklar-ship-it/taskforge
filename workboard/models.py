@@ -789,4 +789,3 @@ class TaskIntakeDraftAttachment(models.Model):
 
     def __str__(self):
         return self.original_name
-
