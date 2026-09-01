@@ -359,18 +359,17 @@ class BlackoutDateTests(TestCase):
         # calendar-day Saturday 2026-03-21.
         BlackoutDate.objects.create(team=self.team, date=date(2026, 3, 20), label="Break")
 
-        created_count, reopened_count = RecurringTaskService.run_templates_ready_today(
+        created_count = RecurringTaskService.run_templates_ready_today(
             now=timezone.make_aware(datetime(2026, 3, 20, 12, 0))
         )
 
         self.assertEqual(created_count, 0)
-        self.assertEqual(reopened_count, 0)
         self.assertFalse(Task.objects.filter(recurring_template=self.template).exists())
         self.template.refresh_from_db()
         self.assertEqual(self.template.next_run_date, date(2026, 3, 23))
 
     def test_recurring_generation_creates_task_on_non_blackout_date(self):
-        created_count, _ = RecurringTaskService.run_templates_ready_today(
+        created_count = RecurringTaskService.run_templates_ready_today(
             now=timezone.make_aware(datetime(2026, 3, 20, 12, 0))
         )
 

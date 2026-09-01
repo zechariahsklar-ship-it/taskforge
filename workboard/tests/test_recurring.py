@@ -627,7 +627,7 @@ class DailyWeekdayRecurrenceTests(TestCase):
         # the first ungenerated cycle) all the way to Thu 8/27 - five
         # weekdays are overdue (8/20, 8/21, 8/24, 8/25, 8/26, 8/27, skipping
         # the 8/22-8/23 weekend). Only 8/27's task should be created.
-        created, _ = self._run_generator_at(timezone.make_aware(datetime(2026, 8, 27, 9, 0)))
+        created = self._run_generator_at(timezone.make_aware(datetime(2026, 8, 27, 9, 0)))
 
         self.assertEqual(created, 1)
         self.template.refresh_from_db()

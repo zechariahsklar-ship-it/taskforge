@@ -1,3 +1,5 @@
+"""Generates Task instances from RecurringTaskTemplate definitions on their configured cadence."""
+
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -26,6 +28,8 @@ def _subtract_weekdays(start_date: date, count: int) -> date:
 
 @dataclass
 class RecurringRunPreview:
+    """What the next generated task would look like, without creating it."""
+
     run_date: date
     assignee: User | None
     assignee_summary: str
@@ -35,6 +39,9 @@ class RecurringRunPreview:
 
 
 class RecurringTaskService:
+    """Decides when a template's next cycle is due and generates the Task for it."""
+
+
     @staticmethod
     def _release_deadline(run_date: date) -> datetime:
         return timezone.make_aware(datetime.combine(run_date, RECURRING_RELEASE_TIME))
@@ -256,7 +263,7 @@ class RecurringTaskService:
         )
 
     @staticmethod
-    def run_template(template: RecurringTaskTemplate, *, run_date: date | None = None):
+    def run_template(template: RecurringTaskTemplate, *, run_date: date | None = None) -> Task:
         run_date = run_date or template.next_run_date
         last_generated_task = RecurringTaskService._last_generated_task(template)
         preview = RecurringTaskService.preview_next_run(template, run_date=run_date)
@@ -283,12 +290,12 @@ class RecurringTaskService:
             required_tag_ids=required_tag_ids,
         )
         RecurringTaskService._copy_checklist_items(last_generated_task, task)
-        TaskAuditService.record_recurring_reopened(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
+        TaskAuditService.record_recurring_run(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
 
         template.next_run_date = run_date
         template.advance_next_run_date()
         template.save(update_fields=['next_run_date', 'updated_at'])
-        return task, 'created'
+        return task
 
     @staticmethod
     def _is_blackout_date(team, run_date: date) -> bool:
@@ -357,10 +364,9 @@ class RecurringTaskService:
             template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
-    def run_templates_ready_today(*, now=None) -> tuple[int, int]:
+    def run_templates_ready_today(*, now=None) -> int:
         local_now = timezone.localtime(now or timezone.now())
         created_count = 0
-        reopened_count = 0
         templates = (
             RecurringTaskTemplate.objects.filter(active=True)
             .prefetch_related('additional_assignees', 'generated_tasks', 'required_worker_tags')
@@ -374,23 +380,6 @@ class RecurringTaskService:
                 if RecurringTaskService._is_blackout_date(template.team, template.next_run_date):
                     RecurringTaskService._skip_blacked_out_run(template, template.next_run_date)
                     continue
-                _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
-                if outcome == 'created':
-                    created_count += 1
-                elif outcome == 'reopened':
-                    reopened_count += 1
-        return created_count, reopened_count
-
-    @staticmethod
-    def run_due_templates(*, run_date: date | None = None) -> tuple[int, int]:
-        run_date = run_date or timezone.localdate()
-        created_count = 0
-        reopened_count = 0
-        templates = RecurringTaskTemplate.objects.filter(active=True, next_run_date__lte=run_date).prefetch_related('additional_assignees', 'generated_tasks', 'required_worker_tags')
-        for template in templates:
-            _, outcome = RecurringTaskService.run_template(template, run_date=template.next_run_date)
-            if outcome == 'created':
+                RecurringTaskService.run_template(template, run_date=template.next_run_date)
                 created_count += 1
-            elif outcome == 'reopened':
-                reopened_count += 1
-        return created_count, reopened_count
+        return created_count

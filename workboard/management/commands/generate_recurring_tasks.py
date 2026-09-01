@@ -11,5 +11,5 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         now = timezone.now()
         _backfill_orphan_recurring_tasks()
-        created_count, reopened_count = RecurringTaskService.run_templates_ready_today(now=now)
-        self.stdout.write(self.style.SUCCESS(f"Generated {created_count} recurring task(s) and reopened {reopened_count} recurring task(s)."))
+        created_count = RecurringTaskService.run_templates_ready_today(now=now)
+        self.stdout.write(self.style.SUCCESS(f"Generated {created_count} recurring task(s)."))

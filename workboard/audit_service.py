@@ -99,7 +99,7 @@ class TaskAuditService:
         return TaskAuditService.record_event(task, actor=actor, action=TaskAuditAction.HANDED_OFF, summary=summary)
 
     @staticmethod
-    def record_recurring_reopened(task, *, summary):
+    def record_recurring_run(task, *, summary):
         return TaskAuditService.record_event(task, actor=None, action=TaskAuditAction.RECURRING_RUN, summary=summary)
 
     @staticmethod

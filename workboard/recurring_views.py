@@ -76,11 +76,7 @@ def recurring_template_run_now_view(request, pk):
         messages.warning(request, "This recurring task already has an open run on the board. Finish it before running it again.")
         return redirect("recurring-detail", pk=template.pk)
 
-    task, outcome = RecurringTaskService.run_template(template, run_date=run_date)
-    if outcome == "skipped":
-        messages.warning(request, "This recurring task already has an open run on the board. Finish it before running it again.")
-        return redirect("recurring-detail", pk=template.pk)
-
+    task = RecurringTaskService.run_template(template, run_date=run_date)
     messages.success(request, f"Recurring task queued for {run_date.isoformat()}.")
     return redirect("task-detail", pk=task.pk)
 

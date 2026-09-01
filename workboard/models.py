@@ -1,3 +1,5 @@
+"""Database schema for TaskForge: teams, users, tasks, recurring templates, and worker scheduling."""
+
 from calendar import monthrange
 from datetime import date, timedelta
 
@@ -43,6 +45,14 @@ def _ordered_block_summary(block_manager):
     if not blocks:
         return "Not scheduled"
     return ", ".join(_format_time_window(block.start_time, block.end_time) for block in blocks)
+
+
+def _tag_labels(tag_manager):
+    # Reads via .all() rather than .order_by()/.values_list() so this can
+    # reuse a prefetch_related("required_worker_tags") cache instead of
+    # issuing a fresh query per row when listing many tasks/templates.
+    labels = [tag.name for tag in tag_manager.all()]
+    return ", ".join(labels) if labels else "None"
 
 
 class UserRole(models.TextChoices):
@@ -476,12 +486,7 @@ class RecurringTaskTemplate(models.Model):
 
     @property
     def required_worker_tag_labels(self):
-        # WorkerTag's default ordering is already name/pk, and using .all()
-        # here (instead of .order_by()/.values_list()) lets this reuse a
-        # prefetch_related("required_worker_tags") cache instead of issuing
-        # a fresh query per row when listing many of these at once.
-        labels = [tag.name for tag in self.required_worker_tags.all()]
-        return ", ".join(labels) if labels else "None"
+        return _tag_labels(self.required_worker_tags)
 
     def advance_next_run_date(self):
         if self.recurrence_pattern == RecurrencePattern.DAILY:
@@ -489,6 +494,9 @@ class RecurringTaskTemplate(models.Model):
         elif self.recurrence_pattern == RecurrencePattern.WEEKLY:
             self.next_run_date = self.next_run_date + timedelta(weeks=self.recurrence_interval)
         else:
+            # Step forward by whole months and clamp the day to whatever
+            # that target month actually has (e.g. day_of_month=31 lands on
+            # Feb 28/29 instead of raising).
             month_index = self.next_run_date.month - 1 + self.recurrence_interval
             year = self.next_run_date.year + month_index // 12
             month = month_index % 12 + 1
@@ -657,12 +665,7 @@ class Task(models.Model):
 
     @property
     def required_worker_tag_labels(self):
-        # WorkerTag's default ordering is already name/pk, and using .all()
-        # here (instead of .order_by()/.values_list()) lets this reuse a
-        # prefetch_related("required_worker_tags") cache instead of issuing
-        # a fresh query per row when listing many of these at once.
-        labels = [tag.name for tag in self.required_worker_tags.all()]
-        return ", ".join(labels) if labels else "None"
+        return _tag_labels(self.required_worker_tags)
 
 
 class TaskScheduleBlock(models.Model):
