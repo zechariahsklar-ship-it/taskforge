@@ -6,7 +6,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .audit_service import TaskAuditService
-from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole
+from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole, _add_weekdays
 from .services import TaskAssignmentService
 
 RECURRING_RELEASE_TIME = time(18, 0)
@@ -301,16 +301,38 @@ class RecurringTaskService:
         template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
-    def _normalize_daily_next_run_date(template: RecurringTaskTemplate) -> None:
+    def _normalize_daily_next_run_date(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
+        changed = False
+
         # A daily template's next_run_date should never sit on a weekend -
         # nudge legacy/manually-edited data (from before weekday-only daily
         # recurrence, or a hand-picked Saturday/Sunday) onto the next
         # weekday instead of silently never becoming ready.
-        if template.next_run_date.weekday() < 5:
-            return
         while template.next_run_date.weekday() >= 5:
             template.next_run_date += timedelta(days=1)
-        template.save(update_fields=['next_run_date', 'updated_at'])
+            changed = True
+
+        # Once a template's own start_date has arrived, a healthy daily
+        # cycle is never more than one interval's worth of weekdays ahead
+        # of today - anything further is stale drift (a cadence changed
+        # from weekly/monthly without recomputing this date, or leftover
+        # from before daily releases were fixed to not cascade). Pull it
+        # back to today instead of leaving it stuck silently skipping days
+        # until that far-off date finally arrives.
+        #
+        # Skip this for a template whose start_date is still in the future
+        # - its very first cycle is legitimately seeded from the creating
+        # task's own due date (which can land several days out, e.g. a
+        # priority-based fallback), and that isn't drift to correct.
+        today = local_now.date()
+        if template.start_date <= today:
+            furthest_healthy_date = _add_weekdays(today, template.recurrence_interval or 1)
+            if template.next_run_date > furthest_healthy_date:
+                template.next_run_date = today
+                changed = True
+
+        if changed:
+            template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
     def _skip_stale_daily_cycles(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
@@ -346,7 +368,7 @@ class RecurringTaskService:
         )
         for template in templates:
             if template.recurrence_pattern == 'daily':
-                RecurringTaskService._normalize_daily_next_run_date(template)
+                RecurringTaskService._normalize_daily_next_run_date(template, local_now=local_now)
                 RecurringTaskService._skip_stale_daily_cycles(template, local_now=local_now)
             while RecurringTaskService._run_is_ready(template, local_now=local_now):
                 if RecurringTaskService._is_blackout_date(template.team, template.next_run_date):

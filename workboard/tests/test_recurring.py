@@ -653,3 +653,39 @@ class DailyWeekdayRecurrenceTests(TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0].due_date, date(2026, 8, 24))  # Monday
         self.assertEqual(self.template.next_run_date, date(2026, 8, 25))
+
+    def test_next_run_date_stuck_too_far_in_future_is_pulled_back_to_today(self):
+        # A daily template whose next_run_date somehow drifted far into the
+        # future (stale data from before daily releases were fixed to not
+        # cascade, or a cadence switched from weekly/monthly to daily
+        # without recomputing this date) should self-heal by pulling back
+        # to today and generating immediately, instead of silently sitting
+        # idle until that far-off date finally arrives.
+        self.template.start_date = date(2026, 8, 1)  # already well underway
+        self.template.next_run_date = date(2026, 9, 7)  # Monday, over a week out
+        self.template.save(update_fields=["start_date", "next_run_date", "updated_at"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 9, 1, 9, 0)))  # Tuesday
+
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].due_date, date(2026, 9, 1))
+        self.assertEqual(self.template.next_run_date, date(2026, 9, 2))
+
+    def test_future_start_date_is_not_treated_as_stale_drift(self):
+        # A brand-new daily template's first cycle is legitimately seeded
+        # from the creating task's own due date, which can land several
+        # weekdays out (e.g. a priority-based fallback due date) - that's
+        # not drift, and shouldn't get yanked back to today just because
+        # it's further out than one interval's worth of weekdays.
+        self.template.start_date = date(2026, 8, 24)  # Monday, still ahead
+        self.template.next_run_date = date(2026, 8, 27)  # Thursday, still ahead
+        self.template.save(update_fields=["start_date", "next_run_date", "updated_at"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 8, 20, 9, 0)))  # Thursday, before start_date
+
+        self.template.refresh_from_db()
+        tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk))
+        self.assertEqual(len(tasks), 0)
+        self.assertEqual(self.template.next_run_date, date(2026, 8, 27))
