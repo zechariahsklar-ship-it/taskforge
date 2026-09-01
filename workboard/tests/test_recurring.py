@@ -286,6 +286,25 @@ class RecurringTaskListViewTests(TestCase):
         self.assertIsNone(self.first_template.scheduled_start_time)
         self.assertIsNone(self.first_template.scheduled_end_time)
 
+    def test_recurring_edit_keeps_window_panel_open_and_selection_intact_on_unrelated_error(self):
+        # self.worker has no StudentAvailability set up, so picking a window
+        # while they're still the assignee trips the (pre-existing, separate)
+        # "not scheduled during the next recurring work window" validation.
+        # That's a field error on assign_to, not a window-related error - the
+        # panel used to only reopen for window-specific errors, so it would
+        # snap back closed and the just-picked block looked like it had
+        # silently vanished even though it was still in the submitted data.
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.first_template.pk]),
+            self._recurring_edit_payload(self.first_template, task_window_day_0_segments='[["09:00", "10:00"]]'),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "is not scheduled during the next recurring work window")
+        self.assertContains(response, 'aria-expanded="true"', html=False)
+        self.assertNotContains(response, 'data-task-window-fields style="display: none;"', html=False)
+        self.assertEqual(response.context["form"]["task_window_day_0_segments"].value(), '[["09:00", "10:00"]]')
+
     def test_recurring_move_view_reorders_templates(self):
         response = self.client.post(
             reverse("recurring-move", args=[self.second_template.pk]),

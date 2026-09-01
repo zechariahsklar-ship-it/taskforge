@@ -89,13 +89,13 @@
                 type="button"
                 class="collapsible-panel-toggle"
                 data-task-window-toggle
-                aria-expanded="{% if form.non_field_errors %}true{% else %}false{% endif %}"
+                aria-expanded="{% if form.non_field_errors or form.has_window_selection %}true{% else %}false{% endif %}"
                 aria-controls="recurring-window-panel"
             >
                 <span class="collapsible-panel-title">Scheduled work window</span>
                 <span class="collapsible-panel-arrow" aria-hidden="true"></span>
             </button>
-            <div id="recurring-window-panel" class="stack" data-task-window-fields{% if not form.non_field_errors %} style="display: none;"{% endif %}>
+            <div id="recurring-window-panel" class="stack" data-task-window-fields{% if not form.non_field_errors and not form.has_window_selection %} style="display: none;"{% endif %}>
                 <p class="meta">Optional. If you set this, each generated task will use the same time block on its run date. Pick a block on just one day here - the day doesn't matter, only the time.</p>
                 {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=form picker_id="recurring-window-picker" hide_picker_header=True show_day_actions=False clear_all_label="Clear scheduled window" %}
             </div>

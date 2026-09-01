@@ -275,6 +275,19 @@ def _schedule_block_within_workday(start_value: time, end_value: time) -> bool:
     return start_value >= SCHEDULE_DAY_START_TIME and end_value <= SCHEDULE_DAY_END_TIME
 
 
+def _form_has_window_selection(form):
+    """True if any of the weekly picker's day segment fields currently carry
+    a value (bound submission or initial pre-fill). Used to keep the
+    collapsible "Scheduled work window" panel open across a failed save
+    caused by some other field's error - otherwise the panel snaps back
+    closed and a just-picked block looks like it silently vanished, even
+    though the submitted value is still intact underneath."""
+    for prefix, _, _ in TASK_WINDOW_DAY_CONFIG:
+        if form[f"{prefix}_segments"].value():
+            return True
+    return False
+
+
 def _parse_schedule_segments_payload(raw_value):
     """Parse one day's JSON [[start,end],...] segments payload from the weekly
     schedule picker. Returns (blocks, error_message) - blocks is a list of
@@ -969,6 +982,10 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
     @property
     def non_rendered_hidden_field_names(self):
         return TASK_WINDOW_HIDDEN_FIELD_NAMES
+
+    @property
+    def has_window_selection(self):
+        return _form_has_window_selection(self)
 
     @property
     def non_rendered_field_names(self):
@@ -1740,6 +1757,10 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
     @property
     def non_rendered_hidden_field_names(self):
         return RECURRING_TEMPLATE_WINDOW_HIDDEN_FIELD_NAMES
+
+    @property
+    def has_window_selection(self):
+        return _form_has_window_selection(self)
 
     def day_rows(self):
         return [
