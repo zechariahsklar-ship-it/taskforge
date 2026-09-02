@@ -1,3 +1,5 @@
+// Opens/closes the hamburger nav on mobile: toggled by its button, closed
+// by an outside click, Escape, or resizing back to desktop width.
 (function () {
     var toggle = document.getElementById('mobile-nav-toggle');
     var nav = document.getElementById('site-nav');

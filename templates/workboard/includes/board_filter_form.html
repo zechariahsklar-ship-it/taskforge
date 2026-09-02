@@ -1,0 +1,42 @@
+{% comment %}
+Shared by board.html and my_tasks.html. Expects filter_form, task_count,
+active_filters, and clear_url_name (the URL name for this page's own
+"Clear" link); pass compact=True for the tighter My Tasks layout.
+filter_form.assigned_to only exists on the board's filter form, so this
+already renders correctly on both pages without a separate flag.
+{% endcomment %}
+<section class="card board-filter-card">
+    <form method="get" class="stack">
+        <div class="board-filter-grid{% if compact %} board-filter-grid-compact{% endif %}">
+            <p>
+                <label for="{{ filter_form.saved_view.id_for_label }}">{{ filter_form.saved_view.label }}</label>
+                {{ filter_form.saved_view }}
+            </p>
+            <p>
+                <label for="{{ filter_form.q.id_for_label }}">{{ filter_form.q.label }}</label>
+                {{ filter_form.q }}
+            </p>
+            <p>
+                <label for="{{ filter_form.priority.id_for_label }}">{{ filter_form.priority.label }}</label>
+                {{ filter_form.priority }}
+            </p>
+            <p>
+                <label for="{{ filter_form.due_scope.id_for_label }}">{{ filter_form.due_scope.label }}</label>
+                {{ filter_form.due_scope }}
+            </p>
+            {% if filter_form.assigned_to %}
+                <p>
+                    <label for="{{ filter_form.assigned_to.id_for_label }}">{{ filter_form.assigned_to.label }}</label>
+                    {{ filter_form.assigned_to }}
+                </p>
+            {% endif %}
+        </div>
+        <div class="inline-form board-filter-actions">
+            <button type="submit">Apply filters</button>
+            <a class="button-link button-link-secondary" href="{% url clear_url_name %}">Clear</a>
+            <p class="meta board-filter-summary">
+                Showing {{ task_count }} task{{ task_count|pluralize }}{% if active_filters %} | {{ active_filters|join:", " }}{% endif %}
+            </p>
+        </div>
+    </form>
+</section>

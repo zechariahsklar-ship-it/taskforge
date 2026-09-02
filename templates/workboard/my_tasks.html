@@ -13,35 +13,7 @@
         <p><strong>Warning:</strong> <a href="{{ due_today_warning.href }}">{{ due_today_warning.label }}</a>.</p>
     </section>
 {% endif %}
-<section class="card board-filter-card">
-    <form method="get" class="stack">
-        <div class="board-filter-grid board-filter-grid-compact">
-            <p>
-                <label for="{{ filter_form.saved_view.id_for_label }}">{{ filter_form.saved_view.label }}</label>
-                {{ filter_form.saved_view }}
-            </p>
-            <p>
-                <label for="{{ filter_form.q.id_for_label }}">{{ filter_form.q.label }}</label>
-                {{ filter_form.q }}
-            </p>
-            <p>
-                <label for="{{ filter_form.priority.id_for_label }}">{{ filter_form.priority.label }}</label>
-                {{ filter_form.priority }}
-            </p>
-            <p>
-                <label for="{{ filter_form.due_scope.id_for_label }}">{{ filter_form.due_scope.label }}</label>
-                {{ filter_form.due_scope }}
-            </p>
-        </div>
-        <div class="inline-form board-filter-actions">
-            <button type="submit">Apply filters</button>
-            <a class="button-link button-link-secondary" href="{% url 'my-tasks' %}">Clear</a>
-            <p class="meta board-filter-summary">
-                Showing {{ task_count }} task{{ task_count|pluralize }}{% if active_filters %} | {{ active_filters|join:", " }}{% endif %}
-            </p>
-        </div>
-    </form>
-</section>
+{% include "workboard/includes/board_filter_form.html" with clear_url_name="my-tasks" compact=True %}
 <section class="my-tasks-groups" data-my-tasks-groups>
     {% for column in grouped_tasks %}
         <section class="task-bucket{% if column.is_overdue_column %} task-bucket-overdue{% endif %}" data-column-status="{{ column.value }}" data-column-droppable="{{ column.droppable|yesno:'true,false' }}">

@@ -1,3 +1,9 @@
+// Drives the drag-select weekly calendar shared by every form that embeds
+// includes/weekly_schedule_picker.html (task creation, recurring task
+// templates, worker availability, schedule overrides/adjustments). Each
+// day's picked blocks are serialized as JSON into a hidden *_segments
+// field; readSegments/setSegments keep that field, the visible cell
+// selection, and the legacy start/end/hours fields all in sync.
 (function () {
     function formatTimeLabel(value) {
         if (!value) {

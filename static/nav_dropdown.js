@@ -1,3 +1,6 @@
+// Drives any [data-nav-dropdown] menu in the nav bar: click its toggle to
+// open, closing any other open dropdown first; outside click/Escape closes
+// whichever is open.
 (function () {
     function closeAll(except) {
         document.querySelectorAll('[data-nav-dropdown].is-open').forEach(function (dropdown) {

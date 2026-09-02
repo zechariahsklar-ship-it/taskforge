@@ -1,3 +1,6 @@
+// Adds a show/hide eye button to every input marked data-password-toggle
+// (set by StyledFormMixin server-side), wrapping it and swapping its type
+// between password and text.
 (function () {
     function iconMarkup(isVisible) {
         if (isVisible) {

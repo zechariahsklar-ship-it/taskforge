@@ -1,14 +1,18 @@
+// Keeps the Create/Edit Task page's weekly picker's day headers and
+// scheduled_date/scheduled_week_of hidden fields in sync as the user picks
+// a block or changes which week they're scheduling into.
 (function () {
     var DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     var MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    // The task window picker only ever offers Monday-Friday (matches
+    // TASK_WINDOW_DAY_CONFIG in forms.py) - a repeating task's window is
+    // resolved to weekday cycles, so there's never a Saturday/Sunday field.
     var TASK_DAY_PREFIXES = [
         "task_window_day_0",
         "task_window_day_1",
         "task_window_day_2",
         "task_window_day_3",
-        "task_window_day_4",
-        "task_window_day_5",
-        "task_window_day_6"
+        "task_window_day_4"
     ];
 
     function parseLocalDate(value) {
