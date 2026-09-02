@@ -187,18 +187,6 @@
         const taskDetailUrl = config.dataset.taskDetailUrl;
         let draggedItem = null;
 
-        function getCookie(name) {
-            const cookies = document.cookie ? document.cookie.split('; ') : [];
-            for (const cookie of cookies) {
-                const parts = cookie.split('=');
-                const key = parts.shift();
-                if (key === name) {
-                    return decodeURIComponent(parts.join('='));
-                }
-            }
-            return '';
-        }
-
         function clearIndicators() {
             list.querySelectorAll('.checklist-item').forEach(function (item) {
                 item.classList.remove('is-dragging', 'is-drop-before');
@@ -326,18 +314,6 @@
         const statusLabel = document.querySelector('[data-task-status-label]');
         const statusMessage = form.parentElement.querySelector('[data-status-message]');
         const select = form.querySelector('select[name="status"]');
-
-        function getCookie(name) {
-            const cookies = document.cookie ? document.cookie.split('; ') : [];
-            for (const cookie of cookies) {
-                const parts = cookie.split('=');
-                const key = parts.shift();
-                if (key === name) {
-                    return decodeURIComponent(parts.join('='));
-                }
-            }
-            return '';
-        }
 
         // Save the status in place instead of a full page POST/redirect, so
         // moving a task between board columns from its detail page feels as

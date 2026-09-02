@@ -66,17 +66,6 @@
         let draggedColumn = null;
         let suppressClick = false;
 
-        function getCookie(name) {
-            const cookies = document.cookie ? document.cookie.split('; ') : [];
-            for (const cookie of cookies) {
-                const [key, ...value] = cookie.split('=');
-                if (key === name) {
-                    return decodeURIComponent(value.join('='));
-                }
-            }
-            return '';
-        }
-
         // Persist each person's preferred column order in this browser only.
         function persistColumnOrder() {
             const order = Array.from(board.querySelectorAll('.board-column')).map((column) => column.dataset.columnStatus);

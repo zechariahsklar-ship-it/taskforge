@@ -55,17 +55,6 @@
         let draggedCard = null;
         let suppressClick = false;
 
-        function getCookie(name) {
-            const cookies = document.cookie ? document.cookie.split('; ') : [];
-            for (const cookie of cookies) {
-                const [key, ...value] = cookie.split('=');
-                if (key === name) {
-                    return decodeURIComponent(value.join('='));
-                }
-            }
-            return '';
-        }
-
         function clearDropIndicators() {
             bucket.classList.remove('is-drop-target', 'has-drop-at-end');
             cardList.querySelectorAll('.recurring-task-card').forEach(function (card) {

@@ -16,6 +16,21 @@
                 document.cookie = "tf_vw=" + window.innerWidth + ";path=/;max-age=86400;SameSite=Lax";
             } catch (error) {}
         }());
+
+        // Shared by every page's inline scripts and the picker JS files for
+        // reading the CSRF token cookie before a JS-driven POST request.
+        // Defined here (a plain, non-deferred script) so it's guaranteed to
+        // exist before any later inline or deferred script runs.
+        function getCookie(name) {
+            var cookies = document.cookie ? document.cookie.split("; ") : [];
+            for (var index = 0; index < cookies.length; index += 1) {
+                var parts = cookies[index].split("=");
+                if (parts.shift() === name) {
+                    return decodeURIComponent(parts.join("="));
+                }
+            }
+            return "";
+        }
     </script>
 </head>
 <body>
@@ -81,5 +96,6 @@
     <script src="{% static 'password_toggle.js' %}?v=20260423a" defer></script>
     <script src="{% static 'nav_dropdown.js' %}?v=20260805a" defer></script>
     <script src="{% static 'mobile_nav_toggle.js' %}?v=20260819a" defer></script>
+    <script src="{% static 'collapsible_panel.js' %}?v=20260902a" defer></script>
 </body>
 </html>

@@ -461,16 +461,7 @@
         });
     }
 
-    function getCookie(name) {
-        var cookies = document.cookie ? document.cookie.split("; ") : [];
-        for (var index = 0; index < cookies.length; index += 1) {
-            var parts = cookies[index].split("=");
-            if (parts[0] === name) {
-                return decodeURIComponent(parts.slice(1).join("="));
-            }
-        }
-        return "";
-    }
+    // getCookie is defined globally in base.html.
 
     function initClassScheduleImport() {
         document.querySelectorAll("[data-class-schedule-import]").forEach(function (container) {

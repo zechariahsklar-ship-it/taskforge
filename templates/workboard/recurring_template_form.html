@@ -165,20 +165,4 @@
         updateRecurringVisibility();
     }());
 </script>
-<script>
-    (function () {
-        const taskWindowToggle = document.querySelector('[data-task-window-toggle]');
-        const taskWindowFields = document.querySelector('[data-task-window-fields]');
-        if (!taskWindowToggle || !taskWindowFields) {
-            return;
-        }
-
-        taskWindowToggle.addEventListener('click', function () {
-            const expanded = taskWindowToggle.getAttribute('aria-expanded') === 'true';
-            taskWindowToggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-            // Hiding the section only changes visibility, so the selected time stays in place.
-            taskWindowFields.style.display = expanded ? 'none' : '';
-        });
-    }());
-</script>
 {% endblock %}

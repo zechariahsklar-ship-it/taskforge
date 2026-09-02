@@ -1,0 +1,45 @@
+{% comment %}
+Shared by worker_list.html for the Student workers and Student
+supervisors tables, which render identically apart from the heading,
+source list, empty-state text, and edit-link label. Expects: heading,
+items, empty_message, edit_link_label, show_team_column.
+{% endcomment %}
+<section class="table-card">
+    <h2>{{ heading }}</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                {% if show_team_column %}<th>Team</th>{% endif %}
+                <th>Email</th>
+                <th>Active</th>
+                <th>Tags</th>
+                <th>Open Tasks</th>
+                <th>Estimated Minutes</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+                <tr>
+                    <td data-label="Name">{{ item.profile.display_name }}</td>
+                    {% if show_team_column %}<td data-label="Team">{{ item.profile.user.team.name|default:"-" }}</td>{% endif %}
+                    <td data-label="Email">{{ item.profile.email }}</td>
+                    <td data-label="Active">{{ item.profile.active_status|yesno:"Yes,No" }}</td>
+                    <td data-label="Tags">{{ item.profile.tag_labels }}</td>
+                    <td data-label="Open Tasks">{{ item.workload.active_tasks|default:0 }}</td>
+                    <td data-label="Estimated Minutes">{{ item.workload.estimated_minutes|default:0 }}</td>
+                    <td data-label="Actions">
+                        <div class="table-action-links">
+                            <a href="{% url 'worker-edit' item.profile.pk %}">{{ edit_link_label }}</a>
+                            <a href="{% url 'worker-schedule' item.profile.pk %}">Edit schedule</a>
+                            <a href="{% url 'worker-password-reset' item.profile.user.pk %}">Reset password</a>
+                        </div>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="{% if show_team_column %}8{% else %}7{% endif %}">{{ empty_message }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>

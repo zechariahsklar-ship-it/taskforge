@@ -166,8 +166,6 @@
 </section>
 <script>
     (function () {
-        const taskWindowToggle = document.querySelector('[data-task-window-toggle]');
-        const taskWindowFields = document.querySelector('[data-task-window-fields]');
         const recurringCheckbox = document.getElementById('{{ form.recurring_task.id_for_label }}');
         const recurrencePattern = document.getElementById('{{ form.recurrence_pattern.id_for_label }}');
         const recurringFields = document.querySelector('[data-recurring-fields]');
@@ -179,15 +177,6 @@
 
         function setSectionVisible(section, visible) {
             section.style.display = visible ? '' : 'none';
-        }
-
-        if (taskWindowToggle && taskWindowFields) {
-            taskWindowToggle.addEventListener('click', function () {
-                const expanded = taskWindowToggle.getAttribute('aria-expanded') === 'true';
-                taskWindowToggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-                // Hiding the section only changes visibility, so the selected times stay in place.
-                setSectionVisible(taskWindowFields, expanded === false);
-            });
         }
 
         if (!recurringCheckbox || !recurrencePattern || !recurringFields || !recurringOptions || !weeklyField || !monthlyField) {
