@@ -485,7 +485,11 @@ class RecurringTaskGenerationRotationTests(TestCase):
         self.assertEqual(generated.rotating_additional_assignee_count, 1)
         self.assertEqual(list(generated.rotating_additional_assignees.values_list("id", flat=True)), [self.sam.id])
 
-    def test_generate_recurring_tasks_backfills_every_release_window_that_has_passed(self):
+    def test_generate_recurring_tasks_only_creates_the_most_recent_missed_cycle(self):
+        # Several weekly windows have gone by unchecked - only the latest
+        # missed cycle should generate a task, the same backlog-skipping
+        # behavior daily templates already have, instead of flooding the
+        # board with one task per missed week.
         self.sam_profile.active_status = False
         self.sam_profile.save(update_fields=["active_status"])
 
@@ -493,10 +497,7 @@ class RecurringTaskGenerationRotationTests(TestCase):
 
         self.template.refresh_from_db()
         due_dates = list(Task.objects.filter(recurring_template=self.template).order_by("due_date", "pk").values_list("due_date", flat=True))
-        self.assertEqual(
-            due_dates,
-            [date(2026, 3, 13), date(2026, 3, 20), date(2026, 3, 27), date(2026, 4, 3)],
-        )
+        self.assertEqual(due_dates, [date(2026, 3, 13), date(2026, 4, 3)])
         self.assertEqual(self.template.next_run_date, date(2026, 4, 10))
 
     def test_generate_recurring_tasks_backfills_legacy_recurring_tasks(self):

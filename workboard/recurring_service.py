@@ -342,12 +342,12 @@ class RecurringTaskService:
             template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
-    def _skip_stale_daily_cycles(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
-        # A daily template only needs its most recently due cycle generated.
-        # If nobody checked the site for several days, don't flood the board
-        # with one task per day that was missed - fast-forward next_run_date
-        # past every stale cycle except the last ready one, without creating
-        # tasks for the ones being skipped.
+    def _skip_stale_cycles(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
+        # A template only needs its most recently due cycle generated. If
+        # nobody checked the site for a while, don't flood the board with
+        # one task per missed daily/weekly/monthly cycle - fast-forward
+        # next_run_date past every stale cycle except the last ready one,
+        # without creating tasks for the ones being skipped.
         preview = RecurringTaskTemplate(
             recurrence_pattern=template.recurrence_pattern,
             recurrence_interval=template.recurrence_interval,
@@ -375,7 +375,7 @@ class RecurringTaskService:
         for template in templates:
             if template.recurrence_pattern == 'daily':
                 RecurringTaskService._normalize_daily_next_run_date(template, local_now=local_now)
-                RecurringTaskService._skip_stale_daily_cycles(template, local_now=local_now)
+            RecurringTaskService._skip_stale_cycles(template, local_now=local_now)
             while RecurringTaskService._run_is_ready(template, local_now=local_now):
                 if RecurringTaskService._is_blackout_date(template.team, template.next_run_date):
                     RecurringTaskService._skip_blacked_out_run(template, template.next_run_date)
