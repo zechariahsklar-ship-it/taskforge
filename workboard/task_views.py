@@ -1259,7 +1259,15 @@ def task_intake_review_view(request, pk):
     )
 
 
-def _create_duplicate_tasks_for_students(form, students, actor):
+def _create_checklist_items_from_titles(task, titles):
+    """Bulk-create checklist items for a just-created task from the raw
+    list of titles the create-task page's "New checklist item" rows post."""
+    items = [TaskChecklistItem(task=task, title=title.strip(), position=position) for position, title in enumerate(titles) if title.strip()]
+    if items:
+        TaskChecklistItem.objects.bulk_create(items)
+
+
+def _create_duplicate_tasks_for_students(form, students, actor, checklist_titles=()):
     template_task = form.save(commit=False)
     required_tags = list(form.cleaned_data.get("required_worker_tags") or [])
     schedule_blocks = form.cleaned_data.get("task_schedule_blocks", [])
@@ -1295,6 +1303,7 @@ def _create_duplicate_tasks_for_students(form, students, actor):
                 end_time=block["end_time"],
                 position=block["position"],
             )
+        _create_checklist_items_from_titles(clone, checklist_titles)
         TaskAuditService.record_created(clone, actor=actor)
         created_tasks.append(clone)
     return created_tasks
@@ -1305,9 +1314,10 @@ def task_create_view(request):
     if request.method == "POST":
         form = TaskManualForm(request.POST, actor=request.user)
         if form.is_valid():
+            new_checklist_titles = request.POST.getlist("new_checklist_titles")
             duplicate_students = list(form.cleaned_data.get("duplicate_to_students") or [])
             if duplicate_students:
-                created_tasks = _create_duplicate_tasks_for_students(form, duplicate_students, request.user)
+                created_tasks = _create_duplicate_tasks_for_students(form, duplicate_students, request.user, checklist_titles=new_checklist_titles)
                 messages.success(
                     request,
                     f"Created {len(created_tasks)} separate task "
@@ -1342,6 +1352,7 @@ def task_create_view(request):
             task.save()
             form.save_task_schedule(task)
             form.save_m2m()
+            _create_checklist_items_from_titles(task, new_checklist_titles)
             task = _apply_task_additional_assignee_settings(task, preserve_existing_rotation=False)
             task = _sync_task_recurring_template(task)
             TaskAuditService.record_created(task, actor=request.user)

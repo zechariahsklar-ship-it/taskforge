@@ -192,12 +192,49 @@ class TaskDetailChecklistTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(self.task.checklist_items.filter(title="Added from edit page").exists())
 
-    def test_create_task_page_has_no_checklist_section(self):
+    def test_create_task_page_has_no_edit_mode_checklist_widget(self):
         self.client.force_login(self.supervisor)
         response = self.client.get(reverse("task-create"))
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Checklist")
+        self.assertContains(response, 'name="new_checklist_titles"', html=False)
+        # The edit-mode widget posts checklist actions to task-detail as its
+        # own AJAX-backed form - a brand-new task has no such URL yet, so
+        # only the plain client-side add-row list should be present.
         self.assertNotContains(response, "checklist-add-form", html=False)
+
+    def test_create_task_page_can_add_checklist_items(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Task with a fresh checklist",
+                "raw_message": "",
+                "description": "",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "30",
+                "assigned_to": "",
+                "requested_by": "",
+                "recurring_task": "",
+                "recurrence_pattern": "",
+                "recurrence_interval": "",
+                "recurrence_day_of_week": "",
+                "recurrence_day_of_month": "",
+                "new_checklist_titles": ["Pack boxes", "", "Label boxes"],
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Task with a fresh checklist")
+        titles = list(task.checklist_items.order_by("position").values_list("title", flat=True))
+        self.assertEqual(titles, ["Pack boxes", "Label boxes"])
 
     def test_task_detail_shows_actual_due_date_not_raw_due_text(self):
         self.client.force_login(self.student)

@@ -161,6 +161,25 @@
                 </div>
             </div>
         </section>
+
+        {% if not form.instance.pk %}
+            <section class="review-field">
+                <div class="task-section-header">
+                    <h2>Checklist</h2>
+                </div>
+                <p class="meta">Optional. Add checklist items now, or come back and add them after the task is created.</p>
+                <div class="stack" data-new-checklist-list>
+                    <div class="new-checklist-row">
+                        <input type="text" name="new_checklist_titles" class="form-control checklist-title-input" placeholder="Checklist item">
+                        <button type="button" class="button-link checklist-delete" data-remove-checklist-row>Remove</button>
+                    </div>
+                </div>
+                <div>
+                    <button type="button" data-add-checklist-row>Add item</button>
+                </div>
+            </section>
+        {% endif %}
+
         <button type="submit">Save task</button>
     </form>
 </section>

@@ -1170,6 +1170,16 @@ tr:hover td {
     min-width: 320px;
 }
 
+.new-checklist-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.new-checklist-row + .new-checklist-row {
+    margin-top: 0.75rem;
+}
+
 .attachment-list {
     margin: 0;
     padding-left: 1.25rem;
