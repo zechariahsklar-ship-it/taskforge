@@ -77,7 +77,7 @@ BOARD_BUCKET_DISPLAY_ORDER = {definition["value"]: index for index, definition i
 # vertically and never needs horizontal scrolling.
 BOARD_MIN_VIEWPORT_WIDTH = 1100
 
-COMPLETED_TASK_BOARD_RETENTION_DAYS = 7
+COMPLETED_TASK_BOARD_RETENTION_DAYS = 2
 
 WEEKLY_SCHEDULE_FIELDS = [
     ("monday", Weekday.MONDAY),

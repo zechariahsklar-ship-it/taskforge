@@ -175,7 +175,7 @@ class BoardFilterAndAlertTests(TestCase):
         self.assertNotContains(response, '>Schedule</label>', html=False)
         self.assertNotContains(response, '>Status</label>', html=False)
 
-    def test_board_hides_done_tasks_older_than_seven_days(self):
+    def test_board_hides_done_tasks_older_than_two_days(self):
         Task.objects.create(
             title="Old completed board task",
             description="Should move to completed tasks",
@@ -191,7 +191,7 @@ class BoardFilterAndAlertTests(TestCase):
             priority=Priority.MEDIUM,
             status=TaskStatus.DONE,
             assigned_to=self.worker_one,
-            completed_at=timezone.make_aware(datetime(2026, 3, 18, 9, 0)),
+            completed_at=timezone.make_aware(datetime(2026, 3, 19, 9, 0)),
             board_order=2,
         )
 
@@ -290,7 +290,7 @@ class MyTasksViewOrderingTests(TestCase):
         self.assertNotContains(response, '>Schedule</label>', html=False)
         self.assertNotContains(response, '>Status</label>', html=False)
 
-    def test_my_tasks_hides_done_tasks_older_than_seven_days(self):
+    def test_my_tasks_hides_done_tasks_older_than_two_days(self):
         Task.objects.create(
             title="Old completed my task",
             description="Should move off My Tasks",
@@ -306,7 +306,7 @@ class MyTasksViewOrderingTests(TestCase):
             priority=Priority.MEDIUM,
             status=TaskStatus.DONE,
             assigned_to=self.student,
-            completed_at=timezone.make_aware(datetime(2026, 3, 18, 8, 0)),
+            completed_at=timezone.make_aware(datetime(2026, 3, 19, 8, 0)),
             board_order=2,
         )
         self.client.force_login(self.student)
@@ -574,7 +574,7 @@ class CompletedTasksViewTests(TestCase):
         self.assertEqual([task.title for task in response.context["tasks"]], ["Mail run follow-up", "Desk closeout", "Archive inbox cleanup"])
         self.assertNotContains(response, "Beta closed task")
         self.assertContains(response, "Completed tasks")
-        self.assertContains(response, "Completed in last 7 days")
+        self.assertContains(response, "Completed in last 2 days")
         self.assertIn("student", response.context["filter_form"].fields)
 
     def test_student_supervisor_can_filter_team_completed_tasks_by_student(self):
