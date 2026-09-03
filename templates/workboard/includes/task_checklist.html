@@ -1,0 +1,55 @@
+{% comment %}
+Shared by task_detail.html and task_form.html (edit mode only - a
+brand-new task has no checklist items yet). Expects: task,
+can_manage_checklist_items, checklist_form. Both forms below always post
+to the task-detail URL, since that view owns all checklist actions -
+this lets the same widget work unchanged no matter which page it's on.
+{% endcomment %}
+<div id="checklist-config" data-task-detail-url="{% url 'task-detail' task.pk %}"></div>
+<section class="task-detail-section">
+    <div class="task-section-header">
+        <h2>Checklist</h2>
+        <span class="meta">Drag to reorder</span>
+    </div>
+    <form method="post" action="{% url 'task-detail' task.pk %}" class="stack">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="checklist_save">
+        <div class="checklist-list" data-checklist-list>
+            {% for item in task.checklist_items.all %}
+                <div class="checklist-item {% if item.is_completed %}is-completed{% endif %}" data-checklist-id="{{ item.pk }}">
+                    <input
+                        type="checkbox"
+                        class="checklist-complete"
+                        {% if item.is_completed %}checked{% endif %}
+                        {% if can_manage_checklist_items %}name="checklist_item_completed" value="{{ item.pk }}"{% else %}data-checklist-toggle value="{{ item.pk }}"{% endif %}
+                        aria-label="Mark checklist item complete"
+                    >
+                    <button type="button" class="checklist-grip" draggable="true" aria-label="Reorder checklist item">|||</button>
+                    <input type="hidden" name="checklist_item_ids" value="{{ item.pk }}">
+                    {% if can_manage_checklist_items %}
+                        <input type="text" name="checklist_item_titles" value="{{ item.title }}" class="form-control checklist-title-input">
+                        <button type="submit" name="delete_item_id" value="{{ item.pk }}" class="button-link checklist-delete">Delete</button>
+                    {% else %}
+                        <input type="hidden" name="checklist_item_titles" value="{{ item.title }}">
+                        <span class="checklist-title-text">{{ item.title }}</span>
+                    {% endif %}
+                </div>
+            {% empty %}
+                <p class="empty-state" data-checklist-empty>No checklist items yet.</p>
+            {% endfor %}
+        </div>
+        {% if can_manage_checklist_items and task.checklist_items.all %}
+            <div>
+                <button type="submit">Save checklist changes</button>
+            </div>
+        {% endif %}
+    </form>
+    {% if can_manage_checklist_items %}
+        <form method="post" action="{% url 'task-detail' task.pk %}" class="inline-form checklist-add-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="checklist">
+            {{ checklist_form.title }}
+            <button type="submit">Add item</button>
+        </form>
+    {% endif %}
+</section>

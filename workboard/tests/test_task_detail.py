@@ -171,6 +171,34 @@ class TaskDetailChecklistTests(TestCase):
         self.assertContains(response, 'placeholder="Add checklist item"')
         self.assertNotContains(response, '<label for="id_title">Title:</label>', html=False)
 
+    def test_edit_task_page_shows_checklist_and_can_add_an_item(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("task-edit", args=[self.task.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Checklist")
+        self.assertContains(response, "First item")
+        # Both checklist forms on the edit page post to task-detail, which
+        # owns all checklist actions - the same widget works unchanged
+        # regardless of which page it's embedded on.
+        self.assertContains(response, f'action="{reverse("task-detail", args=[self.task.pk])}"')
+
+        response = self.client.post(
+            reverse("task-detail", args=[self.task.pk]),
+            {"action": "checklist", "title": "Added from edit page"},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.task.checklist_items.filter(title="Added from edit page").exists())
+
+    def test_create_task_page_has_no_checklist_section(self):
+        self.client.force_login(self.supervisor)
+        response = self.client.get(reverse("task-create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "checklist-add-form", html=False)
+
     def test_task_detail_shows_actual_due_date_not_raw_due_text(self):
         self.client.force_login(self.student)
         response = self.client.get(reverse("task-detail", args=[self.task.pk]))

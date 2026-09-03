@@ -1638,7 +1638,7 @@ def task_edit_view(request, pk):
             return redirect("task-detail", pk=updated_task.pk)
     else:
         form = TaskManualForm(instance=task, actor=request.user)
-    return render(request, "workboard/task_form.html", {"form": form, "page_title": "Edit task"})
+    return render(request, "workboard/task_form.html", {"form": form, "page_title": "Edit task", "checklist_form": TaskChecklistItemForm()})
 
 
 @supervisor_required

@@ -164,6 +164,11 @@
         <button type="submit">Save task</button>
     </form>
 </section>
+{% if form.instance.pk %}
+    <section class="card">
+        {% include "workboard/includes/task_checklist.html" with task=form.instance can_manage_checklist_items=request.user.is_supervisor %}
+    </section>
+{% endif %}
 <script>
     (function () {
         const recurringCheckbox = document.getElementById('{{ form.recurring_task.id_for_label }}');
