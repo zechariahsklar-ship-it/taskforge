@@ -426,12 +426,14 @@ def _weekly_override_summary_map(schedule_overrides) -> dict[str, list[dict[str,
 def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
     if profile.user.role == UserRole.STUDENT_SUPERVISOR:
         return {
-            "page_title": f"Edit student supervisor: {profile.display_name}",
+            "page_title": f"Edit student manager: {profile.display_name}",
             "schedule_title": f"Edit schedule: {profile.display_name}",
-            "role_label": "student supervisor",
-            "remove_label": "Remove student supervisor",
-            "remove_confirm": "Remove this student supervisor? Assigned tasks will be reassigned to you.",
-            "success_label": "Student supervisor updated.",
+            "role_label": "student manager",
+            "remove_label": "Remove student manager",
+            "remove_confirm": "Remove this student manager? Assigned tasks will be reassigned to you.",
+            "success_label": "Student manager updated.",
+            "role_toggle_label": "Demote to student worker",
+            "role_toggle_confirm": f"Demote {profile.display_name} to a student worker? They will lose access to create and edit tasks.",
         }
     return {
         "page_title": f"Edit worker: {profile.display_name}",
@@ -440,7 +442,15 @@ def _worker_role_page_context(profile: StudentWorkerProfile) -> dict:
         "remove_label": "Remove student",
         "remove_confirm": "Remove this student? Assigned tasks will be reassigned to you.",
         "success_label": "Worker updated.",
+        "role_toggle_label": "Promote to student manager",
+        "role_toggle_confirm": f"Promote {profile.display_name} to a student manager? They will be able to create and edit tasks for the team.",
     }
+
+
+def _toggle_student_worker_role(profile: StudentWorkerProfile) -> None:
+    user = profile.user
+    user.role = UserRole.STUDENT_WORKER if user.role == UserRole.STUDENT_SUPERVISOR else UserRole.STUDENT_SUPERVISOR
+    user.save(update_fields=["role"])
 
 
 def _current_worker_profile_for_request(request):
@@ -638,6 +648,12 @@ def schedule_adjustment_request_list_view(request):
 @supervisor_required
 def worker_edit_view(request, pk):
     profile = get_object_or_404(_scoped_worker_profiles(request.user), pk=pk)
+
+    if request.method == "POST" and request.POST.get("action") == "toggle_role":
+        _toggle_student_worker_role(profile)
+        messages.success(request, f"{profile.display_name} is now a {profile.user.get_role_display()}.")
+        return redirect("worker-edit", pk=profile.pk)
+
     context_labels = _worker_role_page_context(profile)
     worker_form = StudentWorkerProfileForm(request.POST or None, instance=profile, actor=request.user)
 
@@ -779,10 +795,10 @@ def student_supervisor_create_view(request):
     return _create_worker_profile_account(
         request,
         role=UserRole.STUDENT_SUPERVISOR,
-        page_title="Add student supervisor",
-        submit_label="Create student supervisor",
-        success_message="Student supervisor created.",
-        worker_type_label="student supervisor",
+        page_title="Add student manager",
+        submit_label="Create student manager",
+        success_message="Student manager created.",
+        worker_type_label="student manager",
     )
 
 

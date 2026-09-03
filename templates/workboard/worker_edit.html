@@ -27,6 +27,15 @@
         {{ worker_form.as_p }}
         <button type="submit">Save changes</button>
     </form>
+    <div class="review-field">
+        <h2>Role</h2>
+        <p class="meta">Student managers can create and edit tasks for the team, in addition to everything a student worker can do.</p>
+        <form method="post" onsubmit="return window.confirm('{{ role_toggle_confirm }}');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="toggle_role">
+            <button type="submit" class="button-link button-link-secondary">{{ role_toggle_label }}</button>
+        </form>
+    </div>
     <div class="task-delete-form">
         <h2>{{ remove_label }}</h2>
         <p class="meta">Use this only when this person should be removed from the app. Any assigned tasks will be reassigned to you.</p>

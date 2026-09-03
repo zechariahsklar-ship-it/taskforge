@@ -59,14 +59,14 @@ class PeopleManagementTests(TestCase):
         self.assertContains(response, "Worker tags")
         self.assertContains(response, self.worker_tag.name)
         self.assertContains(response, "Front Desk")
-        self.assertContains(response, "Student supervisors")
+        self.assertContains(response, "Student managers")
         self.assertContains(response, reverse("worker-edit", args=[self.profile.pk]))
         self.assertContains(response, reverse("worker-schedule", args=[self.profile.pk]))
         self.assertContains(response, reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
         self.assertContains(response, reverse("worker-schedule", args=[self.student_supervisor_profile.pk]))
         self.assertContains(response, reverse("supervisor-edit", args=[self.other_supervisor.pk]))
         self.assertContains(response, "Edit worker")
-        self.assertContains(response, "Edit student supervisor")
+        self.assertContains(response, "Edit student manager")
         self.assertContains(response, "Edit schedule")
         self.assertNotContains(response, "Remove student")
         self.assertNotContains(response, "Remove supervisor")
@@ -100,6 +100,30 @@ class PeopleManagementTests(TestCase):
         self.assertFalse(self.profile.active_status)
         self.assertEqual(self.profile.skill_notes, "Prefers morning tasks")
         self.assertEqual(list(self.profile.tags.values_list("pk", flat=True)), [self.worker_tag.pk])
+
+    def test_worker_edit_page_can_promote_a_student_worker_to_student_manager(self):
+        response = self.client.post(
+            reverse("worker-edit", args=[self.profile.pk]),
+            {"action": "toggle_role"},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.role, UserRole.STUDENT_SUPERVISOR)
+        self.assertContains(response, "is now a Student Manager")
+
+    def test_worker_edit_page_can_demote_a_student_manager_to_student_worker(self):
+        response = self.client.post(
+            reverse("worker-edit", args=[self.student_supervisor_profile.pk]),
+            {"action": "toggle_role"},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.student_supervisor.refresh_from_db()
+        self.assertEqual(self.student_supervisor.role, UserRole.STUDENT_WORKER)
+        self.assertContains(response, "is now a Student Worker")
 
     def test_edit_pages_hide_optional_email_help_text(self):
         worker_response = self.client.get(reverse("worker-edit", args=[self.profile.pk]))
@@ -337,7 +361,7 @@ class PeopleManagementTests(TestCase):
         student_supervisor_response = self.client.get(reverse("worker-edit", args=[self.student_supervisor_profile.pk]))
         supervisor_response = self.client.get(reverse("supervisor-edit", args=[self.other_supervisor.pk]))
 
-        self.assertContains(student_supervisor_response, "Remove student supervisor")
+        self.assertContains(student_supervisor_response, "Remove student manager")
         self.assertContains(supervisor_response, "Remove supervisor")
 
     def test_creating_student_uses_first_and_last_name_for_display_name_and_saves_weekly_hours(self):

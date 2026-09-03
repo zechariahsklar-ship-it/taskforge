@@ -11,7 +11,7 @@
         {% endif %}
         <a class="button-link" href="{% url 'worker-tag-create' %}">Add worker tag</a>
         <a class="button-link" href="{% url 'worker-create' %}">Add student</a>
-        <a class="button-link" href="{% url 'student-supervisor-create' %}">Add student supervisor</a>
+        <a class="button-link" href="{% url 'student-supervisor-create' %}">Add student manager</a>
         <a class="button-link" href="{% url 'supervisor-create' %}">Add supervisor</a>
     </div>
 </section>
@@ -76,7 +76,7 @@
     </table>
 </section>
 {% include "workboard/includes/worker_table.html" with heading="Student workers" items=students empty_message="No student workers yet." edit_link_label="Edit worker" show_team_column=show_team_column %}
-{% include "workboard/includes/worker_table.html" with heading="Student supervisors" items=student_supervisors empty_message="No student supervisors yet." edit_link_label="Edit student supervisor" show_team_column=show_team_column %}
+{% include "workboard/includes/worker_table.html" with heading="Student managers" items=student_supervisors empty_message="No student managers yet." edit_link_label="Edit student manager" show_team_column=show_team_column %}
 <section class="table-card">
     <h2>Supervisors</h2>
     <table>

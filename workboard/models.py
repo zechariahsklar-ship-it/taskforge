@@ -57,7 +57,7 @@ def _tag_labels(tag_manager):
 
 class UserRole(models.TextChoices):
     SUPERVISOR = "supervisor", "Supervisor"
-    STUDENT_SUPERVISOR = "student_supervisor", "Student Supervisor"
+    STUDENT_SUPERVISOR = "student_supervisor", "Student Manager"
     STUDENT_WORKER = "student_worker", "Student Worker"
 
     @classmethod

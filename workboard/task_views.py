@@ -1138,7 +1138,7 @@ def completed_tasks_view(request):
     )
 
 
-@supervisor_required
+@task_editor_required
 def task_intake_view(request):
     if request.method == "POST":
         form = TaskIntakeForm(request.POST, request.FILES)
@@ -1168,7 +1168,7 @@ def task_intake_view(request):
     return render(request, "workboard/task_intake.html", {"form": form})
 
 
-@supervisor_required
+@task_editor_required
 def task_intake_review_view(request, pk):
     draft = get_object_or_404(TaskIntakeDraft.objects.prefetch_related("attachments"), pk=pk, created_by=request.user)
     initial = draft.parsed_payload or {}
@@ -1300,7 +1300,7 @@ def _create_duplicate_tasks_for_students(form, students, actor):
     return created_tasks
 
 
-@supervisor_required
+@task_editor_required
 def task_create_view(request):
     if request.method == "POST":
         form = TaskManualForm(request.POST, actor=request.user)

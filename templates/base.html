@@ -56,16 +56,18 @@
                     <a href="{% url 'self-schedule' %}">My Schedule</a>
                     <a href="{% url 'schedule-adjustment-request' %}">Schedule Adjustment</a>
                 {% endif %}
-                {% if request.user.is_supervisor %}
+                {% if request.user.is_supervisor or request.user.is_student_supervisor %}
                     <div class="nav-dropdown" data-nav-dropdown>
                         <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">Manage</button>
                         <div class="nav-dropdown-menu">
                             <a href="{% url 'task-intake' %}">Intake</a>
                             <a href="{% url 'task-create' %}">New Task</a>
-                            <a href="{% url 'recurring-list' %}">Recurring</a>
-                            <a href="{% url 'worker-list' %}">Workers</a>
-                            <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
-                            <a href="{% url 'reports' %}">Reports</a>
+                            {% if request.user.is_supervisor %}
+                                <a href="{% url 'recurring-list' %}">Recurring</a>
+                                <a href="{% url 'worker-list' %}">Workers</a>
+                                <a href="{% url 'schedule-adjustment-requests' %}">Schedule Requests</a>
+                                <a href="{% url 'reports' %}">Reports</a>
+                            {% endif %}
                         </div>
                     </div>
                 {% endif %}

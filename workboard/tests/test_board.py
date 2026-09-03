@@ -843,10 +843,10 @@ class StudentSupervisorPermissionsTests(TestCase):
         edit_response = self.client.get(reverse("task-edit", args=[self.task.pk]))
         self.assertEqual(edit_response.status_code, 200)
 
-    def test_student_supervisor_cannot_create_tasks(self):
+    def test_student_supervisor_can_create_tasks(self):
         self.client.force_login(self.student_supervisor)
         response = self.client.get(reverse("task-create"))
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
 
     def test_student_supervisor_can_move_other_workers_task_on_board(self):
         self.client.force_login(self.student_supervisor)

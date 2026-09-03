@@ -45,6 +45,36 @@ class SupervisorRoutePermissionTests(TestCase):
         response = self.client.post(reverse("recurring-run-now", args=[self.template.pk]))
         self.assertEqual(response.status_code, 403)
 
+    def test_worker_list_requires_full_supervisor_role(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("worker-list"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_student_manager_can_create_and_intake_tasks(self):
+        self.client.force_login(self.student_supervisor)
+        create_response = self.client.get(reverse("task-create"))
+        intake_response = self.client.get(reverse("task-intake"))
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(intake_response.status_code, 200)
+
+    def test_student_worker_cannot_create_or_intake_tasks(self):
+        self.client.force_login(self.student_worker)
+        create_response = self.client.get(reverse("task-create"))
+        intake_response = self.client.get(reverse("task-intake"))
+        self.assertEqual(create_response.status_code, 403)
+        self.assertEqual(intake_response.status_code, 403)
+
+    def test_nav_shows_task_creation_but_not_supervisor_only_links_for_student_manager(self):
+        self.client.force_login(self.student_supervisor)
+        response = self.client.get(reverse("board"))
+
+        self.assertContains(response, reverse("task-create"))
+        self.assertContains(response, reverse("task-intake"))
+        self.assertNotContains(response, reverse("worker-list"))
+        self.assertNotContains(response, reverse("recurring-list"))
+        self.assertNotContains(response, reverse("reports"))
+        self.assertNotContains(response, reverse("schedule-adjustment-requests"))
+
 
 class SecurityHardeningTests(TestCase):
     def setUp(self):
