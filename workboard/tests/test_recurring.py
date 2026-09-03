@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from ..forms import _serialize_schedule_segments
-from ..models import Priority, RecurringTaskTemplate, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, User, UserRole, Weekday
+from ..models import Priority, RecurringTaskTemplate, RecurringTemplateScheduleBlock, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, User, UserRole, Weekday
 
 
 class RecurringTaskListViewTests(TestCase):
@@ -241,23 +241,46 @@ class RecurringTaskListViewTests(TestCase):
         self.assertEqual(self.first_template.scheduled_start_time, time(9, 0))
         self.assertEqual(self.first_template.scheduled_end_time, time(10, 0))
 
-    def test_recurring_edit_with_multi_day_window_keeps_only_the_first(self):
+    def test_recurring_edit_saves_a_window_for_each_selected_weekday(self):
+        # Both days' blocks are at least as long as the 45-minute estimate,
+        # to isolate this test from the form's separate per-weekday
+        # estimate validation.
         response = self.client.post(
             reverse("recurring-edit", args=[self.first_template.pk]),
             self._recurring_edit_payload(
                 self.first_template,
                 assign_to="",
                 task_window_day_0_segments='[["09:00", "10:00"]]',
-                task_window_day_1_segments='[["11:00", "11:30"]]',
+                task_window_day_1_segments='[["11:00", "12:00"]]',
             ),
             follow=True,
         )
 
         self.assertEqual(response.status_code, 200)
         self.first_template.refresh_from_db()
+        # The flat fields stay as a legacy single-block summary (the
+        # earliest selected weekday's first block).
         self.assertEqual(self.first_template.scheduled_start_time, time(9, 0))
         self.assertEqual(self.first_template.scheduled_end_time, time(10, 0))
-        self.assertContains(response, "Only one scheduled time block is supported")
+        blocks = list(self.first_template.schedule_blocks.order_by("weekday").values_list("weekday", "start_time", "end_time"))
+        self.assertEqual(blocks, [(0, time(9, 0), time(10, 0)), (1, time(11, 0), time(12, 0))])
+        self.assertNotContains(response, "Only one scheduled time block is supported")
+
+    def test_recurring_edit_saves_multiple_blocks_on_the_same_weekday(self):
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.first_template.pk]),
+            self._recurring_edit_payload(
+                self.first_template,
+                assign_to="",
+                task_window_day_0_segments='[["09:00", "10:00"], ["14:00", "15:00"]]',
+            ),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.first_template.refresh_from_db()
+        blocks = list(self.first_template.schedule_blocks.order_by("position").values_list("weekday", "start_time", "end_time"))
+        self.assertEqual(blocks, [(0, time(9, 0), time(10, 0)), (0, time(14, 0), time(15, 0))])
 
     def test_recurring_edit_page_prefills_existing_window_into_picker(self):
         self.first_template.scheduled_start_time = time(9, 0)
@@ -269,6 +292,17 @@ class RecurringTaskListViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         expected = _serialize_schedule_segments([(time(9, 0), time(10, 0))])
         self.assertEqual(response.context["form"].initial.get("task_window_day_0_segments"), expected)
+
+    def test_recurring_edit_page_prefills_a_window_for_each_existing_weekday(self):
+        RecurringTemplateScheduleBlock.objects.create(template=self.first_template, weekday=0, start_time=time(9, 0), end_time=time(10, 0), position=1)
+        RecurringTemplateScheduleBlock.objects.create(template=self.first_template, weekday=2, start_time=time(13, 0), end_time=time(14, 0), position=1)
+
+        response = self.client.get(reverse("recurring-edit", args=[self.first_template.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["form"].initial.get("task_window_day_0_segments"), _serialize_schedule_segments([(time(9, 0), time(10, 0))]))
+        self.assertEqual(response.context["form"].initial.get("task_window_day_2_segments"), _serialize_schedule_segments([(time(13, 0), time(14, 0))]))
+        self.assertIsNone(response.context["form"].initial.get("task_window_day_1_segments"))
 
     def test_recurring_edit_clears_window_when_no_day_segments_submitted(self):
         self.first_template.scheduled_start_time = time(9, 0)
@@ -294,9 +328,16 @@ class RecurringTaskListViewTests(TestCase):
         # panel used to only reopen for window-specific errors, so it would
         # snap back closed and the just-picked block looked like it had
         # silently vanished even though it was still in the submitted data.
+        # next_run_date is pinned to a Monday - live availability is only
+        # checked against the weekday next_run_date itself falls on, and
+        # day_0 here is Monday.
         response = self.client.post(
             reverse("recurring-edit", args=[self.first_template.pk]),
-            self._recurring_edit_payload(self.first_template, task_window_day_0_segments='[["09:00", "10:00"]]'),
+            self._recurring_edit_payload(
+                self.first_template,
+                next_run_date="2026-03-16",
+                task_window_day_0_segments='[["09:00", "10:00"]]',
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
@@ -690,3 +731,105 @@ class DailyWeekdayRecurrenceTests(TestCase):
         tasks = list(Task.objects.filter(recurring_template=self.template).exclude(pk=self.previous_task.pk))
         self.assertEqual(len(tasks), 0)
         self.assertEqual(self.template.next_run_date, date(2026, 8, 27))
+
+
+class RecurringTemplateWeekdayWindowTests(TestCase):
+    # A recurring template can now have a different scheduled window (with
+    # more than one block) for each weekday, instead of a single flat
+    # window reused for every cycle - each generated cycle uses whichever
+    # weekday's block(s) match its own due date.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="window-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="window-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Window Worker", email="window@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=8 if weekday < 5 else 0)
+        self.template = RecurringTaskTemplate.objects.create(
+            title="Front desk coverage",
+            priority=Priority.MEDIUM,
+            estimated_minutes=60,
+            assign_to=self.worker,
+            requested_by=self.supervisor,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 16),  # Monday
+        )
+        RecurringTemplateScheduleBlock.objects.create(template=self.template, weekday=0, start_time=time(9, 0), end_time=time(11, 0), position=1)
+        RecurringTemplateScheduleBlock.objects.create(template=self.template, weekday=1, start_time=time(13, 0), end_time=time(15, 0), position=1)
+
+    def _run_generator_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            from ..recurring_service import RecurringTaskService
+
+            return RecurringTaskService.run_templates_ready_today(now=when)
+
+    def test_cycle_uses_the_block_matching_its_own_weekday(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+        monday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 16))
+        self.assertEqual(list(monday_task.scheduled_blocks.values_list("start_time", "end_time")), [(time(9, 0), time(11, 0))])
+        self.assertEqual(monday_task.scheduled_start_time, time(9, 0))
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 17, 9, 0)))  # Tuesday
+        tuesday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 17))
+        self.assertEqual(list(tuesday_task.scheduled_blocks.values_list("start_time", "end_time")), [(time(13, 0), time(15, 0))])
+        self.assertEqual(tuesday_task.scheduled_start_time, time(13, 0))
+
+    def test_weekday_with_no_block_generates_without_a_fixed_window(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 17, 9, 0)))  # Tuesday
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 18, 9, 0)))  # Wednesday - no block defined
+
+        wednesday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 18))
+        self.assertFalse(wednesday_task.scheduled_blocks.exists())
+        self.assertIsNone(wednesday_task.scheduled_date)
+        self.assertIsNone(wednesday_task.scheduled_start_time)
+
+    def test_weekday_with_multiple_blocks_all_carry_to_the_generated_task(self):
+        RecurringTemplateScheduleBlock.objects.create(template=self.template, weekday=0, start_time=time(14, 0), end_time=time(15, 0), position=2)
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+
+        monday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 16))
+        blocks = list(monday_task.scheduled_blocks.order_by("position").values_list("start_time", "end_time"))
+        self.assertEqual(blocks, [(time(9, 0), time(11, 0)), (time(14, 0), time(15, 0))])
+        self.assertEqual(monday_task.assigned_to, self.worker)
+
+
+class LegacyFlatWindowRecurringTemplateTests(TestCase):
+    # A template with no per-weekday blocks at all (pre-dating this feature,
+    # or never edited through the new picker) keeps applying its one flat
+    # window to every cycle regardless of weekday.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="legacy-window-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="legacy-window-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Legacy Worker", email="legacy-window@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=8 if weekday < 5 else 0)
+        self.template = RecurringTaskTemplate.objects.create(
+            title="Legacy window task",
+            priority=Priority.MEDIUM,
+            estimated_minutes=30,
+            assign_to=self.worker,
+            requested_by=self.supervisor,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            scheduled_start_time=time(9, 0),
+            scheduled_end_time=time(9, 30),
+            next_run_date=date(2026, 3, 16),  # Monday
+        )
+
+    def _run_generator_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            from ..recurring_service import RecurringTaskService
+
+            return RecurringTaskService.run_templates_ready_today(now=when)
+
+    def test_legacy_flat_window_applies_to_every_weekday(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 17, 9, 0)))  # Tuesday
+
+        for due_date in (date(2026, 3, 16), date(2026, 3, 17)):
+            task = Task.objects.get(title="Legacy window task", due_date=due_date)
+            self.assertEqual(task.scheduled_start_time, time(9, 0))
+            self.assertEqual(task.scheduled_end_time, time(9, 30))
+            self.assertEqual(list(task.scheduled_blocks.values_list("start_time", "end_time")), [(time(9, 0), time(9, 30))])

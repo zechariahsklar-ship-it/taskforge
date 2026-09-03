@@ -471,6 +471,12 @@ class RecurringTaskTemplate(models.Model):
 
     @property
     def scheduled_window_display(self):
+        blocks = list(self.schedule_blocks.order_by("weekday", "position", "start_time", "end_time", "pk"))
+        if blocks:
+            grouped = {}
+            for block in blocks:
+                grouped.setdefault(block.get_weekday_display(), []).append(_format_time_window(block.start_time, block.end_time))
+            return "; ".join(f"{day}: {', '.join(labels)}" for day, labels in grouped.items())
         if not self.scheduled_start_time or not self.scheduled_end_time:
             return ""
         return _format_time_window(self.scheduled_start_time, self.scheduled_end_time)
@@ -502,6 +508,24 @@ class RecurringTaskTemplate(models.Model):
             month = month_index % 12 + 1
             day = self.day_of_month or self.next_run_date.day
             self.next_run_date = date(year, month, min(day, monthrange(year, month)[1]))
+
+
+class RecurringTemplateScheduleBlock(models.Model):
+    template = models.ForeignKey(RecurringTaskTemplate, on_delete=models.CASCADE, related_name="schedule_blocks")
+    weekday = models.PositiveSmallIntegerField(choices=Weekday.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["weekday", "position", "start_time", "end_time", "pk"]
+
+    def __str__(self):
+        return f"{self.template.title} - {self.get_weekday_display()} {self.display_label}"
+
+    @property
+    def display_label(self):
+        return _format_time_window(self.start_time, self.end_time)
 
 
 class Task(models.Model):

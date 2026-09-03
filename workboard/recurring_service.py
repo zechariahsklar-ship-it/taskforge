@@ -8,7 +8,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .audit_service import TaskAuditService
-from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskStatus, User, UserRole, _add_weekdays
+from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskScheduleBlock, TaskStatus, User, UserRole, _add_weekdays
 from .services import TaskAssignmentService
 
 RECURRING_RELEASE_TIME = time(18, 0)
@@ -31,6 +31,7 @@ class RecurringRunPreview:
     """What the next generated task would look like, without creating it."""
 
     run_date: date
+    run_date_blocks: list[tuple[time, time]]
     assignee: User | None
     assignee_summary: str
     fixed_additional_ids: list[int]
@@ -115,10 +116,28 @@ class RecurringTaskService:
         return rotating_ids
 
     @staticmethod
-    def _scheduled_run_date(template: RecurringTaskTemplate, run_date: date) -> date | None:
+    def _template_blocks_by_weekday(template: RecurringTaskTemplate) -> dict[int, list[tuple[time, time]]]:
+        grouped: dict[int, list[tuple[time, time]]] = {}
+        for block in template.schedule_blocks.order_by('weekday', 'position', 'start_time', 'end_time', 'pk'):
+            grouped.setdefault(block.weekday, []).append((block.start_time, block.end_time))
+        return grouped
+
+    @staticmethod
+    def _window_blocks_for_run_date(
+        template: RecurringTaskTemplate,
+        run_date: date,
+        *,
+        blocks_by_weekday: dict[int, list[tuple[time, time]]] | None = None,
+    ) -> list[tuple[time, time]]:
+        if blocks_by_weekday is None:
+            blocks_by_weekday = RecurringTaskService._template_blocks_by_weekday(template)
+        if blocks_by_weekday:
+            return blocks_by_weekday.get(run_date.weekday(), [])
         if template.scheduled_start_time and template.scheduled_end_time:
-            return run_date
-        return None
+            # Legacy single-window template with no per-weekday blocks yet -
+            # the same block applies to every cycle regardless of weekday.
+            return [(template.scheduled_start_time, template.scheduled_end_time)]
+        return []
 
     @staticmethod
     def _next_new_task_order(*, team) -> int:
@@ -154,6 +173,7 @@ class RecurringTaskService:
         template: RecurringTaskTemplate,
         *,
         run_date: date,
+        run_date_blocks: list[tuple[time, time]],
         assignee: User | None,
         rotating_assignees: list[User],
         board_order: int,
@@ -165,9 +185,9 @@ class RecurringTaskService:
         task.priority = template.priority
         task.status = TaskStatus.NEW
         task.due_date = run_date
-        task.scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
-        task.scheduled_start_time = template.scheduled_start_time
-        task.scheduled_end_time = template.scheduled_end_time
+        task.scheduled_date = run_date if run_date_blocks else None
+        task.scheduled_start_time = run_date_blocks[0][0] if run_date_blocks else None
+        task.scheduled_end_time = run_date_blocks[0][1] if run_date_blocks else None
         task.estimated_minutes = template.estimated_minutes
         task.assigned_to = assignee
         task.requested_by = template.requested_by
@@ -203,9 +223,11 @@ class RecurringTaskService:
         last_generated_task = RecurringTaskService._last_generated_task(template)
         current_task_open = bool(last_generated_task and last_generated_task.status != TaskStatus.DONE)
 
+        run_date_blocks = RecurringTaskService._window_blocks_for_run_date(template, run_date)
+        task_window_blocks = {run_date: run_date_blocks} if run_date_blocks else None
+
         assigned_to = template.assign_to
         assignee_summary = ''
-        scheduled_date = RecurringTaskService._scheduled_run_date(template, run_date)
         required_tag_ids = list(template.required_worker_tags.values_list("pk", flat=True))
 
         if assigned_to:
@@ -214,11 +236,12 @@ class RecurringTaskService:
                 required_tag_ids=required_tag_ids,
             ):
                 assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but no longer matches the required worker tags.'
-            elif scheduled_date and not TaskAssignmentService.user_is_available_for_window(
+            elif task_window_blocks and not TaskAssignmentService.worker_can_take_task(
                 assigned_to,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=template.scheduled_start_time,
-                scheduled_end_time=template.scheduled_end_time,
+                due_date=run_date,
+                estimated_minutes=template.estimated_minutes,
+                task_window_blocks=task_window_blocks,
+                required_tag_ids=required_tag_ids,
             ):
                 assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but that scheduled window is currently unavailable.'
             else:
@@ -230,9 +253,7 @@ class RecurringTaskService:
                 estimated_minutes=template.estimated_minutes,
                 fallback_supervisor=template.requested_by,
                 exclude_user_ids=excluded_user_ids,
-                scheduled_date=scheduled_date,
-                scheduled_start_time=template.scheduled_start_time,
-                scheduled_end_time=template.scheduled_end_time,
+                task_window_blocks=task_window_blocks,
                 team=template.team,
                 required_tag_ids=required_tag_ids,
             )
@@ -247,14 +268,13 @@ class RecurringTaskService:
             count=template.rotating_additional_assignee_count,
             exclude_user_ids=list(set(fixed_additional_ids + ([assigned_to.pk] if assigned_to else []))),
             avoid_user_ids=RecurringTaskService._previous_rotating_user_ids(last_generated_task),
-            scheduled_date=scheduled_date,
-            scheduled_start_time=template.scheduled_start_time,
-            scheduled_end_time=template.scheduled_end_time,
+            task_window_blocks=task_window_blocks,
             team=template.team,
             required_tag_ids=required_tag_ids,
         )
         return RecurringRunPreview(
             run_date=run_date,
+            run_date_blocks=run_date_blocks,
             assignee=assigned_to,
             assignee_summary=assignee_summary,
             fixed_additional_ids=fixed_additional_ids,
@@ -277,6 +297,7 @@ class RecurringTaskService:
             Task(),
             template,
             run_date=run_date,
+            run_date_blocks=preview.run_date_blocks,
             assignee=preview.assignee,
             rotating_assignees=rotating_assignees,
             board_order=next_order,
@@ -290,6 +311,14 @@ class RecurringTaskService:
             required_tag_ids=required_tag_ids,
         )
         RecurringTaskService._copy_checklist_items(last_generated_task, task)
+        for position, (start_value, end_value) in enumerate(preview.run_date_blocks, start=1):
+            TaskScheduleBlock.objects.create(
+                task=task,
+                work_date=run_date,
+                start_time=start_value,
+                end_time=end_value,
+                position=position,
+            )
         TaskAuditService.record_recurring_run(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
 
         template.next_run_date = run_date

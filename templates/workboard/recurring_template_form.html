@@ -96,7 +96,7 @@
                 <span class="collapsible-panel-arrow" aria-hidden="true"></span>
             </button>
             <div id="recurring-window-panel" class="stack" data-task-window-fields{% if not form.non_field_errors and not form.has_window_selection %} style="display: none;"{% endif %}>
-                <p class="meta">Optional. If you set this, each generated task will use the same time block on its run date. Pick a block on just one day here - the day doesn't matter, only the time.</p>
+                <p class="meta">Optional. Pick time blocks for whichever weekdays this recurring task should run at a specific time - you can add more than one block per day. Each generated cycle uses that weekday's block(s) automatically; leave a weekday blank to assign that cycle from the team's normal availability instead.</p>
                 {% include "workboard/includes/weekly_schedule_picker.html" with schedule_form=form picker_id="recurring-window-picker" hide_picker_header=True show_day_actions=False clear_all_label="Clear scheduled window" %}
             </div>
         </section>

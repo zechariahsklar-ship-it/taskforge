@@ -927,7 +927,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         self.reassign_unavailable_assignee = False
         self.reassigned_assignee_label = ""
         self.reassignment_reason = ""
-        self.cleared_recurring_window = False
         super().__init__(*args, **kwargs)
         self.fields["status"].choices = [choice for choice in self.fields["status"].choices if choice[0] != TaskStatus.ASSIGNED]
         self.fields["team"].queryset = _team_queryset()
@@ -1265,16 +1264,6 @@ class TaskForm(StyledFormMixin, forms.ModelForm):
         estimated_minutes = cleaned_data.get("estimated_minutes")
         if estimated_minutes and estimated_minutes > total_minutes:
             self.add_error("estimated_minutes", "The time estimate is longer than the total allowed task windows.")
-
-        if cleaned_data.get("recurring_task") and len(task_schedule_blocks) > 1:
-            # A repeating task only supports one fixed time-of-day window
-            # right now (reused for every generated cycle). Rather than
-            # blocking creation over an unsupported combination, drop the
-            # window entirely - each cycle still gets assigned from the
-            # team's normal day-to-day availability, the same as any other
-            # repeating task with no fixed time set.
-            cleaned_data = self._clear_task_schedule_fields(cleaned_data)
-            self.cleared_recurring_window = True
 
         return cleaned_data
 
@@ -1697,7 +1686,6 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
 
     def __init__(self, *args, actor=None, **kwargs):
         self.actor = actor
-        self.dropped_extra_window_days = False
         super().__init__(*args, **kwargs)
         selected_team = self._resolve_selected_team()
         restrict_to_teamless = bool(actor and not actor.is_admin and not actor.team_id and selected_team is None)
@@ -1717,13 +1705,22 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         self.fields["description"].help_text = "Describe the work that should happen each time this task repeats."
         self.fields["estimated_minutes"].label = "Time estimate"
         if not self.is_bound:
-            instance_start = getattr(self.instance, "scheduled_start_time", None)
-            instance_end = getattr(self.instance, "scheduled_end_time", None)
-            if instance_start and instance_end:
-                self.initial.setdefault(
-                    f"{TASK_WINDOW_DAY_CONFIG[0][0]}_segments",
-                    _serialize_schedule_segments([(instance_start, instance_end)]),
-                )
+            existing_blocks = list(self.instance.schedule_blocks.all()) if getattr(self.instance, "pk", None) else []
+            if existing_blocks:
+                blocks_by_weekday = {}
+                for block in existing_blocks:
+                    blocks_by_weekday.setdefault(block.weekday, []).append((block.start_time, block.end_time))
+                for prefix, _, weekday in TASK_WINDOW_DAY_CONFIG:
+                    if int(weekday) in blocks_by_weekday:
+                        self.initial.setdefault(f"{prefix}_segments", _serialize_schedule_segments(blocks_by_weekday[int(weekday)]))
+            else:
+                instance_start = getattr(self.instance, "scheduled_start_time", None)
+                instance_end = getattr(self.instance, "scheduled_end_time", None)
+                if instance_start and instance_end:
+                    self.initial.setdefault(
+                        f"{TASK_WINDOW_DAY_CONFIG[0][0]}_segments",
+                        _serialize_schedule_segments([(instance_start, instance_end)]),
+                    )
         _configure_worker_tags_field(
             self.fields["required_worker_tags"],
             team=selected_team,
@@ -1788,14 +1785,15 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         return WEEKLY_CALENDAR_SLOTS
 
     def _clean_scheduled_window(self, cleaned_data):
-        # A recurring template only stores one flat start/end time (reused
-        # for every generated cycle) - which day the picker's block is on
-        # doesn't matter, only the time does. If more than one day ended up
-        # with a block, keep just the first (by TASK_WINDOW_DAY_CONFIG
-        # order) instead of blocking the save, matching how the Create/Edit
-        # Task form already handles the same ambiguity.
-        selected_blocks = []
-        for prefix, _, _ in TASK_WINDOW_DAY_CONFIG:
+        """Parses every weekday's picker segments into per-weekday time
+        blocks (multiple blocks per day allowed). The full set is stashed
+        on cleaned_data["template_schedule_blocks_by_weekday"] for the view
+        to persist as RecurringTemplateScheduleBlock rows; scheduled_start_
+        time/scheduled_end_time are kept as a legacy single-block summary
+        (the earliest selected weekday's first block) for any code that
+        still reads the flat fields directly."""
+        blocks_by_weekday = {}
+        for prefix, _, weekday in TASK_WINDOW_DAY_CONFIG:
             raw_value = cleaned_data.get(f"{prefix}_segments")
             if not raw_value:
                 continue
@@ -1804,10 +1802,11 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
                 self.add_error(None, error)
                 return cleaned_data
             if blocks:
-                selected_blocks.append(blocks[0])
-        self.dropped_extra_window_days = len(selected_blocks) > 1
-        if selected_blocks:
-            cleaned_data["scheduled_start_time"], cleaned_data["scheduled_end_time"] = selected_blocks[0]
+                blocks_by_weekday[int(weekday)] = blocks
+        cleaned_data["template_schedule_blocks_by_weekday"] = blocks_by_weekday
+        if blocks_by_weekday:
+            first_block = blocks_by_weekday[min(blocks_by_weekday)][0]
+            cleaned_data["scheduled_start_time"], cleaned_data["scheduled_end_time"] = first_block
         else:
             cleaned_data["scheduled_start_time"] = None
             cleaned_data["scheduled_end_time"] = None
@@ -1861,9 +1860,9 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
         day_of_week = cleaned_data.get("day_of_week")
         day_of_month = cleaned_data.get("day_of_month")
         recurrence_interval = cleaned_data.get("recurrence_interval")
-        start_value = cleaned_data.get("scheduled_start_time")
-        end_value = cleaned_data.get("scheduled_end_time")
         next_run_date = cleaned_data.get("next_run_date")
+        estimated_minutes = cleaned_data.get("estimated_minutes")
+        blocks_by_weekday = cleaned_data.get("template_schedule_blocks_by_weekday") or {}
 
         if not recurrence_interval:
             cleaned_data["recurrence_interval"] = 1
@@ -1880,34 +1879,39 @@ class RecurringTaskTemplateForm(StyledFormMixin, forms.ModelForm):
             cleaned_data["day_of_week"] = None
             cleaned_data["day_of_month"] = None
 
-        if start_value or end_value:
-            if not start_value:
-                self.add_error("scheduled_start_time", "Choose a recurring start time.")
-            if not end_value:
-                self.add_error("scheduled_end_time", "Choose a recurring end time.")
-            if start_value and end_value and end_value <= start_value:
-                self.add_error("scheduled_end_time", "End time must be after the start time.")
-            if start_value and end_value:
+        # Availability is only checkable against a concrete calendar date,
+        # so only the weekday next_run_date itself falls on gets a live
+        # availability check here - every other weekday's blocks get
+        # checked for real at that cycle's own generation time instead.
+        unavailable = set()
+        for weekday, blocks in blocks_by_weekday.items():
+            weekday_label = Weekday(weekday).label
+            day_minutes = 0
+            for start_value, end_value in blocks:
+                if end_value <= start_value:
+                    self.add_error(None, f"{weekday_label}: end time must be after the start time.")
+                    continue
                 if not _schedule_block_within_workday(start_value, end_value):
-                    self.add_error("scheduled_end_time", "Recurring work windows must stay between 7:00 AM and 6:00 PM.")
-                else:
-                    estimated_minutes = cleaned_data.get("estimated_minutes")
-                    if estimated_minutes and estimated_minutes > _window_minutes(start_value, end_value):
-                        self.add_error("estimated_minutes", "The time estimate is longer than the recurring work window.")
-                    unavailable = []
-                    for teammate in filter(None, [assign_to, *(additional_assignees or [])]):
-                        if not TaskAssignmentService.user_is_available_for_window(
-                            teammate,
-                            scheduled_date=next_run_date,
-                            scheduled_start_time=start_value,
-                            scheduled_end_time=end_value,
-                        ):
-                            unavailable.append(teammate.display_label)
-                    if assign_to and assign_to.display_label in unavailable:
-                        self.add_error("assign_to", f"{assign_to.display_label} is not scheduled during the next recurring work window.")
-                        unavailable = [label for label in unavailable if label != assign_to.display_label]
-                    if unavailable:
-                        self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(unavailable))
+                    self.add_error(None, f"{weekday_label}: work windows must stay between 7:00 AM and 6:00 PM.")
+                    continue
+                day_minutes += _window_minutes(start_value, end_value)
+            if estimated_minutes and day_minutes and estimated_minutes > day_minutes:
+                self.add_error("estimated_minutes", f"The time estimate is longer than {weekday_label}'s scheduled window.")
+            if next_run_date is not None and next_run_date.weekday() == weekday:
+                for teammate in filter(None, [assign_to, *(additional_assignees or [])]):
+                    if not TaskAssignmentService.worker_can_take_task(
+                        teammate,
+                        due_date=next_run_date,
+                        estimated_minutes=estimated_minutes,
+                        task_window_blocks={next_run_date: blocks},
+                        required_tag_ids=required_tag_ids,
+                    ):
+                        unavailable.add(teammate.display_label)
+        if assign_to and assign_to.display_label in unavailable:
+            self.add_error("assign_to", f"{assign_to.display_label} is not scheduled during the next recurring work window.")
+            unavailable.discard(assign_to.display_label)
+        if unavailable:
+            self.add_error("additional_assignees", "Unavailable for the next recurring work window: " + ", ".join(sorted(unavailable)))
 
         return cleaned_data
 

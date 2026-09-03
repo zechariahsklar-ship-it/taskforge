@@ -114,7 +114,7 @@
                 <span class="collapsible-panel-arrow" aria-hidden="true"></span>
             </button>
             <div id="task-window-panel" class="stack" data-task-window-fields{% if not form.scheduled_window_segments.errors and not form.scheduled_date.errors and not form.has_window_selection %} style="display: none;"{% endif %}>
-                <p class="meta">Optional. Only needed if this task must happen at a specific time of day. For a repeating task, pick a block on just one day here - that same time is reused every repeat. If you pick more than one day, this section is skipped and the task still saves.</p>
+                <p class="meta">Optional. Only needed if this task must happen at a specific time of day. Pick a block for whichever weekday(s) it needs one - you can add more than one block per day. For a repeating task, each cycle automatically uses that weekday's block(s).</p>
                 {% if form.scheduled_window_segments.errors %}
                     <div class="meta">{{ form.scheduled_window_segments.errors }}</div>
                 {% endif %}

@@ -675,13 +675,12 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(task.recurring_template.day_of_week, Weekday.FRIDAY)
         self.assertEqual(task.recurring_template.next_run_date, date(2026, 3, 27))
 
-    def test_daily_recurring_task_with_multi_day_window_is_created_without_a_fixed_window(self):
-        # Picking a window on two different days for a repeating task (e.g.
-        # trying to represent "every day" by selecting Monday and Tuesday,
-        # rather than relying on the Daily cadence) isn't supported as a
-        # per-day schedule - rather than blocking creation, TaskForge drops
-        # the ambiguous window and creates the task anyway, relying on the
-        # recurrence cadence and each cycle's normal assignment instead.
+    def test_daily_recurring_task_with_multi_day_window_creates_a_block_per_weekday(self):
+        # Picking a window on two different days for a repeating task -
+        # Monday and Tuesday, both 9:00-9:30 - carries both days through to
+        # the task's own TaskScheduleBlock rows and, once synced, to the
+        # template's per-weekday RecurringTemplateScheduleBlock rows, so
+        # each future cycle can use its own weekday's block.
         response = self.client.post(
             reverse("task-create"),
             {
@@ -709,12 +708,13 @@ class TaskScheduledWindowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         task = Task.objects.get(title="Daily standup")
         self.assertTrue(task.recurring_task)
-        self.assertIsNone(task.scheduled_date)
-        self.assertIsNone(task.scheduled_start_time)
-        self.assertIsNone(task.scheduled_end_time)
+        self.assertEqual(task.assigned_to, self.morning_worker)
+        task_blocks = list(task.scheduled_blocks.order_by("work_date").values_list("work_date", "start_time", "end_time"))
+        self.assertEqual(task_blocks, [(date(2026, 3, 16), time(9, 0), time(9, 30)), (date(2026, 3, 17), time(9, 0), time(9, 30))])
         self.assertIsNotNone(task.recurring_template)
-        self.assertIsNone(task.recurring_template.scheduled_start_time)
-        self.assertContains(response, "only one scheduled time block is supported")
+        template_blocks = list(task.recurring_template.schedule_blocks.order_by("weekday").values_list("weekday", "start_time", "end_time"))
+        self.assertEqual(template_blocks, [(0, time(9, 0), time(9, 30)), (1, time(9, 0), time(9, 30))])
+        self.assertNotContains(response, "only one scheduled time block is supported")
 
     def test_daily_recurring_task_accepts_a_single_day_scheduled_window(self):
         response = self.client.post(

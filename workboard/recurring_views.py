@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from .forms import RecurringTaskTemplateForm
-from .models import RecurringTaskTemplate
+from .models import RecurringTaskTemplate, RecurringTemplateScheduleBlock
 from .recurring_service import RecurringTaskService
 from .task_views import (
     _backfill_orphan_recurring_tasks,
@@ -125,8 +125,16 @@ def recurring_template_edit_view(request, pk):
                 if previous_team is not None:
                     _resequence_recurring_templates(_ordered_recurring_templates(team=previous_team))
                 _resequence_recurring_templates(_ordered_recurring_templates(team=updated_template.team))
-            if form.dropped_extra_window_days:
-                messages.info(request, "Only one scheduled time block is supported for a recurring task - the extra day(s)/time(s) were skipped.")
+            updated_template.schedule_blocks.all().delete()
+            for weekday, blocks in (form.cleaned_data.get("template_schedule_blocks_by_weekday") or {}).items():
+                for position, (start_value, end_value) in enumerate(blocks, start=1):
+                    RecurringTemplateScheduleBlock.objects.create(
+                        template=updated_template,
+                        weekday=weekday,
+                        start_time=start_value,
+                        end_time=end_value,
+                        position=position,
+                    )
             messages.success(request, "Recurring task updated.")
             return redirect("recurring-detail", pk=updated_template.pk)
     else:

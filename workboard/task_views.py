@@ -32,6 +32,7 @@ from .forms import (
 )
 from .models import (
     RecurringTaskTemplate,
+    RecurringTemplateScheduleBlock,
     StudentAvailability,
     StudentAvailabilityBlock,
     StudentScheduleOverride,
@@ -492,6 +493,25 @@ def _next_recurring_run_from_task(task: Task) -> date:
     return template.next_run_date
 
 
+def _sync_recurring_template_schedule_blocks(template: RecurringTaskTemplate, task: Task) -> None:
+    # A task's own scheduled_blocks are date-based (one row per real
+    # calendar day); a template needs weekday-based blocks so every future
+    # cycle can look up the block matching its own due date's weekday.
+    blocks_by_weekday = {}
+    for block in task.scheduled_blocks.order_by("work_date", "position", "start_time", "end_time", "pk"):
+        blocks_by_weekday.setdefault(block.work_date.weekday(), []).append(block)
+    template.schedule_blocks.all().delete()
+    for weekday, blocks in blocks_by_weekday.items():
+        for position, block in enumerate(blocks, start=1):
+            RecurringTemplateScheduleBlock.objects.create(
+                template=template,
+                weekday=weekday,
+                start_time=block.start_time,
+                end_time=block.end_time,
+                position=position,
+            )
+
+
 def _sync_task_recurring_template(task: Task) -> Task:
     if not task.recurring_task or not task.recurrence_pattern:
         return task
@@ -526,6 +546,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
         )
         template.additional_assignees.set(fixed_additional_assignee_ids)
         template.required_worker_tags.set(required_tag_ids)
+        _sync_recurring_template_schedule_blocks(template, task)
         task.recurring_template = template
         task.save(update_fields=["recurring_template", "updated_at"])
         return task
@@ -558,6 +579,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
     template.save()
     template.additional_assignees.set(fixed_additional_assignee_ids)
     template.required_worker_tags.set(required_tag_ids)
+    _sync_recurring_template_schedule_blocks(template, task)
     return task
 
 
@@ -1323,8 +1345,6 @@ def task_create_view(request):
             task = _apply_task_additional_assignee_settings(task, preserve_existing_rotation=False)
             task = _sync_task_recurring_template(task)
             TaskAuditService.record_created(task, actor=request.user)
-            if form.cleared_recurring_window:
-                messages.info(request, "This repeats, so only one scheduled time block is supported right now - the extra day(s)/time(s) were skipped and the task was created without a fixed time of day.")
             messages.success(request, "Task created.")
             return redirect("task-detail", pk=task.pk)
     else:
@@ -1614,8 +1634,6 @@ def task_edit_view(request, pk):
             TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
             if reassigned_from and updated_task.assigned_to:
                 messages.info(request, f"{reassigned_from} {form.reassignment_reason}, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
-            if form.cleared_recurring_window:
-                messages.info(request, "This repeats, so only one scheduled time block is supported right now - the extra day(s)/time(s) were skipped and the task was saved without a fixed time of day.")
             messages.success(request, "Task updated.")
             return redirect("task-detail", pk=updated_task.pk)
     else:
