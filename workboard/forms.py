@@ -1452,9 +1452,9 @@ class TaskManualForm(TaskForm):
         _configure_additional_assignees_field(
             self.fields["duplicate_to_students"],
             help_text=(
-                "Create an independent copy of this task for each student picked here. Each copy gets its own "
-                "status, checklist, and due date, and is assigned solely to that student instead of using the "
-                "assignment fields above."
+                "Create an independent copy of this task for each student picked here, plus the assignee above "
+                "if one is set. Each copy gets its own status, checklist, and due date, and is assigned solely "
+                "to that one student."
             ),
             team=selected_team,
             teamless_only=restrict_to_teamless,

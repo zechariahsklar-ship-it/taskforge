@@ -28,7 +28,14 @@ class TaskCreateDuplicateToStudentsTests(TestCase):
             first_name="Bo",
             last_name="Worker",
         )
-        for worker in (self.worker_a, self.worker_b):
+        self.worker_c = User.objects.create_user(
+            username="dup-worker-c",
+            password="password123",
+            role=UserRole.STUDENT_WORKER,
+            first_name="Cy",
+            last_name="Worker",
+        )
+        for worker in (self.worker_a, self.worker_b, self.worker_c):
             StudentWorkerProfile.objects.create(
                 user=worker,
                 display_name=f"{worker.first_name} {worker.last_name}",
@@ -74,6 +81,36 @@ class TaskCreateDuplicateToStudentsTests(TestCase):
         tasks[0].status = TaskStatus.IN_PROGRESS
         tasks[0].save()
         self.assertEqual(Task.objects.get(pk=tasks[1].pk).status, TaskStatus.NEW)
+
+    def test_duplicate_to_students_also_makes_a_copy_for_the_assigned_worker(self):
+        response = self.client.post(
+            reverse("task-create"),
+            self._post_data(
+                assigned_to=str(self.worker_c.pk),
+                duplicate_to_students=[str(self.worker_a.pk), str(self.worker_b.pk)],
+            ),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        tasks = list(Task.objects.filter(title="Prep welcome packets").order_by("pk"))
+        self.assertEqual(len(tasks), 3)
+        self.assertEqual({task.assigned_to_id for task in tasks}, {self.worker_a.pk, self.worker_b.pk, self.worker_c.pk})
+
+    def test_duplicate_to_students_does_not_double_up_when_assignee_is_also_checked(self):
+        response = self.client.post(
+            reverse("task-create"),
+            self._post_data(
+                assigned_to=str(self.worker_a.pk),
+                duplicate_to_students=[str(self.worker_a.pk), str(self.worker_b.pk)],
+            ),
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        tasks = list(Task.objects.filter(title="Prep welcome packets").order_by("pk"))
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual({task.assigned_to_id for task in tasks}, {self.worker_a.pk, self.worker_b.pk})
 
     def test_duplicate_to_students_rejects_student_missing_required_tag(self):
         required_tag = WorkerTag.objects.create(name="Front desk trained")

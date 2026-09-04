@@ -1316,6 +1316,9 @@ def task_create_view(request):
         if form.is_valid():
             new_checklist_titles = request.POST.getlist("new_checklist_titles")
             duplicate_students = list(form.cleaned_data.get("duplicate_to_students") or [])
+            assigned_to = form.cleaned_data.get("assigned_to")
+            if duplicate_students and assigned_to and assigned_to not in duplicate_students:
+                duplicate_students.insert(0, assigned_to)
             if duplicate_students:
                 created_tasks = _create_duplicate_tasks_for_students(form, duplicate_students, request.user, checklist_titles=new_checklist_titles)
                 messages.success(
