@@ -1391,10 +1391,10 @@ def task_detail_view(request, pk):
         action = request.POST.get("action")
         if action == "status":
             before_snapshot = TaskAuditService.snapshot(task)
+            previous_status = task.status
+            previous_bucket = _board_bucket_status(previous_status)
             status_form = TaskUpdateForm(request.POST, instance=task)
             if status_form.is_valid():
-                previous_status = task.status
-                previous_bucket = _board_bucket_status(previous_status)
                 updated_task = status_form.save(commit=False)
                 if updated_task.status == TaskStatus.DONE and not updated_task.completed_at:
                     updated_task.mark_complete()

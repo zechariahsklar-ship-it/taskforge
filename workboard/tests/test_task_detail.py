@@ -511,6 +511,62 @@ class TaskAuditHistoryTests(TestCase):
         self.assertTrue(TaskAuditEvent.objects.filter(task_title="Audit task", action=TaskAuditAction.DELETED).exists())
 
 
+class TaskDetailStatusChangeBoardOrderTests(TestCase):
+    """A status change from the task detail page moves board_order into the
+    new column and closes the gap it leaves behind - regression coverage
+    for a bug where TaskUpdateForm.is_valid() had already mutated
+    task.status by the time the view read it as the "previous" status,
+    so the bucket-changed check was always comparing a value to itself."""
+
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="board-order-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.client.force_login(self.supervisor)
+        self.moving_task = Task.objects.create(
+            title="Moving task",
+            description="",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 20),
+            created_by=self.supervisor,
+            board_order=1,
+        )
+        self.other_new_task = Task.objects.create(
+            title="Other new task",
+            description="",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 3, 20),
+            created_by=self.supervisor,
+            board_order=2,
+        )
+        self.existing_in_progress_task = Task.objects.create(
+            title="Existing in progress task",
+            description="",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            due_date=date(2026, 3, 20),
+            created_by=self.supervisor,
+            board_order=1,
+        )
+
+    def test_status_change_appends_to_the_new_column_and_closes_the_old_gap(self):
+        response = self.client.post(
+            reverse("task-detail", args=[self.moving_task.pk]),
+            {"action": "status", "status": TaskStatus.IN_PROGRESS},
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.moving_task.refresh_from_db()
+        self.other_new_task.refresh_from_db()
+        self.existing_in_progress_task.refresh_from_db()
+
+        self.assertEqual(self.moving_task.status, TaskStatus.IN_PROGRESS)
+        self.assertEqual(self.moving_task.board_order, 2)
+        self.assertEqual(self.existing_in_progress_task.board_order, 1)
+        self.assertEqual(self.other_new_task.board_order, 1)
+
+
 class TaskHandoffTests(TestCase):
     def setUp(self):
         self.assignee = self._create_worker("handoff-assignee", "Assignee Student")
