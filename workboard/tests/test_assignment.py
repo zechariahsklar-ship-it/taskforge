@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
@@ -73,6 +73,37 @@ class TaskAssignmentServiceTests(TestCase):
         self.assertEqual(assignee, self.jordan)
         self.assertIn("required worker tags", summary)
         self.assertIn("Worker tag filters were applied", rationale[-1])
+
+    def test_suggest_assignee_without_an_estimate_still_skips_workers_who_do_not_work_that_day(self):
+        # Regression test: when a task has no estimated_minutes and no
+        # scheduled window, the candidate filter used to skip capacity
+        # checking entirely. A worker with zero availability on the due
+        # date's weekday (0 open tasks, never assigned before) would then
+        # outrank a worker who actually works that day but has one
+        # existing task, since open-task count is compared before capacity.
+        due_date = date(2026, 3, 17)  # a Tuesday
+        off_on_tuesdays = self._create_worker("off-tuesdays", "Casey Off Tuesdays")
+        off_on_tuesdays.worker_profile.weekly_availability.filter(weekday=due_date.weekday()).update(hours_available=0)
+        Task.objects.create(
+            title="Existing load for the Tuesday worker",
+            description="",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=self.jordan,
+            estimated_minutes=30,
+            due_date=due_date + timedelta(days=3),
+        )
+
+        with patch("workboard.services.timezone.localdate", return_value=due_date):
+            assignee, summary, rationale = TaskAssignmentService.suggest_assignee(
+                due_date=due_date,
+                estimated_minutes=None,
+                fallback_supervisor=self.supervisor,
+                exclude_user_ids=[self.alex.pk],
+            )
+
+        self.assertNotEqual(assignee, off_on_tuesdays)
+        self.assertEqual(assignee, self.jordan)
 
     def test_suggest_assignee_falls_back_to_requesting_supervisor_when_students_cannot_fit_work(self):
         for profile in StudentWorkerProfile.objects.all():

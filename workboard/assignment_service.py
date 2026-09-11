@@ -687,12 +687,13 @@ class TaskAssignmentService:
             team=team,
             required_tag_ids=required_tag_ids,
         )
-        if task_window_blocks:
-            if estimated_minutes is None:
-                return [candidate for candidate in pool if candidate[1] > 0]
-            return [candidate for candidate in pool if candidate[1] >= estimated_minutes]
+        # A worker with zero remaining capacity that day (e.g. their normal
+        # schedule doesn't cover due_date's weekday at all) is never viable,
+        # estimate or no estimate - without this floor, a task with no
+        # estimated_minutes skipped capacity filtering entirely and could
+        # land on someone who doesn't work that day.
         if estimated_minutes is None:
-            return pool
+            return [candidate for candidate in pool if candidate[1] > 0]
         return [candidate for candidate in pool if candidate[1] >= estimated_minutes]
 
     @staticmethod
