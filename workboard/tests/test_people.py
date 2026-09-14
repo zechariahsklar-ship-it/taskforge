@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
-from ..models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
+from ..models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentScheduleOverride, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
 from ..services import TaskAssignmentService
 
 
@@ -172,16 +172,20 @@ class PeopleManagementTests(TestCase):
         monday.blocks.all().delete()
         StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
 
-        response = self.client.post(
-            reverse("worker-schedule", args=[self.profile.pk]),
-            {
-                "action": "schedule_override",
-                "override_date": "2026-03-16",
-                "note": "Split lab schedule",
-                "override_segments": json.dumps([["14:00", "16:00"], ["16:30", "17:30"]]),
-            },
-            follow=True,
-        )
+        # The weekly grid only overlays a temporary override once its own
+        # week is the one currently showing - pin "today" to that same week
+        # so this test still exercises that positive case deterministically.
+        with patch("workboard.people_views.timezone.localdate", return_value=date(2026, 3, 16)):
+            response = self.client.post(
+                reverse("worker-schedule", args=[self.profile.pk]),
+                {
+                    "action": "schedule_override",
+                    "override_date": "2026-03-16",
+                    "note": "Split lab schedule",
+                    "override_segments": json.dumps([["14:00", "16:00"], ["16:30", "17:30"]]),
+                },
+                follow=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
@@ -234,16 +238,17 @@ class PeopleManagementTests(TestCase):
         monday.blocks.all().delete()
         StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
 
-        response = self.client.post(
-            reverse("worker-schedule", args=[self.profile.pk]),
-            {
-                "action": "schedule_override",
-                "override_date": "2026-03-16",
-                "note": "Out for the day",
-                "override_segments": "[]",
-            },
-            follow=True,
-        )
+        with patch("workboard.people_views.timezone.localdate", return_value=date(2026, 3, 16)):
+            response = self.client.post(
+                reverse("worker-schedule", args=[self.profile.pk]),
+                {
+                    "action": "schedule_override",
+                    "override_date": "2026-03-16",
+                    "note": "Out for the day",
+                    "override_segments": "[]",
+                },
+                follow=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         schedule_override = self.profile.schedule_overrides.get(override_date=date(2026, 3, 16))
@@ -267,6 +272,36 @@ class PeopleManagementTests(TestCase):
                 scheduled_end_time=time(10, 30),
             )
         )
+
+    def test_temporary_override_does_not_appear_on_the_weekly_grid_before_its_own_week(self):
+        # The weekly grid shows the recurring pattern (what a normal
+        # Monday looks like), not a specific calendar week - an override
+        # for a date months out shouldn't overlay onto that grid and make
+        # it look like the recurring schedule itself changed, until the
+        # week it actually applies to is the one showing.
+        monday, _ = StudentAvailability.objects.update_or_create(
+            profile=self.profile,
+            weekday=Weekday.MONDAY,
+            defaults={"start_time": time(9, 0), "end_time": time(12, 0), "hours_available": 3},
+        )
+        monday.blocks.all().delete()
+        StudentAvailabilityBlock.objects.create(availability=monday, start_time=time(9, 0), end_time=time(12, 0), position=1)
+
+        override = StudentScheduleOverride.objects.create(profile=self.profile, override_date=date(2026, 5, 18), note="Two months out")
+
+        with patch("workboard.people_views.timezone.localdate", return_value=date(2026, 3, 16)):
+            response = self.client.get(reverse("worker-schedule", args=[self.profile.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'class="weekly-schedule-summary-card is-temporary-override"', html=False)
+        self.assertContains(response, 'data-schedule-summary-text="monday"')
+        self.assertContains(response, "May 18, 2026")  # still listed in the full override list below
+
+        with patch("workboard.people_views.timezone.localdate", return_value=date(2026, 5, 19)):
+            in_week_response = self.client.get(reverse("worker-schedule", args=[self.profile.pk]))
+
+        self.assertContains(in_week_response, 'class="weekly-schedule-summary-card is-temporary-override" data-schedule-summary-card="monday"', html=False)
+        self.assertEqual(override.pk, self.profile.schedule_overrides.get().pk)
 
     def test_worker_schedule_rejects_after_hours_override(self):
         response = self.client.post(

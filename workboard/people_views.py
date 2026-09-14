@@ -1,6 +1,6 @@
 """Views for managing workers, supervisors, teams, worker tags, and schedules."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib import messages
 from django.db import IntegrityError
@@ -404,6 +404,20 @@ def _weekly_schedule_rows(profile: StudentWorkerProfile, schedule_overrides) -> 
     return rows
 
 
+def _current_week_schedule_overrides(schedule_overrides):
+    # The weekly schedule grid shows a recurring pattern (what does every
+    # Monday normally look like), not a specific calendar week - overlaying
+    # a temporary override there before its own week arrives makes a
+    # one-off exception months out look like a permanent change to that
+    # weekday. Only surface an override on the grid once its week is the
+    # one currently showing; it still appears in the full override list
+    # (with its actual date) regardless of how far out it is.
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    return [override for override in schedule_overrides if week_start <= override.override_date <= week_end]
+
+
 def _weekly_override_summary_map(schedule_overrides) -> dict[str, list[dict[str, str]]]:
     weekday_prefix_map = {weekday: prefix for prefix, _label, weekday in DAY_FIELD_CONFIG}
     summary_map: dict[str, list[dict[str, str]]] = {}
@@ -680,7 +694,7 @@ def self_schedule_view(request):
 
     schedule_overrides = list(profile.schedule_overrides.prefetch_related("blocks").all())
     weekly_form = WeeklyAvailabilityForm(initial=_weekly_schedule_initial(profile))
-    weekly_form.override_summary_map = _weekly_override_summary_map(schedule_overrides)
+    weekly_form.override_summary_map = _weekly_override_summary_map(_current_week_schedule_overrides(schedule_overrides))
     return render(
         request,
         "workboard/self_schedule.html",
@@ -741,7 +755,7 @@ def worker_schedule_view(request, pk):
             return redirect("worker-schedule", pk=profile.pk)
 
     schedule_overrides = list(profile.schedule_overrides.prefetch_related("blocks").all())
-    weekly_form.override_summary_map = _weekly_override_summary_map(schedule_overrides)
+    weekly_form.override_summary_map = _weekly_override_summary_map(_current_week_schedule_overrides(schedule_overrides))
 
     return render(
         request,

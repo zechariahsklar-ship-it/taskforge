@@ -263,7 +263,11 @@ class SelfScheduleViewTests(TestCase):
 
     def test_worker_can_view_read_only_self_schedule_and_nav_order(self):
         self.client.force_login(self.student)
-        response = self.client.get(reverse("self-schedule"))
+        # The weekly grid only overlays a temporary override once its own
+        # week is the one currently showing - pin "today" to that week so
+        # the setUp override still appears here as expected.
+        with patch("workboard.people_views.timezone.localdate", return_value=date(2026, 3, 24)):
+            response = self.client.get(reverse("self-schedule"))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "My Schedule")
