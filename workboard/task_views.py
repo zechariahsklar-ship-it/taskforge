@@ -481,6 +481,12 @@ def _apply_task_additional_assignee_settings(task: Task, *, preserve_existing_ro
 
 def _next_recurring_run_from_task(task: Task) -> date:
     seed_date = task.scheduled_date or task.due_date or timezone.localdate()
+    windowed_weekdays = None
+    if task.recurrence_pattern == "daily" and (task.recurrence_interval or 1) == 1:
+        # "Every day" scoped to only the weekdays this task's own scheduled
+        # window covers, matching how the resulting template's future
+        # cycles will be scoped once its blocks are synced.
+        windowed_weekdays = {block.work_date.weekday() for block in task.scheduled_blocks.all()} or None
     template = RecurringTaskTemplate(
         recurrence_pattern=task.recurrence_pattern,
         recurrence_interval=task.recurrence_interval or 1,
@@ -489,7 +495,7 @@ def _next_recurring_run_from_task(task: Task) -> date:
         start_date=seed_date,
         next_run_date=seed_date,
     )
-    template.advance_next_run_date()
+    template.advance_next_run_date(windowed_weekdays=windowed_weekdays)
     return template.next_run_date
 
 

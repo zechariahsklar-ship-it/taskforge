@@ -20,6 +20,25 @@ def _add_weekdays(start_date, count):
     return current
 
 
+def _next_windowed_weekday(start_date, windowed_weekdays):
+    # The next date strictly after start_date whose weekday is in
+    # windowed_weekdays - used for a daily template scoped to only the
+    # weekdays that have a scheduled work window configured.
+    current = start_date + timedelta(days=1)
+    while current.weekday() not in windowed_weekdays:
+        current += timedelta(days=1)
+    return current
+
+
+def _roll_forward_to_windowed_weekday(start_date, windowed_weekdays):
+    # start_date itself if its weekday is already in windowed_weekdays,
+    # otherwise the next one after it.
+    current = start_date
+    while current.weekday() not in windowed_weekdays:
+        current += timedelta(days=1)
+    return current
+
+
 def _format_clock_time(value):
     return value.strftime("%I:%M %p").lstrip("0")
 
@@ -494,9 +513,17 @@ class RecurringTaskTemplate(models.Model):
     def required_worker_tag_labels(self):
         return _tag_labels(self.required_worker_tags)
 
-    def advance_next_run_date(self):
+    def advance_next_run_date(self, *, windowed_weekdays=None):
+        # windowed_weekdays scopes a daily, every-cycle (interval 1) template
+        # to only the weekdays that have a scheduled work window configured,
+        # instead of every weekday - e.g. blocks on Mon/Wed/Fri only means
+        # the next cycle after Monday is Wednesday, not Tuesday. It has no
+        # effect on a coarser interval or a non-daily pattern.
         if self.recurrence_pattern == RecurrencePattern.DAILY:
-            self.next_run_date = _add_weekdays(self.next_run_date, self.recurrence_interval)
+            if self.recurrence_interval == 1 and windowed_weekdays:
+                self.next_run_date = _next_windowed_weekday(self.next_run_date, windowed_weekdays)
+            else:
+                self.next_run_date = _add_weekdays(self.next_run_date, self.recurrence_interval)
         elif self.recurrence_pattern == RecurrencePattern.WEEKLY:
             self.next_run_date = self.next_run_date + timedelta(weeks=self.recurrence_interval)
         else:

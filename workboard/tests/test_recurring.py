@@ -774,15 +774,56 @@ class RecurringTemplateWeekdayWindowTests(TestCase):
         self.assertEqual(list(tuesday_task.scheduled_blocks.values_list("start_time", "end_time")), [(time(13, 0), time(15, 0))])
         self.assertEqual(tuesday_task.scheduled_start_time, time(13, 0))
 
-    def test_weekday_with_no_block_generates_without_a_fixed_window(self):
+    def test_daily_every_cycle_skips_weekdays_with_no_scheduled_window(self):
+        # This template only has blocks for Monday and Tuesday - "daily"
+        # with a 1-day interval means "every day that has a scheduled
+        # window", so no task should be generated for Wednesday at all,
+        # and the cycle should jump straight to the following Monday.
         self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
         self._run_generator_at(timezone.make_aware(datetime(2026, 3, 17, 9, 0)))  # Tuesday
         self._run_generator_at(timezone.make_aware(datetime(2026, 3, 18, 9, 0)))  # Wednesday - no block defined
 
-        wednesday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 18))
-        self.assertFalse(wednesday_task.scheduled_blocks.exists())
-        self.assertIsNone(wednesday_task.scheduled_date)
-        self.assertIsNone(wednesday_task.scheduled_start_time)
+        self.assertFalse(Task.objects.filter(title="Front desk coverage", due_date=date(2026, 3, 18)).exists())
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 23))  # the following Monday
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 23, 9, 0)))  # following Monday
+        next_monday_task = Task.objects.get(title="Front desk coverage", due_date=date(2026, 3, 23))
+        self.assertEqual(list(next_monday_task.scheduled_blocks.values_list("start_time", "end_time")), [(time(9, 0), time(11, 0))])
+
+    def test_daily_every_cycle_with_a_single_windowed_weekday_runs_weekly(self):
+        # Only one weekday configured - "every day" collapses to "every
+        # week on that day", the same cadence a weekly template would give,
+        # driven entirely by which weekdays have a scheduled window.
+        self.template.schedule_blocks.filter(weekday=1).delete()  # keep only Monday
+        self.template.next_run_date = date(2026, 3, 16)
+        self.template.save(update_fields=["next_run_date"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 23))
+
+        for missed_date in (17, 18, 19, 20):
+            self._run_generator_at(timezone.make_aware(datetime(2026, 3, missed_date, 9, 0)))
+        self.assertEqual(
+            Task.objects.filter(title="Front desk coverage").exclude(due_date=date(2026, 3, 16)).count(),
+            0,
+        )
+
+    def test_next_run_date_stuck_on_a_now_unwindowed_weekday_self_heals(self):
+        # Simulates editing a template's window from "every weekday" down to
+        # Mon/Tue only, after next_run_date had already been advanced to a
+        # weekday (Thursday) that's no longer in the configured set - the
+        # very next sweep should nudge it onto the next valid one instead of
+        # generating an unwindowed task or silently never becoming ready.
+        self.template.next_run_date = date(2026, 3, 19)  # Thursday - not Monday or Tuesday
+        self.template.save(update_fields=["next_run_date"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 19, 9, 0)))
+
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.next_run_date, date(2026, 3, 23))  # next Monday
+        self.assertFalse(Task.objects.filter(title="Front desk coverage").exists())
 
     def test_weekday_with_multiple_blocks_all_carry_to_the_generated_task(self):
         RecurringTemplateScheduleBlock.objects.create(template=self.template, weekday=0, start_time=time(14, 0), end_time=time(15, 0), position=2)

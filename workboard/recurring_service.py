@@ -8,7 +8,19 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .audit_service import TaskAuditService
-from .models import BlackoutDate, RecurringTaskTemplate, Task, TaskChecklistItem, TaskScheduleBlock, TaskStatus, User, UserRole, _add_weekdays
+from .models import (
+    BlackoutDate,
+    RecurringTaskTemplate,
+    Task,
+    TaskChecklistItem,
+    TaskScheduleBlock,
+    TaskStatus,
+    User,
+    UserRole,
+    _add_weekdays,
+    _next_windowed_weekday,
+    _roll_forward_to_windowed_weekday,
+)
 from .services import TaskAssignmentService
 
 RECURRING_RELEASE_TIME = time(18, 0)
@@ -74,9 +86,23 @@ class RecurringTaskService:
         return local_now >= RecurringTaskService._release_deadline(release_date)
 
     @staticmethod
+    def _windowed_weekdays(template: RecurringTaskTemplate) -> set[int] | None:
+        """Weekdays with a configured scheduled-work-window block, for a
+        daily every-cycle (interval 1) template - the set that "every day"
+        should be scoped to. None means the plain weekday-only cadence
+        applies instead, either because no blocks are configured (legacy/
+        flat window, or none set yet) or because this template's pattern or
+        interval doesn't use per-weekday scoping."""
+        if template.recurrence_pattern != 'daily' or template.recurrence_interval != 1:
+            return None
+        weekdays = set(template.schedule_blocks.values_list('weekday', flat=True))
+        return weekdays or None
+
+    @staticmethod
     def upcoming_run_dates(template: RecurringTaskTemplate, *, count: int = 5) -> list[date]:
         if count <= 0:
             return []
+        windowed_weekdays = RecurringTaskService._windowed_weekdays(template)
         preview_template = RecurringTaskTemplate(
             recurrence_pattern=template.recurrence_pattern,
             recurrence_interval=template.recurrence_interval,
@@ -88,7 +114,7 @@ class RecurringTaskService:
         run_dates = []
         for _ in range(count):
             run_dates.append(preview_template.next_run_date)
-            preview_template.advance_next_run_date()
+            preview_template.advance_next_run_date(windowed_weekdays=windowed_weekdays)
         return run_dates
 
     @staticmethod
@@ -322,7 +348,7 @@ class RecurringTaskService:
         TaskAuditService.record_recurring_run(task, summary=f'Generated recurring task for {run_date.isoformat()}.')
 
         template.next_run_date = run_date
-        template.advance_next_run_date()
+        template.advance_next_run_date(windowed_weekdays=RecurringTaskService._windowed_weekdays(template))
         template.save(update_fields=['next_run_date', 'updated_at'])
         return task
 
@@ -333,28 +359,36 @@ class RecurringTaskService:
     @staticmethod
     def _skip_blacked_out_run(template: RecurringTaskTemplate, run_date: date) -> None:
         template.next_run_date = run_date
-        template.advance_next_run_date()
+        template.advance_next_run_date(windowed_weekdays=RecurringTaskService._windowed_weekdays(template))
         template.save(update_fields=['next_run_date', 'updated_at'])
 
     @staticmethod
     def _normalize_daily_next_run_date(template: RecurringTaskTemplate, *, local_now: datetime) -> None:
         changed = False
+        windowed_weekdays = RecurringTaskService._windowed_weekdays(template)
+        effective_weekdays = windowed_weekdays or {0, 1, 2, 3, 4}
 
-        # A daily template's next_run_date should never sit on a weekend -
-        # nudge legacy/manually-edited data (from before weekday-only daily
-        # recurrence, or a hand-picked Saturday/Sunday) onto the next
-        # weekday instead of silently never becoming ready.
-        while template.next_run_date.weekday() >= 5:
-            template.next_run_date += timedelta(days=1)
+        # A daily template's next_run_date should never sit on a day outside
+        # its own cadence - a weekend always, and (for an every-cycle daily
+        # template scoped to specific scheduled-window weekdays) any weekday
+        # without a block. Nudge legacy/manually-edited data (from before
+        # weekday-only daily recurrence, a hand-picked Saturday/Sunday, or a
+        # weekday whose block got removed) onto a valid day instead of
+        # silently never becoming ready.
+        healed_date = _roll_forward_to_windowed_weekday(template.next_run_date, effective_weekdays)
+        if healed_date != template.next_run_date:
+            template.next_run_date = healed_date
             changed = True
 
         # Once a template's own start_date has arrived, a healthy daily
-        # cycle is never more than one interval's worth of weekdays ahead
-        # of today - anything further is stale drift (a cadence changed
-        # from weekly/monthly without recomputing this date, or leftover
-        # from before daily releases were fixed to not cascade). Pull it
-        # back to today instead of leaving it stuck silently skipping days
-        # until that far-off date finally arrives.
+        # cycle is never more than one interval's worth of weekdays (or, when
+        # scoped to specific window weekdays, one of those weekdays) ahead of
+        # today - anything further is stale drift (a cadence changed from
+        # weekly/monthly without recomputing this date, or leftover from
+        # before daily releases were fixed to not cascade). Pull it back to
+        # today (or, if today itself isn't a windowed weekday, the next one)
+        # instead of leaving it stuck silently skipping days until that
+        # far-off date finally arrives.
         #
         # Skip this for a template whose start_date is still in the future
         # - its very first cycle is legitimately seeded from the creating
@@ -362,9 +396,12 @@ class RecurringTaskService:
         # priority-based fallback), and that isn't drift to correct.
         today = local_now.date()
         if template.start_date <= today:
-            furthest_healthy_date = _add_weekdays(today, template.recurrence_interval or 1)
+            if windowed_weekdays:
+                furthest_healthy_date = _next_windowed_weekday(today, windowed_weekdays)
+            else:
+                furthest_healthy_date = _add_weekdays(today, template.recurrence_interval or 1)
             if template.next_run_date > furthest_healthy_date:
-                template.next_run_date = today
+                template.next_run_date = _roll_forward_to_windowed_weekday(today, windowed_weekdays) if windowed_weekdays else today
                 changed = True
 
         if changed:
@@ -377,6 +414,7 @@ class RecurringTaskService:
         # one task per missed daily/weekly/monthly cycle - fast-forward
         # next_run_date past every stale cycle except the last ready one,
         # without creating tasks for the ones being skipped.
+        windowed_weekdays = RecurringTaskService._windowed_weekdays(template)
         preview = RecurringTaskTemplate(
             recurrence_pattern=template.recurrence_pattern,
             recurrence_interval=template.recurrence_interval,
@@ -384,7 +422,7 @@ class RecurringTaskService:
         )
         advanced = False
         while True:
-            preview.advance_next_run_date()
+            preview.advance_next_run_date(windowed_weekdays=windowed_weekdays)
             if not RecurringTaskService._run_is_ready(preview, local_now=local_now):
                 break
             template.next_run_date = preview.next_run_date
