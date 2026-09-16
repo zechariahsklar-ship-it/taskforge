@@ -546,8 +546,9 @@ def _sync_task_recurring_template(task: Task) -> Task:
             recurrence_interval=task.recurrence_interval or 1,
             day_of_week=task.recurrence_day_of_week,
             day_of_month=task.recurrence_day_of_month,
-            start_date=seed_date,
+            start_date=timezone.localdate(),
             next_run_date=desired_next_run,
+            first_run_date=desired_next_run,
             active=True,
         )
         template.additional_assignees.set(fixed_additional_assignee_ids)
@@ -580,8 +581,9 @@ def _sync_task_recurring_template(task: Task) -> Task:
     template.day_of_month = task.recurrence_day_of_month
     template.active = True
     if schedule_changed or template.next_run_date <= seed_date:
-        template.start_date = seed_date
+        template.start_date = timezone.localdate()
         template.next_run_date = desired_next_run
+        template.first_run_date = desired_next_run
     template.save()
     template.additional_assignees.set(fixed_additional_assignee_ids)
     template.required_worker_tags.set(required_tag_ids)

@@ -460,6 +460,15 @@ class RecurringTaskTemplate(models.Model):
     day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
     start_date = models.DateField(default=timezone.localdate)
     next_run_date = models.DateField(default=timezone.localdate)
+    # The first cycle's originally intended due date, when it's later than
+    # start_date (e.g. a task's priority-based due date fallback, or an
+    # MWF-only window skipping ahead to the first windowed weekday) - lets
+    # the drift self-heal in recurring_service.py tell "hasn't started yet"
+    # apart from "actually drifted," without start_date itself having to be
+    # that far-out date instead of the day this template was created. Null
+    # for a template created directly (not converted from a task), where
+    # start_date already carries this same meaning.
+    first_run_date = models.DateField(null=True, blank=True)
     active = models.BooleanField(default=True)
     display_order = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

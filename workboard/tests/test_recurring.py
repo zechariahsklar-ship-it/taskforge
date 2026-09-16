@@ -743,7 +743,9 @@ class RecurringTemplateWeekdayWindowTests(TestCase):
         self.worker = User.objects.create_user(username="window-worker", password="password123", role=UserRole.STUDENT_WORKER)
         self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Window Worker", email="window@example.com")
         for weekday in Weekday.values:
-            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=8 if weekday < 5 else 0)
+            availability = StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=8 if weekday < 5 else 0)
+            if weekday < 5:
+                availability.blocks.create(start_time=time(8, 0), end_time=time(17, 0), position=1)
         self.template = RecurringTaskTemplate.objects.create(
             title="Front desk coverage",
             priority=Priority.MEDIUM,
@@ -834,6 +836,81 @@ class RecurringTemplateWeekdayWindowTests(TestCase):
         blocks = list(monday_task.scheduled_blocks.order_by("position").values_list("start_time", "end_time"))
         self.assertEqual(blocks, [(time(9, 0), time(11, 0)), (time(14, 0), time(15, 0))])
         self.assertEqual(monday_task.assigned_to, self.worker)
+
+
+class RecurringTemplateFixedAssigneeUnavailableTests(TestCase):
+    # A recurring template can pin every cycle to one specific worker (a
+    # "fixed assignee") instead of auto-suggesting - but if that worker
+    # doesn't cover one of the cycle's own scheduled-window weekdays (e.g.
+    # an MWF task whose fixed worker only works Mon/Fri), that one cycle
+    # should fall back to the requesting supervisor instead of landing on
+    # someone who can't actually do it that day. Every cycle is still its
+    # own independent task with its own due date - a cycle falling back
+    # doesn't change what the next cycle's due date or assignee will be.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="fixed-mwf-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="fixed-mwf-worker", password="password123", role=UserRole.STUDENT_WORKER, first_name="Mon", last_name="FriOnly")
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Mon FriOnly", email="monfri@example.com")
+        for weekday in (Weekday.MONDAY, Weekday.FRIDAY):
+            availability = StudentAvailability.objects.create(profile=self.profile, weekday=weekday)
+            availability.blocks.create(start_time=time(8, 0), end_time=time(17, 0), position=1)
+        self.template = RecurringTaskTemplate.objects.create(
+            title="MWF fixed assignee task",
+            priority=Priority.MEDIUM,
+            estimated_minutes=60,
+            assign_to=self.worker,
+            requested_by=self.supervisor,
+            recurrence_pattern="daily",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 16),  # Monday
+        )
+        for weekday in (Weekday.MONDAY, Weekday.WEDNESDAY, Weekday.FRIDAY):
+            RecurringTemplateScheduleBlock.objects.create(template=self.template, weekday=weekday, start_time=time(8, 0), end_time=time(17, 0), position=1)
+
+    def _run_generator_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            from ..recurring_service import RecurringTaskService
+
+            return RecurringTaskService.run_templates_ready_today(now=when)
+
+    def test_wednesday_cycle_falls_back_to_supervisor_when_fixed_worker_does_not_cover_it(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))  # Monday
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 18, 9, 0)))  # Wednesday
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 20, 9, 0)))  # Friday
+
+        monday_task = Task.objects.get(title="MWF fixed assignee task", due_date=date(2026, 3, 16))
+        wednesday_task = Task.objects.get(title="MWF fixed assignee task", due_date=date(2026, 3, 18))
+        friday_task = Task.objects.get(title="MWF fixed assignee task", due_date=date(2026, 3, 20))
+
+        self.assertEqual(monday_task.assigned_to, self.worker)
+        self.assertEqual(wednesday_task.assigned_to, self.supervisor)
+        self.assertEqual(friday_task.assigned_to, self.worker)
+        # The fixed assignee on the template itself is untouched by
+        # Wednesday's fallback - only that one cycle's own task was
+        # affected, and Wednesday keeps its own due date rather than
+        # merging into Friday's.
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.assign_to, self.worker)
+        self.assertEqual(wednesday_task.due_date, date(2026, 3, 18))
+
+    def test_recurring_detail_page_explains_the_wednesday_fallback(self):
+        # preview_next_run always previews the template's current
+        # next_run_date, so point it at the Wednesday cycle directly. Load
+        # the page from the day before so the page's own recurring sweep
+        # (every authenticated request runs one) doesn't advance past it
+        # first, and pin the schedule blocks well behind the pattern's own
+        # start_date so the drift self-heal leaves it alone too.
+        self.template.next_run_date = date(2026, 3, 18)
+        self.template.start_date = date(2026, 3, 1)
+        self.template.save(update_fields=["next_run_date", "start_date"])
+        self.client.force_login(self.supervisor)
+
+        with patch("workboard.recurring_service.timezone.now", return_value=timezone.make_aware(datetime(2026, 3, 17, 9, 0))):
+            response = self.client.get(reverse("recurring-detail", args=[self.template.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Previewing Mar 18, 2026")
+        self.assertContains(response, "falls back to the requesting supervisor")
 
 
 class LegacyFlatWindowRecurringTemplateTests(TestCase):

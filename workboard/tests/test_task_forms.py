@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -211,6 +211,90 @@ class TaskCreateDueDateFallbackTests(TestCase):
         self.assertIsNotNone(task.recurring_template)
         self.assertEqual(task.recurring_template.assign_to, self.worker)
         self.assertGreaterEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
+
+    def test_recurring_template_start_date_is_the_creation_day_not_the_due_date(self):
+        # Regression test: start_date used to be seeded from the task's own
+        # due date/scheduled window, so a task due weeks out (a low-priority
+        # fallback, or a window picked for a future week) made a brand-new
+        # template's "Start Date" show that far-off date instead of today,
+        # the day the recurring pattern was actually created.
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Far-out due date cleanup",
+                "raw_message": "",
+                "description": "",
+                "priority": Priority.LOW,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "45",
+                "assigned_to": str(self.worker.pk),
+                "requested_by": str(self.supervisor.pk),
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.MONDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Far-out due date cleanup", due_date=date(2026, 3, 16))
+        self.assertEqual(task.recurring_template.start_date, timezone.localdate())
+
+    def test_daily_recurring_far_out_first_cycle_survives_a_same_day_sweep(self):
+        # A daily template's next_run_date self-heals away from stale drift
+        # on every page load - but a brand-new template's very first cycle
+        # can legitimately land several days out (e.g. this priority-based
+        # fallback due date), and shouldn't get mistaken for drift and
+        # yanked back to today by the very next request that same day.
+        creation_moment = timezone.make_aware(datetime(2026, 3, 9, 9, 0))  # Monday
+        fallback_due_date = date(2026, 3, 16)  # the following Monday
+        with (
+            patch("workboard.recurring_service.timezone.now", return_value=creation_moment),
+            patch("workboard.views.TaskParsingService._priority_due_date", return_value=(date(2026, 3, 8), fallback_due_date)),
+        ):
+            response = self.client.post(
+                reverse("task-create"),
+                {
+                    "title": "Far-out daily cleanup",
+                    "raw_message": "",
+                    "description": "",
+                    "priority": Priority.LOW,
+                    "status": TaskStatus.NEW,
+                    "due_date": "",
+                    "raw_due_text": "",
+                    "waiting_person": "",
+                    "respond_to_text": "",
+                    "estimated_minutes": "20",
+                    "assigned_to": "",
+                    "requested_by": "",
+                    "recurring_task": "on",
+                    "recurrence_pattern": "daily",
+                    "recurrence_interval": "1",
+                    "recurrence_day_of_week": "",
+                    "recurrence_day_of_month": "",
+                },
+                follow=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Far-out daily cleanup")
+        template = task.recurring_template
+        self.assertEqual(task.due_date, fallback_due_date)
+        self.assertEqual(template.start_date, date(2026, 3, 9))
+        self.assertEqual(template.first_run_date, date(2026, 3, 17))  # one weekday after the due date
+        self.assertEqual(template.next_run_date, date(2026, 3, 17))
+
+        with patch("workboard.recurring_service.timezone.now", return_value=creation_moment + timedelta(hours=2)):
+            self.client.get(reverse("my-tasks"))
+
+        template.refresh_from_db()
+        self.assertEqual(template.next_run_date, date(2026, 3, 17))
 
     def test_direct_task_create_carries_required_worker_tags_to_recurring_template(self):
         specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.worker.team)

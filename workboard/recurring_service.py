@@ -261,7 +261,8 @@ class RecurringTaskService:
                 assigned_to,
                 required_tag_ids=required_tag_ids,
             ):
-                assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but no longer matches the required worker tags.'
+                assignee_summary = f'{assigned_to.display_label} no longer matches the required worker tags for this cycle, so it falls back to the requesting supervisor instead of the fixed assignee.'
+                assigned_to = None
             elif task_window_blocks and not TaskAssignmentService.worker_can_take_task(
                 assigned_to,
                 due_date=run_date,
@@ -269,7 +270,14 @@ class RecurringTaskService:
                 task_window_blocks=task_window_blocks,
                 required_tag_ids=required_tag_ids,
             ):
-                assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but that scheduled window is currently unavailable.'
+                # The fixed assignee just isn't available for THIS cycle's
+                # own weekday (e.g. an MWF task whose fixed worker only
+                # covers Mon/Fri) - fall back to the requesting supervisor
+                # for this one cycle rather than handing it to someone who
+                # can't actually do it. The template's fixed assignee is
+                # untouched, so a day they do cover still goes to them.
+                assignee_summary = f'{assigned_to.display_label} is the fixed assignee, but is not available for this cycle\'s scheduled window, so it falls back to the requesting supervisor.'
+                assigned_to = None
             else:
                 assignee_summary = f'{assigned_to.display_label} is the fixed assignee for the next run.'
         else:
@@ -380,22 +388,25 @@ class RecurringTaskService:
             template.next_run_date = healed_date
             changed = True
 
-        # Once a template's own start_date has arrived, a healthy daily
-        # cycle is never more than one interval's worth of weekdays (or, when
-        # scoped to specific window weekdays, one of those weekdays) ahead of
-        # today - anything further is stale drift (a cadence changed from
-        # weekly/monthly without recomputing this date, or leftover from
-        # before daily releases were fixed to not cascade). Pull it back to
-        # today (or, if today itself isn't a windowed weekday, the next one)
-        # instead of leaving it stuck silently skipping days until that
-        # far-off date finally arrives.
+        # Once a template's first cycle has actually arrived, a healthy
+        # daily cycle is never more than one interval's worth of weekdays
+        # (or, when scoped to specific window weekdays, one of those
+        # weekdays) ahead of today - anything further is stale drift (a
+        # cadence changed from weekly/monthly without recomputing this
+        # date, or leftover from before daily releases were fixed to not
+        # cascade). Pull it back to today (or, if today itself isn't a
+        # windowed weekday, the next one) instead of leaving it stuck
+        # silently skipping days until that far-off date finally arrives.
         #
-        # Skip this for a template whose start_date is still in the future
-        # - its very first cycle is legitimately seeded from the creating
-        # task's own due date (which can land several days out, e.g. a
-        # priority-based fallback), and that isn't drift to correct.
+        # Skip this while that first cycle is still in the future -
+        # first_run_date (falling back to start_date for a template
+        # created directly rather than converted from a task) is legitimately
+        # seeded from the creating task's own due date, which can land
+        # several days out (e.g. a priority-based fallback), and that isn't
+        # drift to correct.
         today = local_now.date()
-        if template.start_date <= today:
+        grace_date = template.first_run_date or template.start_date
+        if grace_date <= today:
             if windowed_weekdays:
                 furthest_healthy_date = _next_windowed_weekday(today, windowed_weekdays)
             else:
