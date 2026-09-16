@@ -58,6 +58,49 @@ class TaskAssignmentServiceTests(TestCase):
         self.assertIn("Suggested worker", summary)
         self.assertIn("Jordan Lee", rationale[0])
 
+    def test_rotation_does_not_keep_favoring_whoever_finishes_tasks_fastest(self):
+        # Regression test: "last assigned" used to be computed only from
+        # still-open tasks, so a worker who finishes quickly had nothing
+        # open to record when they were last given something - making them
+        # look perpetually never-assigned (ranked first) and win every
+        # single round, while a teammate with one unrelated still-open task
+        # kept looking "recently assigned" and never got a turn.
+        Task.objects.create(
+            title="Jordan's older open task",
+            description="",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.IN_PROGRESS,
+            assigned_to=self.jordan,
+            estimated_minutes=15,
+            due_date=date(2026, 3, 27),
+        )
+
+        with patch("workboard.services.timezone.localdate", return_value=date(2026, 3, 13)):
+            assignments = []
+            for _ in range(4):
+                assignee, _, _ = TaskAssignmentService.suggest_assignee(
+                    due_date=date(2026, 3, 17),
+                    estimated_minutes=20,
+                    fallback_supervisor=self.supervisor,
+                )
+                assignments.append(assignee)
+                task = Task.objects.create(
+                    title="Round task",
+                    description="",
+                    priority=Priority.MEDIUM,
+                    status=TaskStatus.NEW,
+                    assigned_to=assignee,
+                    estimated_minutes=20,
+                    due_date=date(2026, 3, 17),
+                )
+                if assignee == self.alex:
+                    task.status = TaskStatus.DONE
+                    task.completed_at = timezone.now()
+                    task.save()
+
+        self.assertIn(self.jordan, assignments)
+        self.assertIn(self.alex, assignments)
+
     def test_suggest_assignee_only_considers_workers_with_required_tags(self):
         specialist_tag = WorkerTag.objects.create(name="Front Desk", team=self.alex.team)
         self.jordan.worker_profile.tags.add(specialist_tag)

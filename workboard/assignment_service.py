@@ -99,9 +99,8 @@ class TaskAssignmentService:
             supervisors = supervisors.filter(team=team)
         candidates = []
         for supervisor in supervisors:
-            active_tasks = TaskAssignmentService._active_task_queryset_for_user(supervisor)
-            open_tasks = active_tasks.count()
-            last_assigned_at = active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"]
+            open_tasks = TaskAssignmentService._active_task_queryset_for_user(supervisor).count()
+            last_assigned_at = TaskAssignmentService._last_assigned_at(supervisor)
             candidates.append((supervisor, open_tasks, last_assigned_at))
         if not candidates:
             return None
@@ -135,6 +134,17 @@ class TaskAssignmentService:
         )
 
     @staticmethod
+    def _last_assigned_at(user):
+        # Deliberately not scoped to active_tasks - a candidate who finishes
+        # work quickly would otherwise have no still-open task to record
+        # when they were last given something, making them look perpetually
+        # never-assigned (ranked first, see _candidate_sort_key) and rotate
+        # in every single time, while a slower-moving teammate with one
+        # unrelated lingering open task keeps looking "recently assigned"
+        # and never gets a turn.
+        return Task.objects.filter(TaskAssignmentService._worker_task_membership_filter(user)).aggregate(last_assigned=Max("created_at"))["last_assigned"]
+
+    @staticmethod
     def _candidate_metrics(profile, *, due_date, task_window_blocks=None, exclude_task_id=None):
         active_tasks = TaskAssignmentService._active_task_queryset_for_user(profile.user)
         if task_window_blocks:
@@ -148,7 +158,7 @@ class TaskAssignmentService:
         return (
             capacity,
             active_tasks.count(),
-            active_tasks.aggregate(last_assigned=Max("created_at"))["last_assigned"],
+            TaskAssignmentService._last_assigned_at(profile.user),
         )
 
     @staticmethod
