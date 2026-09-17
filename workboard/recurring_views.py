@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from .forms import RecurringTaskTemplateForm
-from .models import RecurringTaskTemplate, RecurringTemplateScheduleBlock
+from .models import RecurringTaskTemplate, RecurringTemplateChecklistItem, RecurringTemplateScheduleBlock
 from .recurring_service import RecurringTaskService
 from .task_views import (
     _backfill_orphan_recurring_tasks,
@@ -135,6 +135,10 @@ def recurring_template_edit_view(request, pk):
                         end_time=end_value,
                         position=position,
                     )
+            checklist_titles = [title.strip() for title in request.POST.getlist("new_checklist_titles") if title.strip()]
+            updated_template.checklist_items.all().delete()
+            for position, title in enumerate(checklist_titles, start=1):
+                RecurringTemplateChecklistItem.objects.create(template=updated_template, title=title, position=position)
             messages.success(request, "Recurring task updated.")
             return redirect("recurring-detail", pk=updated_template.pk)
     else:

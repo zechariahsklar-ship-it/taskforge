@@ -182,10 +182,12 @@ class RecurringTaskService:
         task.respond_to_text = source_task.respond_to_text if source_task else ""
 
     @staticmethod
-    def _copy_checklist_items(source_task: Task | None, task: Task) -> None:
-        if source_task is None:
-            return
-        for item in source_task.checklist_items.order_by('position', 'pk'):
+    def _apply_template_checklist(template: RecurringTaskTemplate, task: Task) -> None:
+        # Every new cycle starts from the template's own checklist, always
+        # unchecked - not from whatever the previous cycle's checklist had
+        # drifted to, since editing one occurrence's checklist is meant to
+        # stay local to that occurrence.
+        for item in template.checklist_items.order_by('position', 'pk'):
             TaskChecklistItem.objects.create(
                 task=task,
                 title=item.title,
@@ -344,7 +346,7 @@ class RecurringTaskService:
             rotating_assignees=rotating_assignees,
             required_tag_ids=required_tag_ids,
         )
-        RecurringTaskService._copy_checklist_items(last_generated_task, task)
+        RecurringTaskService._apply_template_checklist(template, task)
         for position, (start_value, end_value) in enumerate(preview.run_date_blocks, start=1):
             TaskScheduleBlock.objects.create(
                 task=task,

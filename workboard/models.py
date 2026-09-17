@@ -564,6 +564,23 @@ class RecurringTemplateScheduleBlock(models.Model):
         return _format_time_window(self.start_time, self.end_time)
 
 
+class RecurringTemplateChecklistItem(models.Model):
+    # The canonical checklist a template hands to every new cycle it
+    # generates (always starting unchecked) - editing one generated task's
+    # own checklist no longer feeds back into future cycles, so this is the
+    # only durable place a supervisor can define what a fresh cycle starts
+    # with.
+    template = models.ForeignKey(RecurringTaskTemplate, on_delete=models.CASCADE, related_name="checklist_items")
+    title = models.CharField(max_length=255)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return self.title
+
+
 class Task(models.Model):
     team = models.ForeignKey("Team", null=True, blank=True, on_delete=models.SET_NULL, related_name="tasks")
     title = models.CharField(max_length=255)

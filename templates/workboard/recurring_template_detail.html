@@ -36,6 +36,10 @@
                 <dt>Scheduled Window</dt><dd>{{ template.scheduled_window_display|default:"-" }}</dd>
                 <dt>Start Date</dt><dd>{{ template.start_date|date:"M j, Y" }}</dd>
                 <dt>Generated Tasks</dt><dd>{{ template.generated_tasks.count }}</dd>
+                <dt>Checklist</dt>
+                <dd>
+                    {% for item in template.checklist_items.all %}{{ item.title }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}
+                </dd>
                 {% if template.day_of_week is not None %}
                     <dt>Day Of Week</dt><dd>{{ template.get_day_of_week_display }}</dd>
                 {% endif %}

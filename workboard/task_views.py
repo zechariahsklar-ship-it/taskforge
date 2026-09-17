@@ -32,6 +32,7 @@ from .forms import (
 )
 from .models import (
     RecurringTaskTemplate,
+    RecurringTemplateChecklistItem,
     RecurringTemplateScheduleBlock,
     StudentAvailability,
     StudentAvailabilityBlock,
@@ -518,6 +519,16 @@ def _sync_recurring_template_schedule_blocks(template: RecurringTaskTemplate, ta
             )
 
 
+def _seed_recurring_template_checklist(template: RecurringTaskTemplate, task: Task) -> None:
+    # Only used when a task is first turned into a recurring series - the
+    # checklist the task already had becomes the template's own checklist,
+    # so every future cycle starts from it. Only ever called once, on
+    # creation; the template's checklist from then on is only editable from
+    # the template's own edit page.
+    for position, item in enumerate(task.checklist_items.order_by("position", "pk"), start=1):
+        RecurringTemplateChecklistItem.objects.create(template=template, title=item.title, position=position)
+
+
 def _sync_task_recurring_template(task: Task) -> Task:
     if not task.recurring_task or not task.recurrence_pattern:
         return task
@@ -554,6 +565,7 @@ def _sync_task_recurring_template(task: Task) -> Task:
         template.additional_assignees.set(fixed_additional_assignee_ids)
         template.required_worker_tags.set(required_tag_ids)
         _sync_recurring_template_schedule_blocks(template, task)
+        _seed_recurring_template_checklist(template, task)
         task.recurring_template = template
         task.save(update_fields=["recurring_template", "updated_at"])
         return task

@@ -212,6 +212,40 @@ class TaskCreateDueDateFallbackTests(TestCase):
         self.assertEqual(task.recurring_template.assign_to, self.worker)
         self.assertGreaterEqual(task.recurring_template.next_run_date, date(2026, 3, 23))
 
+    def test_direct_task_create_seeds_the_new_templates_checklist_from_the_task(self):
+        response = self.client.post(
+            reverse("task-create"),
+            {
+                "title": "Weekly clean up with checklist",
+                "raw_message": "",
+                "description": "Recurring weekly clean up",
+                "priority": Priority.MEDIUM,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-03-16",
+                "raw_due_text": "",
+                "waiting_person": "",
+                "respond_to_text": "",
+                "estimated_minutes": "45",
+                "assigned_to": str(self.worker.pk),
+                "requested_by": str(self.supervisor.pk),
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.MONDAY),
+                "recurrence_day_of_month": "",
+                "new_checklist_titles": ["Sweep floors", "Empty trash"],
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task = Task.objects.get(title="Weekly clean up with checklist", due_date=date(2026, 3, 16))
+        self.assertEqual(list(task.checklist_items.order_by("position").values_list("title", flat=True)), ["Sweep floors", "Empty trash"])
+        self.assertEqual(
+            list(task.recurring_template.checklist_items.order_by("position").values_list("title", flat=True)),
+            ["Sweep floors", "Empty trash"],
+        )
+
     def test_recurring_template_start_date_is_the_creation_day_not_the_due_date(self):
         # Regression test: start_date used to be seeded from the task's own
         # due date/scheduled window, so a task due weeks out (a low-priority

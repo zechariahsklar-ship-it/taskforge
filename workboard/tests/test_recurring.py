@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from ..forms import _serialize_schedule_segments
-from ..models import Priority, RecurringTaskTemplate, RecurringTemplateScheduleBlock, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, User, UserRole, Weekday
+from ..models import Priority, RecurringTaskTemplate, RecurringTemplateChecklistItem, RecurringTemplateScheduleBlock, StudentAvailability, StudentWorkerProfile, Task, TaskChecklistItem, TaskStatus, User, UserRole, Weekday
 
 
 class RecurringTaskListViewTests(TestCase):
@@ -420,7 +420,11 @@ class RecurringTaskGenerationRotationTests(TestCase):
             respond_to_text="Facilities",
             completed_at=timezone.make_aware(datetime(2026, 3, 13, 17, 30)),
         )
-        TaskChecklistItem.objects.create(task=self.previous_task, title="Recurring step", is_completed=True, position=1)
+        # Deliberately different from the template's own checklist below, to
+        # prove the next cycle's checklist comes from the template - not
+        # from whatever the previous task's checklist happened to look like.
+        TaskChecklistItem.objects.create(task=self.previous_task, title="Old step from last cycle", is_completed=True, position=1)
+        RecurringTemplateChecklistItem.objects.create(template=self.template, title="Recurring step", position=1)
         self.client.force_login(self.supervisor)
 
     def _run_generator_at(self, when):
@@ -836,6 +840,96 @@ class RecurringTemplateWeekdayWindowTests(TestCase):
         blocks = list(monday_task.scheduled_blocks.order_by("position").values_list("start_time", "end_time"))
         self.assertEqual(blocks, [(time(9, 0), time(11, 0)), (time(14, 0), time(15, 0))])
         self.assertEqual(monday_task.assigned_to, self.worker)
+
+
+class RecurringTemplateChecklistTests(TestCase):
+    # A template's checklist is the durable, editable source every new
+    # cycle starts from (always unchecked) - not whatever a generated
+    # task's own checklist happens to have drifted to, since editing one
+    # occurrence's checklist is meant to stay local to that occurrence.
+    def setUp(self):
+        self.supervisor = User.objects.create_user(username="checklist-tmpl-sup", password="password123", role=UserRole.SUPERVISOR)
+        self.worker = User.objects.create_user(username="checklist-tmpl-worker", password="password123", role=UserRole.STUDENT_WORKER)
+        self.profile = StudentWorkerProfile.objects.create(user=self.worker, display_name="Checklist Worker", email="checklist-tmpl@example.com")
+        for weekday in Weekday.values:
+            StudentAvailability.objects.create(profile=self.profile, weekday=weekday, hours_available=8 if weekday < 5 else 0)
+        self.template = RecurringTaskTemplate.objects.create(
+            title="Weekly inventory check",
+            priority=Priority.MEDIUM,
+            estimated_minutes=30,
+            assign_to=self.worker,
+            requested_by=self.supervisor,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            next_run_date=date(2026, 3, 16),  # Monday
+        )
+        RecurringTemplateChecklistItem.objects.create(template=self.template, title="Count shelf A", position=1)
+        RecurringTemplateChecklistItem.objects.create(template=self.template, title="Count shelf B", position=2)
+        self.client.force_login(self.supervisor)
+
+    def _run_generator_at(self, when):
+        with patch("workboard.recurring_service.timezone.now", return_value=when):
+            from ..recurring_service import RecurringTaskService
+
+            return RecurringTaskService.run_templates_ready_today(now=when)
+
+    def test_generated_cycle_gets_the_templates_checklist_unchecked(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))
+
+        task = Task.objects.get(title="Weekly inventory check", due_date=date(2026, 3, 16))
+        items = list(task.checklist_items.order_by("position").values_list("title", "is_completed"))
+        self.assertEqual(items, [("Count shelf A", False), ("Count shelf B", False)])
+
+    def test_editing_one_cycles_checklist_does_not_change_the_template_or_the_next_cycle(self):
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 16, 9, 0)))
+        monday_task = Task.objects.get(title="Weekly inventory check", due_date=date(2026, 3, 16))
+
+        first_item = monday_task.checklist_items.get(title="Count shelf A")
+        first_item.is_completed = True
+        first_item.save(update_fields=["is_completed"])
+        monday_task.checklist_items.create(title="One-off extra step for this week only", position=3)
+
+        self.template.refresh_from_db()
+        self.assertEqual(list(self.template.checklist_items.values_list("title", flat=True)), ["Count shelf A", "Count shelf B"])
+
+        self._run_generator_at(timezone.make_aware(datetime(2026, 3, 23, 9, 0)))
+        next_task = Task.objects.get(title="Weekly inventory check", due_date=date(2026, 3, 23))
+        items = list(next_task.checklist_items.order_by("position").values_list("title", "is_completed"))
+        self.assertEqual(items, [("Count shelf A", False), ("Count shelf B", False)])
+
+    def test_edit_page_prefills_the_templates_checklist(self):
+        response = self.client.get(reverse("recurring-edit", args=[self.template.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'value="Count shelf A"', html=False)
+        self.assertContains(response, 'value="Count shelf B"', html=False)
+
+    def test_editing_the_template_replaces_its_checklist(self):
+        response = self.client.post(
+            reverse("recurring-edit", args=[self.template.pk]),
+            {
+                "team": "",
+                "title": self.template.title,
+                "description": "",
+                "priority": Priority.MEDIUM,
+                "estimated_minutes": "30",
+                "assign_to": str(self.worker.pk),
+                "rotating_additional_assignee_count": "0",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "day_of_week": str(Weekday.MONDAY),
+                "day_of_month": "",
+                "start_date": self.template.start_date.isoformat(),
+                "next_run_date": self.template.next_run_date.isoformat(),
+                "active": "on",
+                "new_checklist_titles": ["Count shelf A", "Count shelf C"],
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.template.refresh_from_db()
+        self.assertEqual(list(self.template.checklist_items.order_by("position").values_list("title", flat=True)), ["Count shelf A", "Count shelf C"])
 
 
 class RecurringTemplateFixedAssigneeUnavailableTests(TestCase):

@@ -130,6 +130,28 @@
                 </p>
             </div>
         </section>
+
+        <section class="review-field">
+            <h2>Checklist</h2>
+            <p class="meta">Every new cycle this template generates starts with this checklist, unchecked. Editing one generated task's own checklist only changes that occurrence, not this list.</p>
+            <div class="stack" data-new-checklist-list>
+                {% for item in template_obj.checklist_items.all %}
+                    <div class="new-checklist-row">
+                        <input type="text" name="new_checklist_titles" class="form-control checklist-title-input" value="{{ item.title }}" placeholder="Checklist item">
+                        <button type="button" class="button-link checklist-delete" data-remove-checklist-row>Remove</button>
+                    </div>
+                {% empty %}
+                    <div class="new-checklist-row">
+                        <input type="text" name="new_checklist_titles" class="form-control checklist-title-input" placeholder="Checklist item">
+                        <button type="button" class="button-link checklist-delete" data-remove-checklist-row>Remove</button>
+                    </div>
+                {% endfor %}
+            </div>
+            <div>
+                <button type="button" data-add-checklist-row>Add item</button>
+            </div>
+        </section>
+
         <button type="submit">{{ submit_label|default:"Save template" }}</button>
     </form>
     {% if template_obj %}
