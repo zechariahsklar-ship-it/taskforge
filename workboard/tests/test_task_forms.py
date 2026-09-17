@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
-from ..models import Priority, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
+from ..models import Priority, RecurringTaskTemplate, StudentAvailability, StudentAvailabilityBlock, StudentWorkerProfile, Task, TaskStatus, Team, User, UserRole, Weekday, WorkerTag
 from ..services import TaskAssignmentService
 
 
@@ -1038,6 +1038,86 @@ class TaskCreateLabelTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'data-recurring-toggle', html=False)
         self.assertNotContains(response, 'data-recurring-fields style="display: none;"', html=False)
+
+    def _create_templated_task(self, **task_overrides):
+        template = RecurringTaskTemplate.objects.create(
+            title="Weekly template task",
+            description="Original template description",
+            priority=Priority.MEDIUM,
+            estimated_minutes=30,
+            assign_to=self.student,
+            requested_by=self.supervisor,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            day_of_week=Weekday.FRIDAY,
+            next_run_date=date(2026, 4, 10),
+        )
+        task = Task.objects.create(
+            title="Weekly template task",
+            description="Original template description",
+            priority=Priority.MEDIUM,
+            status=TaskStatus.NEW,
+            due_date=date(2026, 4, 10),
+            assigned_to=self.student,
+            created_by=self.supervisor,
+            recurring_task=True,
+            recurring_template=template,
+            recurrence_pattern="weekly",
+            recurrence_interval=1,
+            recurrence_day_of_week=Weekday.FRIDAY,
+            estimated_minutes=30,
+            **task_overrides,
+        )
+        return template, task
+
+    def test_editing_an_occurrence_of_an_existing_series_shows_a_read_only_note(self):
+        template, task = self._create_templated_task()
+
+        response = self.client.get(reverse("task-edit", args=[task.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Editing this task only changes this one occurrence")
+        self.assertContains(response, reverse("recurring-edit", args=[template.pk]))
+        self.assertNotContains(response, 'id="recurring-task-panel"', html=False)
+
+    def test_editing_an_occurrence_of_an_existing_series_does_not_change_the_template(self):
+        template, task = self._create_templated_task()
+
+        response = self.client.post(
+            reverse("task-edit", args=[task.pk]),
+            {
+                "title": "Renamed just this occurrence",
+                "description": "Only this Friday needs different notes",
+                "priority": Priority.HIGH,
+                "status": TaskStatus.NEW,
+                "due_date": "2026-04-10",
+                "respond_to_text": "",
+                "estimated_minutes": "90",
+                "assigned_to": str(self.supervisor.pk),
+                "requested_by": "",
+                "recurring_task": "on",
+                "recurrence_pattern": "weekly",
+                "recurrence_interval": "1",
+                "recurrence_day_of_week": str(Weekday.FRIDAY),
+                "recurrence_day_of_month": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        template.refresh_from_db()
+
+        self.assertEqual(task.title, "Renamed just this occurrence")
+        self.assertEqual(task.priority, Priority.HIGH)
+        self.assertEqual(task.estimated_minutes, 90)
+        self.assertEqual(task.assigned_to, self.supervisor)
+
+        self.assertEqual(template.title, "Weekly template task")
+        self.assertEqual(template.description, "Original template description")
+        self.assertEqual(template.priority, Priority.MEDIUM)
+        self.assertEqual(template.estimated_minutes, 30)
+        self.assertEqual(template.assign_to, self.student)
 
 
 class TaskCreateAdditionalAssigneeRotationTests(TestCase):

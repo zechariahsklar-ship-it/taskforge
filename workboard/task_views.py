@@ -1652,7 +1652,13 @@ def task_edit_view(request, pk):
                 _close_status_gap(previous_status, exclude_pk=updated_task.pk, team=Team.objects.filter(pk=previous_team_id).first())
             form.save_m2m()
             updated_task = _apply_task_additional_assignee_settings(updated_task)
-            updated_task = _sync_task_recurring_template(updated_task)
+            if updated_task.recurring_template_id is None:
+                # Only a task that isn't part of an established series yet
+                # gets to create/configure one here - editing one occurrence
+                # of an existing series must never rewrite the template that
+                # governs every other occurrence. Change the recurring
+                # schedule from the template's own edit page instead.
+                updated_task = _sync_task_recurring_template(updated_task)
             TaskAuditService.record_updated(updated_task, actor=request.user, before_snapshot=before_snapshot)
             if reassigned_from and updated_task.assigned_to:
                 messages.info(request, f"{reassigned_from} {form.reassignment_reason}, so TaskForge reassigned the task to {updated_task.assigned_to.display_label}.")
